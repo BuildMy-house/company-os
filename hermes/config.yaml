@@ -28,8 +28,8 @@ mcp_servers:
     command: "npx"
     args: ["-y", "@kud/mcp-opencode"]
     env:
-      OPENCODE_CONFIG_DIR: "/opt/hermes-operations/shared"
-      OPENCODE_DOMAINS_DIR: "/opt/hermes-operations/domains"
+      OPENCODE_CONFIG_DIR: "/opt/homely-ceo/shared"
+      OPENCODE_DOMAINS_DIR: "/opt/homely-ceo/domains"
       PATH: "/root/.hermes/tools/opencode/node_modules/.bin:/usr/local/bin:/usr/bin:/bin"
     connect_timeout: 60
     timeout: 900
