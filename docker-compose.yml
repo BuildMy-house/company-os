@@ -15,7 +15,7 @@ services:
     volumes:
       - ..:/workspace/house_designer
       - hermes-data:/root/.hermes
-      - ~/.ssh/id_rsa:/root/.ssh/id_rsa:ro
+      - ../certs/homely-deploy:/root/.ssh/id_rsa:ro
     command: ["hermes", "gateway", "run"]
 
 volumes:
