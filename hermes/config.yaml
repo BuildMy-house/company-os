@@ -1,0 +1,35 @@
+model:
+  default: tencent/hy3:free
+  provider: custom:nous
+
+custom_providers:
+  - name: nous
+    base_url: https://inference-api.nousresearch.com/v1
+    key_env: NOUS_API_KEY
+    extra_body:
+      tags:
+        - product=hermes-agent
+        - user=hermes-agent
+
+terminal:
+  backend: local
+
+display:
+  # Keep internal tool activity out of Matrix's main timeline; retain it in
+  # Hermes' rotating audit log for debugging and telemetry.
+  tool_progress: log
+  interim_assistant_messages: false
+  platforms:
+    matrix:
+      tool_progress: log
+
+mcp_servers:
+  opencode_manager:
+    command: "npx"
+    args: ["-y", "@kud/mcp-opencode"]
+    env:
+      OPENCODE_CONFIG_DIR: "/opt/hermes-operations/shared"
+      OPENCODE_DOMAINS_DIR: "/opt/hermes-operations/domains"
+      PATH: "/root/.hermes/tools/opencode/node_modules/.bin:/usr/local/bin:/usr/bin:/bin"
+    connect_timeout: 60
+    timeout: 900
