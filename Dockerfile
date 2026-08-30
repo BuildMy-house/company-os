@@ -5,8 +5,10 @@ ENV PATH="/opt/company-ops-venv/bin:${PATH}"
 WORKDIR /opt/company-ops
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3-venv git \
-  && rm -rf /var/lib/apt/lists/*
+  && apt-get install -y --no-install-recommends python3-venv git openssh-client \
+  && rm -rf /var/lib/apt/lists/* \
+  && mkdir -p /root/.ssh \
+  && ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null
 
 RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-browser --skip-computer-use \
   && mkdir -p /root/.hermes \
