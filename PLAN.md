@@ -86,3 +86,10 @@ documented to set it.
 | Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
 |--------|-------|------|--------------|------------|--------|-------|
 | P-DOC1 | Fix stale SQLite references in README.md + .env.example env-var drift | — | company-ops/README.md, company-ops/.env.example | opencode | done | commit b934987. Independently re-verified: grep -in sqlite README.md / grep COMPANY_OPS_DB .env.example both zero hits, grep PGEDGE_API_KEY .env.example exactly 1 hit. Read diff directly: quick-start's new `postgresql://hermes_company:localtest_company@localhost:5544/homely_company` example cross-checked byte-for-byte against scripts/test-db-up.sh's actual printed connection string -- exact match, not invented. Rollback snippet now uses working psycopg against COMPANY_DATABASE_URL instead of the broken sqlite3.connect() call. Only the 2 owner files touched. |
+
+## Phase 3-4 (this run, resumed per plan's own note that Phase 3-9 can proceed in parallel once Phase 1 schemas exist)
+
+| Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
+|--------|-------|------|--------------|------------|--------|-------|
+| P3-A | Real cost tracking: finance_expenses/finance_revenue tables, expense CLI verb, ads action cost | P1-A/B/D2 | company-ops/sql/company_schema.sql, company_ops/ledger.py, company_ops/cli.py, company_ops/policy.py, company-ops/README.md, tests/test_finance.py (new) | opencode | todo | dispatching now, parallel with P4-A (disjoint files) |
+| P4-A | Observer provenance: typed decision/prediction/experiment/relationship helpers on ObserverWriter | P1-E | company_ops/observer.py, tests/test_observer.py | opencode | todo | dispatching now, parallel with P3-A (disjoint files); observer.decisions/predictions/experiments/relationships tables already exist from P1-A, no schema change needed |
