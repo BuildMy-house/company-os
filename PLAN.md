@@ -66,3 +66,23 @@ tickets — they need Nahar's real values/policy call, not code.
 
 See bottom of file for drafted ticket text once Phase 1-2 land. Do not
 dispatch until explicitly resumed in a future run.
+
+## Readiness/consistency pass (2026-09-06, fresh manager instance)
+
+Audit found: SOUL.md and config.yaml's pgedge_analytics stanza are both
+already internally consistent with what P1/P2 actually landed (verified by
+direct read, no fix needed). mcp-workers.json's shared-free-model routing is
+still accurately documented as a bootstrapping placeholder in README.md
+(lines 34-38). Found genuinely stale docs: README.md still describes SQLite
+as the storage layer (P1-D2 migrated ledger.py to Postgres/psycopg months
+before this pass) in 3 places incl. a rollback snippet that literally calls
+`sqlite3.connect()` on a Postgres schema-qualified table name (broken, not
+just stale-sounding); `.env.example` has a dead `COMPANY_OPS_DB=
+company-ops.sqlite3` var (zero references anywhere in code, confirmed via
+grep) and is missing `PGEDGE_API_KEY=`, which `hermes/config.yaml`'s
+pgedge_analytics stanza already reads via `${PGEDGE_API_KEY}` with nowhere
+documented to set it.
+
+| Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
+|--------|-------|------|--------------|------------|--------|-------|
+| P-DOC1 | Fix stale SQLite references in README.md + .env.example env-var drift | — | company-ops/README.md, company-ops/.env.example | opencode | todo | dispatching now |
