@@ -24,6 +24,10 @@ def main(argv: list[str] | None = None) -> int:
     route = sub.add_parser("route"); route.add_argument("task_type"); route.add_argument("--no-free", action="store_true")
     tl = sub.add_parser("telemetry"); tl.add_argument("event"); tl.add_argument("--field", action="append", default=[])
     tlq = sub.add_parser("telemetry-query"); tlq.add_argument("aql", nargs="?", help="AQL query string"); tlq.add_argument("--metric", choices=["errors", "performance", "usage"], help="Pre-built summary"); tlq.add_argument("--timeframe", default="24h", help="Time range (e.g. 24h, 7d)"); tlq.add_argument("--dataset", default=None, help="Axiom dataset name"); tlq.add_argument("--limit", type=int, default=50, help="Max rows")
+    deploy = sub.add_parser("deployment")
+    deploy_sub = deploy.add_subparsers(dest="deploy_command", required=True)
+    deploy_rec = deploy_sub.add_parser("record"); deploy_rec.add_argument("environment"); deploy_rec.add_argument("version"); deploy_rec.add_argument("--status", default="proposed")
+    deploy_up = deploy_sub.add_parser("update"); deploy_up.add_argument("deployment_id"); deploy_up.add_argument("status"); deploy_up.add_argument("--result", default=None)
     worker = sub.add_parser("worker"); worker.add_argument("task_type"); worker.add_argument("prompt"); worker.add_argument("--worker", default="auto"); worker.add_argument("--config", default="mcp-workers.json"); worker.add_argument("--execute", action="store_true"); worker.add_argument("--no-free", action="store_true"); worker.add_argument("--timeout", type=float, default=120)
     args = parser.parse_args(argv)
     if args.command == "route":
@@ -64,6 +68,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "plan": result = {"id": ledger.create_plan(args.goal, args.owner, args.budget)}
         elif args.command == "charge": result = ledger.charge(args.agent, args.action_type, args.plan, args.key)
         elif args.command == "revenue": result = ledger.record_revenue(args.net_cents, args.source)
+        elif args.command == "deployment":
+            if args.deploy_command == "record":
+                result = {"id": ledger.add_deployment(args.environment, args.version, args.status)}
+            elif args.deploy_command == "update":
+                ledger.update_deployment_status(args.deployment_id, args.status, args.result)
+                result = {"id": args.deployment_id, "status": args.status}
+            else: parser.error("unknown deployment subcommand")
         else: parser.error("unknown command")
         print(json.dumps(result, default=str, sort_keys=True)); return 0
     finally: ledger.close()

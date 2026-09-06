@@ -249,6 +249,22 @@ class Ledger:
             raise
         return deployment_id
 
+    def update_deployment_status(self, deployment_id: str, status: str, result: str | None = None) -> None:
+        try:
+            self.db.execute(
+                psycopg.sql.SQL("UPDATE {} SET {} = %s, {} = %s WHERE {} = %s").format(
+                    psycopg.sql.Identifier("deployments"),
+                    psycopg.sql.Identifier("status"),
+                    psycopg.sql.Identifier("result"),
+                    psycopg.sql.Identifier("id"),
+                ),
+                (status, result, deployment_id),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
     def status(self) -> dict:
         return {
             "balance": self.balance(),

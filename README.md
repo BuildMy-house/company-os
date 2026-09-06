@@ -28,8 +28,8 @@ python -m unittest discover -s tests -v
 python -m company_ops --db company-ops.sqlite3 status
 ```
 
-The CLI also supports `plan`, `charge`, `revenue`, `route`, `telemetry`, and
-`worker`.
+The CLI also supports `plan`, `charge`, `revenue`, `route`, `telemetry`,
+`worker`, and `deployment`.
 
 Copy `mcp-workers.example.json` to `mcp-workers.json`. It uses the public
 `@kud/mcp-opencode` for all three replaceable roles. This means the current
@@ -98,3 +98,28 @@ The current model assignment is TokenRouter MiMo for Hermes and OpenCode Zen
 MiMo-V2.5 Free for the engineering manager/worker
 TokenRouter GLM 5.3 Flash for the Claude/OpenCode roles. Keep the API key in
 runtime secrets; Nous Research is reserved as a future provider swap.
+
+## Staging promotion
+
+Promote a commit to staging by running the promotion script. It starts a test
+Postgres, runs pytest, and records the deployment in the company ledger only
+if all tests pass.
+
+```sh
+./company-ops/scripts/staging-promote.sh <commit-hash>
+```
+
+Options:
+- `--dry-run` — run tests without recording the deployment.
+
+The script uses the company-ops test database (`test-db-up.sh`) and requires
+a Python venv at `.venv` with `company-ops[test]` installed.
+
+To update an existing deployment's status:
+
+```sh
+python -m company_ops deployment update DEPLOY-<id> deployed --result "all tests passed"
+```
+
+Deployments are recorded in the `company.deployments` table with columns:
+`id`, `environment`, `version`, `status`, `created_at`, `result`.
