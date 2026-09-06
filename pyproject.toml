@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "homely-company-ops"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["psycopg[binary]>=3.1"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+matrix = ["matrix-nio[e2e]>=0.25"]
+
+[project.scripts]
+company-ops = "company_ops.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
