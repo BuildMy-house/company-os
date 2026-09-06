@@ -57,22 +57,26 @@ class Ledger:
 
     def create_plan(self, goal: str, owner: str = "hermes", budget_credits: int = 0, plan_id: str | None = None) -> str:
         plan_id = plan_id or f"PLAN-{uuid.uuid4().hex[:12]}"
-        self.db.execute(
-            psycopg.sql.SQL(
-                "INSERT INTO {} ({}, {}, {}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s, %s, %s)"
-            ).format(
-                psycopg.sql.Identifier("plans"),
-                psycopg.sql.Identifier("id"),
-                psycopg.sql.Identifier("goal"),
-                psycopg.sql.Identifier("owner"),
-                psycopg.sql.Identifier("status"),
-                psycopg.sql.Identifier("budget_credits"),
-                psycopg.sql.Identifier("created_at"),
-                psycopg.sql.Identifier("result"),
-            ),
-            (plan_id, goal, owner, "proposed", budget_credits, now(), None),
-        )
-        self.db.commit()
+        try:
+            self.db.execute(
+                psycopg.sql.SQL(
+                    "INSERT INTO {} ({}, {}, {}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+                ).format(
+                    psycopg.sql.Identifier("plans"),
+                    psycopg.sql.Identifier("id"),
+                    psycopg.sql.Identifier("goal"),
+                    psycopg.sql.Identifier("owner"),
+                    psycopg.sql.Identifier("status"),
+                    psycopg.sql.Identifier("budget_credits"),
+                    psycopg.sql.Identifier("created_at"),
+                    psycopg.sql.Identifier("result"),
+                ),
+                (plan_id, goal, owner, "proposed", budget_credits, now(), None),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         return plan_id
 
     def charge(self, agent: str, action_type: str, plan_id: str | None = None,
@@ -111,49 +115,56 @@ class Ledger:
         except Exception:
             self.db.rollback()
             raise
-        self.snapshot()
         return dict(self.db.execute("SELECT * FROM actions WHERE id = %s", (action_id,)).fetchone())
 
     def record_provider_usage(self, action_id: str, provider: str, model: str,
                               provider_cost_cents: int = 0, capacity_status: str = "available") -> str:
         usage_id = f"USAGE-{uuid.uuid4().hex[:12]}"
-        self.db.execute(
-            psycopg.sql.SQL(
-                "INSERT INTO {} ({}, {}, {}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s, %s, %s)"
-            ).format(
-                psycopg.sql.Identifier("provider_usage"),
-                psycopg.sql.Identifier("id"),
-                psycopg.sql.Identifier("action_id"),
-                psycopg.sql.Identifier("provider"),
-                psycopg.sql.Identifier("model"),
-                psycopg.sql.Identifier("provider_cost_cents"),
-                psycopg.sql.Identifier("capacity_status"),
-                psycopg.sql.Identifier("created_at"),
-            ),
-            (usage_id, action_id, provider, model, provider_cost_cents, capacity_status, now()),
-        )
-        self.db.commit()
+        try:
+            self.db.execute(
+                psycopg.sql.SQL(
+                    "INSERT INTO {} ({}, {}, {}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+                ).format(
+                    psycopg.sql.Identifier("provider_usage"),
+                    psycopg.sql.Identifier("id"),
+                    psycopg.sql.Identifier("action_id"),
+                    psycopg.sql.Identifier("provider"),
+                    psycopg.sql.Identifier("model"),
+                    psycopg.sql.Identifier("provider_cost_cents"),
+                    psycopg.sql.Identifier("capacity_status"),
+                    psycopg.sql.Identifier("created_at"),
+                ),
+                (usage_id, action_id, provider, model, provider_cost_cents, capacity_status, now()),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         return usage_id
 
     def add_routing_lesson(self, model: str, task_type: str, reason: str) -> str:
         lesson_id = f"LESSON-{uuid.uuid4().hex[:12]}"
-        self.db.execute(
-            psycopg.sql.SQL(
-                "INSERT INTO {} ({}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s) "
-                "ON CONFLICT ({}, {}) DO NOTHING"
-            ).format(
-                psycopg.sql.Identifier("routing_lessons"),
-                psycopg.sql.Identifier("id"),
-                psycopg.sql.Identifier("model"),
-                psycopg.sql.Identifier("task_type"),
-                psycopg.sql.Identifier("reason"),
-                psycopg.sql.Identifier("created_at"),
-                psycopg.sql.Identifier("model"),
-                psycopg.sql.Identifier("task_type"),
-            ),
-            (lesson_id, model, task_type, reason, now()),
-        )
-        self.db.commit()
+        try:
+            self.db.execute(
+                psycopg.sql.SQL(
+                    "INSERT INTO {} ({}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s) "
+                    "ON CONFLICT ({}, {}) DO NOTHING"
+                ).format(
+                    psycopg.sql.Identifier("routing_lessons"),
+                    psycopg.sql.Identifier("id"),
+                    psycopg.sql.Identifier("model"),
+                    psycopg.sql.Identifier("task_type"),
+                    psycopg.sql.Identifier("reason"),
+                    psycopg.sql.Identifier("created_at"),
+                    psycopg.sql.Identifier("model"),
+                    psycopg.sql.Identifier("task_type"),
+                ),
+                (lesson_id, model, task_type, reason, now()),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         row = self.db.execute(
             "SELECT id FROM routing_lessons WHERE model = %s AND task_type = %s",
             (model, task_type),
@@ -188,47 +199,54 @@ class Ledger:
         except Exception:
             self.db.rollback()
             raise
-        self.snapshot()
         return {"id": revenue_id, "net_revenue_cents": net_revenue_cents, "credits_created": credits // 100}
 
     def add_tool_request(self, requested_by: str, name: str, purpose: str, cost_credits: int, risk: str = "low") -> str:
         request_id = f"REQ-{uuid.uuid4().hex[:12]}"
-        self.db.execute(
-            psycopg.sql.SQL(
-                "INSERT INTO {} ({}, {}, {}, {}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
-            ).format(
-                psycopg.sql.Identifier("tool_requests"),
-                psycopg.sql.Identifier("id"),
-                psycopg.sql.Identifier("requested_by"),
-                psycopg.sql.Identifier("name"),
-                psycopg.sql.Identifier("purpose"),
-                psycopg.sql.Identifier("cost_credits"),
-                psycopg.sql.Identifier("risk"),
-                psycopg.sql.Identifier("status"),
-                psycopg.sql.Identifier("created_at"),
-            ),
-            (request_id, requested_by, name, purpose, cost_credits, risk, "proposed", now()),
-        )
-        self.db.commit()
+        try:
+            self.db.execute(
+                psycopg.sql.SQL(
+                    "INSERT INTO {} ({}, {}, {}, {}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                ).format(
+                    psycopg.sql.Identifier("tool_requests"),
+                    psycopg.sql.Identifier("id"),
+                    psycopg.sql.Identifier("requested_by"),
+                    psycopg.sql.Identifier("name"),
+                    psycopg.sql.Identifier("purpose"),
+                    psycopg.sql.Identifier("cost_credits"),
+                    psycopg.sql.Identifier("risk"),
+                    psycopg.sql.Identifier("status"),
+                    psycopg.sql.Identifier("created_at"),
+                ),
+                (request_id, requested_by, name, purpose, cost_credits, risk, "proposed", now()),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         return request_id
 
     def add_deployment(self, environment: str, version: str, status: str = "proposed") -> str:
         deployment_id = f"DEPLOY-{uuid.uuid4().hex[:12]}"
-        self.db.execute(
-            psycopg.sql.SQL(
-                "INSERT INTO {} ({}, {}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s, %s)"
-            ).format(
-                psycopg.sql.Identifier("deployments"),
-                psycopg.sql.Identifier("id"),
-                psycopg.sql.Identifier("environment"),
-                psycopg.sql.Identifier("version"),
-                psycopg.sql.Identifier("status"),
-                psycopg.sql.Identifier("created_at"),
-                psycopg.sql.Identifier("result"),
-            ),
-            (deployment_id, environment, version, status, now(), None),
-        )
-        self.db.commit()
+        try:
+            self.db.execute(
+                psycopg.sql.SQL(
+                    "INSERT INTO {} ({}, {}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s, %s)"
+                ).format(
+                    psycopg.sql.Identifier("deployments"),
+                    psycopg.sql.Identifier("id"),
+                    psycopg.sql.Identifier("environment"),
+                    psycopg.sql.Identifier("version"),
+                    psycopg.sql.Identifier("status"),
+                    psycopg.sql.Identifier("created_at"),
+                    psycopg.sql.Identifier("result"),
+                ),
+                (deployment_id, environment, version, status, now(), None),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         return deployment_id
 
     def status(self) -> dict:
@@ -239,29 +257,3 @@ class Ledger:
             "revenue_cents": self.db.execute("SELECT COALESCE(SUM(net_revenue_cents), 0) AS total FROM revenue_events").fetchone()["total"],
             "daily_cap": DAILY_CAP,
         }
-
-    def snapshot(self) -> str:
-        snap_id = f"SNAP-{uuid.uuid4().hex[:12]}"
-        s = self.status()
-        self.db.execute(
-            psycopg.sql.SQL(
-                "INSERT INTO {} ({}, {}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s, %s)"
-            ).format(
-                psycopg.sql.Identifier("snapshots"),
-                psycopg.sql.Identifier("id"),
-                psycopg.sql.Identifier("balance"),
-                psycopg.sql.Identifier("plans_count"),
-                psycopg.sql.Identifier("actions_count"),
-                psycopg.sql.Identifier("revenue_cents"),
-                psycopg.sql.Identifier("created_at"),
-            ),
-            (snap_id, s["balance"], s["plans"], s["actions"], s["revenue_cents"], now()),
-        )
-        self.db.commit()
-        return snap_id
-
-    def latest_snapshot(self) -> dict | None:
-        row = self.db.execute(
-            "SELECT * FROM snapshots ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
-        return dict(row) if row else None
