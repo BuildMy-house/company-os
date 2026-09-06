@@ -109,3 +109,13 @@ This is a hard exclusion, not a convention — same "boundary enforced at the
 infrastructure layer, not just code discipline" principle as the Phase 1
 Observer Postgres role. Corresponding account-setup item tracked in
 `company-ops/NAHAR-TODO.md` Group E (Infisical).
+
+## Backup mechanism (new, per architecture correction 2026-09-06)
+
+Production Postgres is now self-hosted/local, not Neon (see NAHAR-TODO.md
+Group B1's correction) — "constantly running, needs real backups" is a
+concrete gap, not implied by anything already landed.
+
+| Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
+|--------|-------|------|--------------|------------|--------|-------|
+| P1-F | Scheduled pg_dump (company+observer schemas) -> Cloudflare R2 backup, with retention | P1-A/B | company-ops/scripts/pg-backup.sh (new), company_ops/backup.py (new), tests/test_backup.py (new), company-ops/pyproject.toml, company-ops/docs/BACKUP.md (new), company-ops/.env.example | opencode | todo | dispatching now, parallel with P3-A/P4-A (disjoint files; deliberately does NOT touch cli.py or README.md, both currently in-flight) |
