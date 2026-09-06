@@ -85,4 +85,4 @@ documented to set it.
 
 | Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
 |--------|-------|------|--------------|------------|--------|-------|
-| P-DOC1 | Fix stale SQLite references in README.md + .env.example env-var drift | — | company-ops/README.md, company-ops/.env.example | opencode | todo | dispatching now |
+| P-DOC1 | Fix stale SQLite references in README.md + .env.example env-var drift | — | company-ops/README.md, company-ops/.env.example | opencode | done | commit b934987. Independently re-verified: grep -in sqlite README.md / grep COMPANY_OPS_DB .env.example both zero hits, grep PGEDGE_API_KEY .env.example exactly 1 hit. Read diff directly: quick-start's new `postgresql://hermes_company:localtest_company@localhost:5544/homely_company` example cross-checked byte-for-byte against scripts/test-db-up.sh's actual printed connection string -- exact match, not invented. Rollback snippet now uses working psycopg against COMPANY_DATABASE_URL instead of the broken sqlite3.connect() call. Only the 2 owner files touched. |
