@@ -45,7 +45,19 @@ fi
 # ── 3. Run pytest ──────────────────────────────────────────────────────
 echo "==> Running company-ops tests..."
 export TEST_COMPANY_DATABASE_URL="postgresql://hermes_company:localtest_company@localhost:5544/homely_company"
-"$PY" -m pytest "$COMPANY_OPS/tests" -v
+export TEST_OBSERVER_DATABASE_URL="postgresql://hermes_observer_writer:localtest_observer@localhost:5544/homely_company"
+
+PYTEST_OUTPUT=$(mktemp)
+trap 'rm -f "$PYTEST_OUTPUT"' EXIT
+"$PY" -m pytest "$COMPANY_OPS/tests" -v 2>&1 | tee "$PYTEST_OUTPUT"
+
+SKIP_COUNT=$(grep -oP '\d+ skipped' "$PYTEST_OUTPUT" | grep -oP '\d+' || true)
+if [ "${SKIP_COUNT:-0}" -gt 0 ]; then
+  echo "" >&2
+  echo "ERROR: $SKIP_COUNT tests were silently skipped — promotion gate FAILED." >&2
+  echo "Missing env vars? Check: TEST_OBSERVER_DATABASE_URL, TEST_COMPANY_DATABASE_URL" >&2
+  exit 1
+fi
 
 # ── 4. Record the deployment (unless --dry-run) ───────────────────────
 if [ "$DRY_RUN" -eq 1 ]; then
