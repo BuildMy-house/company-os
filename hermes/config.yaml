@@ -24,6 +24,22 @@ display:
       tool_progress: log
 
 mcp_servers:
+  # Placeholder — inactive until a real pgEdge account/API key exists.
+  # See company-ops/NAHAR-TODO.md for the setup steps. Do not remove this
+  # comment when filling in real credentials later — replace it with a
+  # short note that it's now live instead.
+  # Connects as hermes_analytics: SELECT-only, no write access to either
+  # the company or observer schema.
+  # Package name below (@pgedge/mcp-server) is unverified — confirm the
+  # real published package before going live.
+  pgedge_analytics:
+    command: "npx"
+    args: ["-y", "@pgedge/mcp-server"]
+    env:
+      PGEDGE_API_KEY: "${PGEDGE_API_KEY}"
+      ANALYTICS_DATABASE_URL: "${ANALYTICS_DATABASE_URL}"
+    connect_timeout: 60
+    timeout: 900
   opencode_manager:
     command: "npx"
     args: ["-y", "@kud/mcp-opencode"]
