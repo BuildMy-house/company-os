@@ -1,7 +1,7 @@
 # Homely Company Ops
 
 Small, portable control-plane foundation for the autonomous Homely workflow.
-It keeps exact company state in SQLite and emits separate JSONL telemetry. The
+It keeps exact company state in Postgres (the `company`/`observer` schemas) and emits separate JSONL telemetry. The
 R2, Slack, Hermes, Claude, and OpenCode integrations are intentionally
 adapters/configuration points until credentials and deployment policy exist.
 
@@ -19,13 +19,17 @@ Hermes as the user-facing agent.
 
 ## Quick start
 
+Spin up a local Postgres first (see `company-ops/scripts/test-db-up.sh` for
+the docker-compose setup and role creation):
+
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e '.[test]'
-python -m company_ops --db company-ops.sqlite3 init
+export COMPANY_DATABASE_URL=postgresql://hermes_company:localtest_company@localhost:5544/homely_company
+python -m company_ops --db "$COMPANY_DATABASE_URL" init
 python -m unittest discover -s tests -v
-python -m company_ops --db company-ops.sqlite3 status
+python -m company_ops --db "$COMPANY_DATABASE_URL" status
 ```
 
 The CLI also supports `plan`, `charge`, `revenue`, `route`, `telemetry`,
@@ -50,8 +54,8 @@ the server and repository scope.
 
 ## Data boundaries
 
-- SQLite is the local source of truth for plans, actions, credits, revenue, and
-  provider usage.
+- Postgres (the `company` schema) is the source of truth for plans, actions,
+  credits, revenue, and provider usage.
 - JSONL telemetry is optimization evidence, never financial reporting data.
 - Git stores policies and human-readable records; large artifacts belong in an
   S3-compatible store such as Cloudflare R2.
@@ -137,10 +141,12 @@ To roll back a bad staging deployment:
 
    ```sh
    python -c "
-   import sqlite3; c = sqlite3.connect('company-ops.sqlite3')
-   rows = c.execute(\"SELECT id, version, status FROM company.deployments
-     WHERE environment = 'staging' ORDER BY created_at DESC LIMIT 5\").fetchall()
-   for r in rows: print(r)
+   import os, psycopg
+   c = psycopg.connect(os.environ['COMPANY_DATABASE_URL'])
+   with c.cursor() as cur:
+       cur.execute(\"SELECT id, version, status FROM company.deployments
+         WHERE environment = 'staging' ORDER BY created_at DESC LIMIT 5\")
+       for r in cur.fetchall(): print(r)
    "
    ```
 
