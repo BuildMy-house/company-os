@@ -1,0 +1,26 @@
+{
+  "hermes": {
+    "command": ["npx", "-y", "@kud/mcp-opencode"],
+    "tool": "query",
+    "arguments": {
+      "prompt": "You are Hermes, the CEO planner. [{task_type}] {prompt}",
+      "model": "opencode/mimo-v2.5-free"
+    }
+  },
+  "claude": {
+    "command": ["npx", "-y", "@kud/mcp-opencode"],
+    "tool": "query",
+    "arguments": {
+      "prompt": "You are the senior Claude role, planning and reviewing work. [{task_type}] {prompt}",
+      "model": "opencode/mimo-v2.5-free"
+    }
+  },
+  "opencode": {
+    "command": ["npx", "-y", "@kud/mcp-opencode"],
+    "tool": "query",
+    "arguments": {
+      "prompt": "You are the OpenCode execution role. [{task_type}] {prompt}",
+      "model": "opencode/mimo-v2.5-free"
+    }
+  }
+}

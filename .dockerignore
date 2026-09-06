@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.sqlite3
+*.jsonl
+tests/__pycache__/
+.env
+*.sqlite3
+telemetry*.jsonl
+__pycache__/
+.matrix_session.json
+.matrix_store/
+.git/

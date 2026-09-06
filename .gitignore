@@ -1,0 +1,9 @@
+.env
+.matrix.env
+.venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.jsonl
+artifacts/
+reports/*.pdf
