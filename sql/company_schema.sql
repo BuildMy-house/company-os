@@ -83,3 +83,12 @@ CREATE TABLE IF NOT EXISTS company.routing_lessons (
   created_at TEXT NOT NULL,
   UNIQUE(model, task_type)
 );
+
+CREATE TABLE IF NOT EXISTS company.snapshots (
+  id TEXT PRIMARY KEY,
+  balance INTEGER NOT NULL,
+  plans_count INTEGER NOT NULL,
+  actions_count INTEGER NOT NULL,
+  revenue_cents INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
