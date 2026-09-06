@@ -119,3 +119,63 @@ concrete gap, not implied by anything already landed.
 | Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
 |--------|-------|------|--------------|------------|--------|-------|
 | P1-F | Scheduled pg_dump (company+observer schemas) -> Cloudflare R2 backup, with retention | P1-A/B | company-ops/scripts/pg-backup.sh (new), company_ops/backup.py (new), tests/test_backup.py (new), company-ops/pyproject.toml, company-ops/docs/BACKUP.md (new), company-ops/.env.example | opencode | todo | dispatching now, parallel with P3-A/P4-A (disjoint files; deliberately does NOT touch cli.py or README.md, both currently in-flight) |
+
+## Manager container — Hermees's path to the Claude engineering manager (new, fresh manager instance 2026-09-06)
+
+Spec: `/home/nahar/.claude/plans/ticklish-conjuring-horizon.md`, "Manager/worker
+configurability" section, final paragraph. Goal: replace the `claude` role's
+current OpenCode placeholder in `mcp-workers.json` with a real
+`@steipete/claude-code-mcp` wrapper running in its own dedicated container, so
+Hermees can dispatch to the identical Claude engineering-manager persona
+Nahar already uses manually. This is additive/isolated infra work — does NOT
+touch `company_ops/ledger.py`, `cli.py`, `policy.py`, `observer.py`,
+`sql/company_schema.sql` (owned by a concurrent Phase 3/4/9 manager instance's
+in-flight tickets).
+
+Pre-dispatch audit findings (this manager instance, 2026-09-06):
+- `codex` CLI here is installed as a standalone binary
+  (`~/.codex/packages/standalone/...`, symlinked from `~/.local/bin/codex`),
+  NOT an npm global — but `@openai/codex` IS a real, current npm package
+  (`npm view @openai/codex version` -> 0.153.4) and is the correct install
+  path for a Dockerfile. `opencode` is already installed via
+  `npm install -g opencode-ai@latest` in the main `Dockerfile` — mirror that
+  exactly. `claude` is `@anthropic-ai/claude-code` (npm, confirmed
+  2.1.263 locally).
+- The naive "clone github.com/BuildMy-house/app at build time" approach
+  researched in the plan is a real option (repo is public, confirmed via
+  `gh repo view`) BUT is stale as of this audit: that repo's last commit is
+  2026-09-06T11:36:10Z, while the LOCAL working tree has since-modified,
+  uncommitted changes to `.claude/agents/opencode-manager.md` (234
+  insertions, e.g. the `Skill` tool grant) and two entirely untracked/
+  never-pushed directories, `.claude/skills/` and `.agents/skills/`
+  (frontend-design + impeccable installs from earlier this session). A
+  git-clone-based Dockerfile would silently ship a stale/incomplete
+  persona. Do not use that approach as primary.
+- Recommended instead: **Docker Buildx additional build contexts**
+  (`--build-context name=path`, supported — confirmed `docker buildx
+  v0.36.1` installed) pointed directly at the live host paths at build
+  time: `--build-context manager-def=../.claude/agents --build-context
+  skills-src=../.agents/skills`, then in `Dockerfile.manager`:
+  `COPY --from=manager-def opencode-manager.md /opt/company-ops/.claude/agents/opencode-manager.md`
+  and `COPY --from=skills-src . /opt/company-ops/.claude/skills/` (flatten
+  into `.claude/skills/`, since that's the path OpenCode/Claude actually
+  discover skills from — no need to preserve the host's
+  `.claude/skills/frontend-design -> ../../.agents/skills/frontend-design`
+  symlink, `.agents/skills/` already has the real directories for both
+  skills). This always builds from current on-disk state, needs no GitHub
+  push, and avoids making the ~7.6GB `house_designer` root (no
+  `.dockerignore` there) the primary build context.
+- Whether the *operational* `workFolder` for `claude_code` tool calls
+  should be a live-mounted `/workspace/house_designer` (mirroring the main
+  `docker-compose.yml` service's existing `..:/workspace/house_designer`
+  volume) vs. the image's frozen build-time copy is a real design
+  decision — the manager's whole job is dispatching against live current
+  repo state, so a live volume mount is almost certainly correct for
+  `workFolder`, with the Buildx-copied `.claude/agents/opencode-manager.md`
+  + skills serving only as a documented fallback for a standalone/no-mount
+  deployment. Ticket text below directs the worker to decide and document
+  this, not guess silently.
+
+| Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
+|--------|-------|------|--------------|------------|--------|-------|
+| P-MGR1 | Dockerfile.manager: containerize the Claude engineering-manager (claude+opencode+codex CLIs + claude-code-mcp wrapper) for Hermees's `mcp-workers.json` claude role | — | company-ops/Dockerfile.manager (new), company-ops/docker-compose.yml, company-ops/mcp-workers.json, company-ops/mcp-workers.example.json, company-ops/.env.example, company-ops/NAHAR-TODO.md | codex | dispatching | see ticket prompt in dispatch log; does not touch ledger.py/cli.py/policy.py/observer.py/sql/company_schema.sql (other instance's territory) |
