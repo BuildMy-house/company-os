@@ -1,0 +1,15 @@
+[Unit]
+Description=Hermes CEO Discord bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/nahar/Documents/code/house_designer/company-ops
+ExecStart=/home/nahar/Documents/code/house_designer/company-ops/.venv/bin/python discord_bridge.py
+EnvironmentFile=/home/nahar/Documents/code/house_designer/company-ops/.env
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
