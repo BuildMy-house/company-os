@@ -91,3 +91,19 @@ include `repo`+`workflow`). The actual gap was that the local branch
 default branch) was **138 commits ahead of origin, never pushed** — so CI had
 never run against any of the Phase 1-2 work. Pushed this session; `ci.yml` is
 now running for real on push. No action needed from you here.
+
+### 7. Two different Steward bearer tokens in use, one already pushed publicly (found 2026-09-06)
+While auditing untracked files for P9-B, found `.mcp.json` (already tracked
+in git, and already pushed to the public `homely` GitHub repo as part of
+this session's earlier 138-commit push) contains a live-looking Steward MCP
+bearer token for `https://homely.stewardacs.xyz/mcp/coding/sse` (see the
+`Authorization` header value in that file directly — not reproduced here on
+purpose). Separately, two untracked files — `company-ops/opencode/opencode.json`
+and `company-ops/opencode/worker/opencode.json` — contain a DIFFERENT token
+value for the same endpoint (also viewable directly in those files). Both
+left completely untouched/uncommitted this session pending your decision.
+**Needs:** (a) a decision on whether to rotate/revoke either or both tokens
+at `homely.stewardacs.xyz`, given the first is now public; (b) once decided,
+whether the two untracked `opencode.json` files should be switched to read
+the token from an env var instead of a literal value, then committed, or
+handled some other way. Not touched further by any agent pending your call.
