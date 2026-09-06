@@ -144,3 +144,30 @@ include `repo`+`workflow`). The actual gap was that the local branch
 default branch) was **138 commits ahead of origin, never pushed** — so CI had
 never run against any of the Phase 1-2 work. Pushed this session; `ci.yml` is
 now running for real on push. No action needed from you here.
+
+## Group E — Infisical secrets/certificate manager setup (additive, not urgent-blocking)
+
+Per the plan's new "Secrets and certificate management (Infisical, hard
+exclusion for Hermees)" section (added 2026-09-06): adopting Infisical to
+replace scattered plaintext `.env` files as the secrets/certificate source of
+truth, with a hard two-tier access model enforced at the Infisical layer —
+Hermees's own machine identity can read its operational secrets (Discord bot
+token, model API keys, its three Postgres role connection strings) but has
+ZERO access to certificates/PKI material or anything cert-adjacent
+(Cloudflare API tokens, DNS/registrar credentials, payment processor keys),
+structurally, not by convention — same "hard boundary, not just code
+discipline" principle as the Phase 1 Observer Postgres role.
+
+#### E1. Infisical account/project not provisioned yet
+Same pattern as Neon (B1) and pgEdge (B2): this needs a real account only you
+can create. **Needs:** an Infisical account + project, then a scoped Infisical
+machine identity for Hermees limited to its operational-secrets path only
+(Discord bot token, model API keys, `hermes_company`/`hermes_observer_writer`/
+`hermes_analytics` connection strings) — with a separate project/environment/
+path for certificates and anything cert-adjacent (Cloudflare API tokens,
+DNS/registrar credentials, payment processor keys) that Hermees's identity has
+no access policy granting it into at all, not even list/visibility.
+This migration is additive, not urgent-blocking (existing `.env.example`
+stays as the interim documentation of variable names/shapes); the two
+already-known at-risk Steward tokens (Group D2, above) don't need to wait for
+this to be rotated — that stays a separate, faster-moving task.
