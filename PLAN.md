@@ -202,3 +202,27 @@ already uses; changes reach the real repo only via explicit `git push` from
 inside that isolated clone. `mcp-workers.json`/`.example.json`'s `claude`
 role `workFolder` updated to `/workspace/app-checkout` to match. In flight,
 not yet verified.
+
+**Second architectural correction (2026-09-06, coordinator-driven research, not self-found):**
+confirmed by reading `company_ops/mcp_client.py`/`workers.py` directly that
+`mcp-workers.json` is NOT wired to `hermes gateway run` at all — the vendor
+tool reads its own native `hermes/config.yaml`'s `mcp_servers:` block
+instead, which already supports both `command:`/stdio entries (see
+`opencode_manager`) and `url:`/remote HTTP-SSE entries. `mcp-workers.json`
+is being reverted to its original state (serves a separate manual-dispatch/
+Discord-bridge use case, out of scope for this ticket). New standing
+pattern (Nahar's call): every department is its own container exposing MCP
+over the network, one `url:` entry per department in `hermes/config.yaml`.
+For the engineering department's `@steipete/claude-code-mcp` (stdio-only,
+no native HTTP mode), front it with `supergateway` inside the container.
+Also renamed the service/files from "claude-manager"/"manager" to
+"engineering" throughout (this container holds both the Claude
+engineering-manager and the opencode/codex CLI workers it dispatches to,
+not just "the manager"): `Dockerfile.manager` -> `Dockerfile.engineering`,
+`manager-entrypoint.sh` -> `engineering-entrypoint.sh`, compose service
+`claude-manager` -> `engineering`, volume `manager-checkout` ->
+`engineering-checkout`. Isolated-clone-not-live-mount fix from the prior
+round is preserved unchanged. Redesign dispatched to Codex
+(background task, in flight). Nothing committed yet — holding per
+standing verification discipline until this lands and is independently
+checked.
