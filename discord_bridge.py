@@ -83,6 +83,14 @@ def split_reply(text: str) -> list[str]:
     return [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)]
 
 
+def is_user_allowed(sender_id: str) -> bool:
+    if ALLOW_ALL_USERS:
+        return True
+    if ALLOWED_USERS and sender_id not in ALLOWED_USERS:
+        return False
+    return True
+
+
 def is_allowed(sender_id: str, channel_id: str) -> bool:
     if ALLOW_ALL_USERS:
         return True
@@ -126,6 +134,9 @@ async def on_message(message: discord.Message) -> None:
     mentioned = client.user in message.mentions
 
     if not is_dm and not mentioned:
+        return
+
+    if is_dm and not is_user_allowed(str(message.author.id)):
         return
 
     if not is_dm and not is_allowed(str(message.author.id), str(message.channel.id)):

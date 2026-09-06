@@ -13,6 +13,7 @@ _spec.loader.exec_module(_mod)
 extract_text = _mod.extract_text
 split_reply = _mod.split_reply
 is_allowed = _mod.is_allowed
+is_user_allowed = _mod.is_user_allowed
 
 
 class ExtractTextTests(unittest.TestCase):
@@ -109,6 +110,36 @@ class IsAllowedTests(unittest.TestCase):
     def test_allow_all_users_bypasses(self):
         self._set(allow_all=True, users=["111"], channels=["100"])
         self.assertTrue(is_allowed("999", "999"))
+
+
+class IsUserAllowedTests(unittest.TestCase):
+    def setUp(self):
+        self._orig_all = _mod.ALLOW_ALL_USERS
+        self._orig_users = _mod.ALLOWED_USERS
+
+    def tearDown(self):
+        _mod.ALLOW_ALL_USERS = self._orig_all
+        _mod.ALLOWED_USERS = self._orig_users
+
+    def _set(self, *, allow_all=False, users=None):
+        _mod.ALLOW_ALL_USERS = allow_all
+        _mod.ALLOWED_USERS = set(users) if users else set()
+
+    def test_no_restrictions(self):
+        self._set()
+        self.assertTrue(is_user_allowed("123"))
+
+    def test_user_in_list(self):
+        self._set(users=["111", "222"])
+        self.assertTrue(is_user_allowed("111"))
+
+    def test_user_not_in_list(self):
+        self._set(users=["111", "222"])
+        self.assertFalse(is_user_allowed("999"))
+
+    def test_allow_all_bypasses(self):
+        self._set(allow_all=True, users=["111"])
+        self.assertTrue(is_user_allowed("999"))
 
 
 if __name__ == "__main__":
