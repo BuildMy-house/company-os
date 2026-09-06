@@ -123,3 +123,40 @@ python -m company_ops deployment update DEPLOY-<id> deployed --result "all tests
 
 Deployments are recorded in the `company.deployments` table with columns:
 `id`, `environment`, `version`, `status`, `created_at`, `result`.
+
+### Rollback
+
+Previous versions are recoverable via git alone — every deployment recorded in
+`company.deployments` has a `version` column that stores a git commit hash, so
+reverting is always just `git checkout <that-commit>` (or equivalent). The
+ledger itself does not keep a copy of the artifact.
+
+To roll back a bad staging deployment:
+
+1. Find the last-known-good commit hash:
+
+   ```sh
+   python -c "
+   import sqlite3; c = sqlite3.connect('company-ops.sqlite3')
+   rows = c.execute(\"SELECT id, version, status FROM company.deployments
+     WHERE environment = 'staging' ORDER BY created_at DESC LIMIT 5\").fetchall()
+   for r in rows: print(r)
+   "
+   ```
+
+2. Re-promote the good commit (this re-validates and re-records it):
+
+   ```sh
+   ./company-ops/scripts/staging-promote.sh <previous-good-commit>
+   ```
+
+3. Mark the bad deployment as rolled back in the ledger:
+
+   ```sh
+   python -m company_ops deployment update DEPLOY-<bad-id> rolled_back \
+     --result "regression in <describe>"
+   ```
+
+This is deliberately NOT a bespoke rollback orchestrator — it is git commit
+history (already recoverable) plus the existing deployment CLI (already built),
+following the project's "don't overbuild infrastructure" convention.
