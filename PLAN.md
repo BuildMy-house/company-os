@@ -56,9 +56,9 @@ tickets — they need Nahar's real values/policy call, not code.
 
 | Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
 |--------|-------|------|--------------|------------|--------|-------|
-| P9-A | Add company-ops test job to ci.yml (Postgres service container + pytest) | — | .github/workflows/ci.yml | opencode | todo | |
-| P9-B | company-ops staging-container promotion path + `deployment` CLI verb | P1-A/B/D2/E | company-ops/scripts/staging-promote.sh, company_ops/cli.py, company_ops/ledger.py, tests/test_ops.py, company-ops/README.md | opencode | todo | must NOT touch docker-compose.yml/Dockerfile/entrypoint.sh (P9-D's territory) or start `hermes gateway run` |
-| P9-C | Homely pre-release/beta channel via tag-pattern-driven `prerelease` flag | — | .github/workflows/release.yml, docs/RELEASE.md | opencode | todo | |
+| P9-A | Add company-ops test job to ci.yml (Postgres service container + pytest) | — | .github/workflows/ci.yml | opencode | in_progress | |
+| P9-B | company-ops staging-container promotion path + `deployment` CLI verb | P1-A/B/D2/E | company-ops/scripts/staging-promote.sh, company_ops/cli.py, company_ops/ledger.py, tests/test_ops.py, company-ops/README.md | opencode | in_progress | must NOT touch docker-compose.yml/Dockerfile/entrypoint.sh (P9-D's territory) or start `hermes gateway run` |
+| P9-C | Homely pre-release/beta channel via tag-pattern-driven `prerelease` flag | — | .github/workflows/release.yml, docs/RELEASE.md | opencode | in_progress | |
 | P9-D | Purge leftover Matrix references in Dockerfile/entrypoint.sh/docker-compose.yml/hermes/config.yaml (never-deprecate-in-place violation found in audit) | P2-F | company-ops/Dockerfile, company-ops/docker-compose.yml, company-ops/scripts/entrypoint.sh, company-ops/hermes/config.yaml | opencode | todo | pre-existing uncommitted infra changes (opencode-ai install, /opt/data paths) found in these 3 files at session start dated 2026-09-04 — keep them, only strip Matrix leftovers; do NOT start the container |
 | P9-F | site-homely: fix/rename Cloudflare deploy workflow + document gradual/staged deployment procedure | — | site-homely/.github/workflows/*.yml, site-homely/wrangler.jsonc (new), site-homely/docs/DEPLOY.md (new) | opencode | todo | separate git repo (github.com/NaharEmet/homely-site.git); cannot go live without CLOUDFLARE_API_TOKEN/ACCOUNT_ID (tracked in company-ops/NAHAR-TODO.md item 6) — build config+docs only |
 
