@@ -15,13 +15,8 @@ terminal:
   backend: local
 
 display:
-  # Keep internal tool activity out of Matrix's main timeline; retain it in
-  # Hermes' rotating audit log for debugging and telemetry.
   tool_progress: log
   interim_assistant_messages: false
-  platforms:
-    matrix:
-      tool_progress: log
 
 mcp_servers:
   # Placeholder — inactive until a real pgEdge account/API key exists.

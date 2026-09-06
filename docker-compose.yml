@@ -3,18 +3,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    working_dir: /workspace/house_designer/site-homely
+    working_dir: /workspace/house_designer
     env_file:
       - path: .env
         required: false
-    environment:
-      TOKENROUTER_API_KEY: ${TOKENROUTER_API_KEY:-}
-      OPENCODE_CONFIG_DIR: /root/.config/opencode
     stdin_open: true
     tty: true
     volumes:
       - ..:/workspace/house_designer
-      - hermes-data:/root/.hermes
+      - hermes-data:/opt/data
       - ../certs/homely-deploy:/root/.ssh/id_rsa:ro
     command: ["hermes", "gateway", "run"]
 

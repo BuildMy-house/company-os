@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+chmod -R a+rwx /opt/data 2>/dev/null || true
+
+# Write secrets from environment to /opt/data/.env (hermes reads this at startup)
+cat > /opt/data/.env << 'ENVEOF'
+# Auto-generated from container environment — do not edit manually
+ENVEOF
+
+for key in DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS DISCORD_ALLOWED_CHANNELS \
+           DISCORD_ALLOW_ALL_USERS DISCORD_WORKER_CONFIG DISCORD_WORKER \
+           DISCORD_TASK_TYPE DISCORD_TIMEOUT DISCORD_ANNOUNCE_CHANNEL \
+           DISCORD_DM_USER DISCORD_DAILY_PROMPT DISCORD_INVESTOR_PROMPT \
+           DISCORD_QUESTIONS_PROMPT DISCORD_INTERVAL_DAILY DISCORD_INTERVAL_INVESTOR \
+           NOUS_API_KEY TOKENROUTER_API_KEY OPENCODE_ZEN_API_KEY; do
+  val="${!key:-}"
+  if [[ -n "$val" ]]; then
+    echo "${key}=${val}" >> /opt/data/.env
+  fi
+done
+
+chmod 644 /opt/data/.env
+
 REPO_DIR="/opt/homely-ceo"
 REMOTE="git@github.com:NaharEmet/homely-ceo.git"
 
