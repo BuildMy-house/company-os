@@ -48,16 +48,32 @@ call.
 Independent of Group A; both items below are separately needed before Hermes
 has any real production data to reason about.
 
-#### B1. Neon Postgres (production) not provisioned yet
+#### B1. Production Postgres not stood up yet (corrected 2026-09-06: self-hosted, not Neon)
+**Architecture correction:** production Postgres is now self-hosted/local, not
+a managed cloud provider (Nahar's later call, superseded an earlier Neon
+decision — see the plan file's Context point 1 and Phase 1 section). Since
+Hermees is meant to operate continuously (not spun up on demand), this needs
+to be a long-lived local Postgres instance — likely its own container in the
+eventual docker-compose stack alongside the Hermes CEO and Discord bridge
+containers — with a real backup strategy (see the new backup ticket on the
+company-ops board), not a one-off ephemeral instance.
+
 `COMPANY_DATABASE_URL` / `OBSERVER_DATABASE_URL` / `ANALYTICS_DATABASE_URL`
 are unset in the real `.env`. Phase 1's Postgres backbone is fully built and
 tested against local/dev Postgres only (`company-ops/docker-compose.test.yml`
-+ `company-ops/scripts/test-db-up.sh`); nothing is live. **Needs:** a real
-Neon project, then run `company-ops/sql/company_schema.sql`,
++ `company-ops/scripts/test-db-up.sh`) — going to production is "make this
+long-lived + add backups," not a new datastore or new code; the same schema/
+role setup already applies. **Needs:** a persistent (not ephemeral-test)
+Postgres instance stood up, then run `company-ops/sql/company_schema.sql`,
 `company-ops/sql/observer_schema.sql`, and `company-ops/sql/roles.sql`
 against it (same order `test-db-up.sh` uses), then set the three connection
 strings (with real per-role passwords, not the `localtest_*` dev ones) in the
 real `.env`.
+
+**Also note:** `NEON_DATABASE_URL` in `.env.example`'s comments is now dead
+(referenced Neon, which is no longer the plan) — flag for removal next time
+that file is touched; not urgent enough on its own to warrant a dedicated
+dispatch.
 
 #### B2. pgEdge account/API key not provisioned yet
 `PGEDGE_API_KEY` is unset. `company-ops/hermes/config.yaml`'s
