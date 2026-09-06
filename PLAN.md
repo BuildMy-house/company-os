@@ -179,3 +179,26 @@ Pre-dispatch audit findings (this manager instance, 2026-09-06):
 | Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
 |--------|-------|------|--------------|------------|--------|-------|
 | P-MGR1 | Dockerfile.manager: containerize the Claude engineering-manager (claude+opencode+codex CLIs + claude-code-mcp wrapper) for Hermees's `mcp-workers.json` claude role | — | company-ops/Dockerfile.manager (new), company-ops/docker-compose.yml, company-ops/mcp-workers.json, company-ops/mcp-workers.example.json, company-ops/.env.example, company-ops/NAHAR-TODO.md | codex | dispatching | see ticket prompt in dispatch log; does not touch ledger.py/cli.py/policy.py/observer.py/sql/company_schema.sql (other instance's territory) |
+
+**Containment bug caught before landing (2026-09-06, coordinator catch, not self-found):**
+first Codex dispatch's `docker-compose.yml` draft for `claude-manager` had
+`volumes: - ..:/workspace/house_designer` — a live bind-mount of the actual
+host `house_designer` working tree into a container running
+`@steipete/claude-code-mcp` with `--dangerously-skip-permissions` (required
+for headless operation). That combination defeats the whole point of
+"contained to its own container" as the accepted mitigation for the
+bypass-permissions risk — a bug/bad action there would write to the real
+repo instantly, no review step. Caught and flagged before any `docker
+build`/commit happened (independently confirmed: that dispatch's `docker
+build` actually failed on its own first, on a sandbox Docker-socket
+permission error, and its commit attempt failed on a `.git/index.lock`
+read-only-filesystem error — so nothing unsafe ever actually ran, but the
+design was wrong regardless and needed fixing before redispatch). Corrected
+design dispatched: the container clones its own isolated copy into a named
+Docker volume (`manager-checkout`, not a host bind-mount) via a new
+`company-ops/scripts/manager-entrypoint.sh`, using the same
+`certs/homely-deploy` SSH key mount the existing `company-ops` service
+already uses; changes reach the real repo only via explicit `git push` from
+inside that isolated clone. `mcp-workers.json`/`.example.json`'s `claude`
+role `workFolder` updated to `/workspace/app-checkout` to match. In flight,
+not yet verified.
