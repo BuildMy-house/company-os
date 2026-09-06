@@ -93,3 +93,19 @@ documented to set it.
 |--------|-------|------|--------------|------------|--------|-------|
 | P3-A | Real cost tracking: finance_expenses/finance_revenue tables, expense CLI verb, ads action cost | P1-A/B/D2 | company-ops/sql/company_schema.sql, company_ops/ledger.py, company_ops/cli.py, company_ops/policy.py, company-ops/README.md, tests/test_finance.py (new) | opencode | todo | dispatching now, parallel with P4-A (disjoint files) |
 | P4-A | Observer provenance: typed decision/prediction/experiment/relationship helpers on ObserverWriter | P1-E | company_ops/observer.py, tests/test_observer.py | opencode | todo | dispatching now, parallel with P3-A (disjoint files); observer.decisions/predictions/experiments/relationships tables already exist from P1-A, no schema change needed |
+
+## Note for whoever writes the Phase 6 ticket (policies/autonomy.md doesn't exist yet)
+
+Per the plan's "Secrets and certificate management (Infisical, hard exclusion
+for Hermees)" section (added 2026-09-06, see the plan file), when Phase 6's
+`company-ops/policies/autonomy.md` is actually written, it MUST include this
+constitutional boundary line verbatim alongside the other hard limits (spend
+caps, no debt, no direct App PG access, etc.):
+
+> Hermees cannot access certificate/PKI material under any circumstances,
+> regardless of what other operational secrets it holds.
+
+This is a hard exclusion, not a convention — same "boundary enforced at the
+infrastructure layer, not just code discipline" principle as the Phase 1
+Observer Postgres role. Corresponding account-setup item tracked in
+`company-ops/NAHAR-TODO.md` Group E (Infisical).
