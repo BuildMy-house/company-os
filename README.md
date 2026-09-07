@@ -33,7 +33,7 @@ python -m company_ops --db "$COMPANY_DATABASE_URL" status
 ```
 
 The CLI also supports `plan`, `charge`, `revenue`, `route`, `telemetry`,
-`worker`, and `deployment`.
+`worker`, `deployment`, and `resource-pool`.
 
 Copy `mcp-workers.example.json` to `mcp-workers.json`. It uses the public
 `@kud/mcp-opencode` for all three replaceable roles. This means the current
@@ -68,6 +68,25 @@ subscription, server hosting, OpenCode paid usage) entered manually via
 `company.finance_revenue` exists as a schema placeholder but stays
 empty — payment processing (Stripe or similar) is deliberately deferred
 until there is something to sell, not forgotten.
+
+`company.resource_pools` tracks subscription/quota-based tool usage
+across free and paid tiers (OpenCode, Codex, Antigravity CLI, future
+Claude). Each pool records its tool, tier, reset period, quota limit,
+and current usage:
+
+```sh
+# Register a pool (e.g. OpenCode free tier: 100 requests per 5h window)
+python -m company_ops resource-pool add opencode free 5h 100 "2026-09-07T12:00:00Z"
+
+# Record a usage event
+python -m company_ops resource-pool debit POOL-<id>
+
+# Check current usage
+python -m company_ops resource-pool list
+
+# Reset after period expires
+python -m company_ops resource-pool reset POOL-<id>
+```
 
 ## Portable container
 

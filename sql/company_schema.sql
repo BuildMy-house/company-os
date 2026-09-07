@@ -99,3 +99,14 @@ CREATE TABLE IF NOT EXISTS company.finance_revenue (
   source TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS company.resource_pools (
+  id TEXT PRIMARY KEY,
+  tool TEXT NOT NULL,
+  tier TEXT NOT NULL,
+  period TEXT NOT NULL,
+  limit_value INTEGER NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
+  reset_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);

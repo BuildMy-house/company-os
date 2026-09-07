@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .axiom_client import AxiomClient
 from .ledger import Ledger
+from .resource_pools import ResourcePool
 from .routing import choose_provider
 from .telemetry import Telemetry
 from .workers import load_workers, run_worker
@@ -33,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
     exp_add = expense_sub.add_parser("add"); exp_add.add_argument("category"); exp_add.add_argument("amount_cents", type=int); exp_add.add_argument("recurrence"); exp_add.add_argument("--source", default=None)
     expense_sub.add_parser("list")
     worker = sub.add_parser("worker"); worker.add_argument("task_type"); worker.add_argument("prompt"); worker.add_argument("--worker", default="auto"); worker.add_argument("--config", default="mcp-workers.json"); worker.add_argument("--execute", action="store_true"); worker.add_argument("--no-free", action="store_true"); worker.add_argument("--timeout", type=float, default=120)
+    rp = sub.add_parser("resource-pool")
+    rp_sub = rp.add_subparsers(dest="rp_command", required=True)
+    rp_add = rp_sub.add_parser("add"); rp_add.add_argument("tool"); rp_add.add_argument("tier"); rp_add.add_argument("period"); rp_add.add_argument("limit_value", type=int); rp_add.add_argument("reset_at")
+    rp_debit = rp_sub.add_parser("debit"); rp_debit.add_argument("pool_id"); rp_debit.add_argument("--amount", type=int, default=1)
+    rp_sub.add_parser("list")
+    rp_reset = rp_sub.add_parser("reset"); rp_reset.add_argument("pool_id")
     args = parser.parse_args(argv)
     if args.command == "route":
         print(json.dumps(choose_provider(args.task_type, not args.no_free), sort_keys=True)); return 0
@@ -65,6 +72,20 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"status": "failed", "error": f"MCP worker config not found: {config}"})); return 2
         result = run_worker(args.worker, args.task_type, args.prompt, load_workers(config), not args.no_free, not args.execute, args.timeout)
         print(json.dumps(result.as_dict(), default=str, sort_keys=True)); return 0 if result.status != "failed" else 1
+    if args.command == "resource-pool":
+        pool = ResourcePool(args.db)
+        try:
+            if args.rp_command == "add":
+                result = {"id": pool.add(args.tool, args.tier, args.period, args.limit_value, args.reset_at)}
+            elif args.rp_command == "debit":
+                result = pool.debit(args.pool_id, args.amount)
+            elif args.rp_command == "list":
+                result = pool.list_pools()
+            elif args.rp_command == "reset":
+                result = pool.reset(args.pool_id)
+            else: parser.error("unknown resource-pool subcommand")
+            print(json.dumps(result, default=str, sort_keys=True)); return 0
+        finally: pool.close()
     ledger = Ledger(args.db); ledger.init()
     try:
         if args.command == "init": result = {"dsn": args.db, "status": "ready"}
