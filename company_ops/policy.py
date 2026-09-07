@@ -9,6 +9,7 @@ ACTION_COSTS = {
     "inspection": 1,
     "seo": 5,
     "social_post": 5,
+    "ads": 5,
     "coding": 10,
     "verification": 5,
     "deployment": 10,

@@ -62,6 +62,13 @@ the server and repository scope.
 - R2 settings are placeholders in `.env.example`; no network calls
   happen in the local implementation.
 
+`company.finance_expenses` tracks real recurring costs (Claude
+subscription, server hosting, OpenCode paid usage) entered manually via
+`company-ops expense add <category> <amount_cents> <recurrence>`.
+`company.finance_revenue` exists as a schema placeholder but stays
+empty — payment processing (Stripe or similar) is deliberately deferred
+until there is something to sell, not forgotten.
+
 ## Portable container
 
 ```sh

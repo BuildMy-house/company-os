@@ -265,11 +265,39 @@ class Ledger:
             self.db.rollback()
             raise
 
+    def add_expense(self, category: str, amount_cents: int, recurrence: str, source: str | None = None) -> str:
+        expense_id = f"EXP-{uuid.uuid4().hex[:12]}"
+        try:
+            self.db.execute(
+                psycopg.sql.SQL(
+                    "INSERT INTO {} ({}, {}, {}, {}, {}, {}) VALUES (%s, %s, %s, %s, %s, %s)"
+                ).format(
+                    psycopg.sql.Identifier("finance_expenses"),
+                    psycopg.sql.Identifier("id"),
+                    psycopg.sql.Identifier("category"),
+                    psycopg.sql.Identifier("amount_cents"),
+                    psycopg.sql.Identifier("recurrence"),
+                    psycopg.sql.Identifier("source"),
+                    psycopg.sql.Identifier("created_at"),
+                ),
+                (expense_id, category, amount_cents, recurrence, source, now()),
+            )
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return expense_id
+
+    def list_expenses(self) -> list[dict]:
+        rows = self.db.execute("SELECT * FROM finance_expenses ORDER BY created_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
     def status(self) -> dict:
         return {
             "balance": self.balance(),
             "plans": self.db.execute("SELECT COUNT(*) AS count FROM plans").fetchone()["count"],
             "actions": self.db.execute("SELECT COUNT(*) AS count FROM actions").fetchone()["count"],
             "revenue_cents": self.db.execute("SELECT COALESCE(SUM(net_revenue_cents), 0) AS total FROM revenue_events").fetchone()["total"],
+            "total_expenses_cents": self.db.execute("SELECT COALESCE(SUM(amount_cents), 0) AS total FROM finance_expenses").fetchone()["total"],
             "daily_cap": DAILY_CAP,
         }

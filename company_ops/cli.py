@@ -28,6 +28,10 @@ def main(argv: list[str] | None = None) -> int:
     deploy_sub = deploy.add_subparsers(dest="deploy_command", required=True)
     deploy_rec = deploy_sub.add_parser("record"); deploy_rec.add_argument("environment"); deploy_rec.add_argument("version"); deploy_rec.add_argument("--status", default="proposed")
     deploy_up = deploy_sub.add_parser("update"); deploy_up.add_argument("deployment_id"); deploy_up.add_argument("status"); deploy_up.add_argument("--result", default=None)
+    expense = sub.add_parser("expense")
+    expense_sub = expense.add_subparsers(dest="expense_command", required=True)
+    exp_add = expense_sub.add_parser("add"); exp_add.add_argument("category"); exp_add.add_argument("amount_cents", type=int); exp_add.add_argument("recurrence"); exp_add.add_argument("--source", default=None)
+    expense_sub.add_parser("list")
     worker = sub.add_parser("worker"); worker.add_argument("task_type"); worker.add_argument("prompt"); worker.add_argument("--worker", default="auto"); worker.add_argument("--config", default="mcp-workers.json"); worker.add_argument("--execute", action="store_true"); worker.add_argument("--no-free", action="store_true"); worker.add_argument("--timeout", type=float, default=120)
     args = parser.parse_args(argv)
     if args.command == "route":
@@ -75,6 +79,12 @@ def main(argv: list[str] | None = None) -> int:
                 ledger.update_deployment_status(args.deployment_id, args.status, args.result)
                 result = {"id": args.deployment_id, "status": args.status}
             else: parser.error("unknown deployment subcommand")
+        elif args.command == "expense":
+            if args.expense_command == "add":
+                result = {"id": ledger.add_expense(args.category, args.amount_cents, args.recurrence, args.source)}
+            elif args.expense_command == "list":
+                result = ledger.list_expenses()
+            else: parser.error("unknown expense subcommand")
         else: parser.error("unknown command")
         print(json.dumps(result, default=str, sort_keys=True)); return 0
     finally: ledger.close()
