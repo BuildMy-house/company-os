@@ -20,14 +20,15 @@ Both items below must be resolved before the bridge (and therefore the
 `hermes gateway run` container in Group C) can safely accept real Discord
 input.
 
-#### A1. `DISCORD_DM_USER` unset in production `.env` (found 2026-09-06, E2E pass)
-The real `company-ops/.env` has no `DISCORD_DM_USER` set at all. This means
-the Human Interface (`company_ops/human_interface.py`'s
-`ask_information`/`ask_judgment`/`request_approval`/`request_action`) has no
-way to actually deliver a DM to Nahar right now — there's no destination user
-ID configured. **Needs: your real Discord user ID** (right-click your name in
-Discord with Developer Mode on → "Copy User ID"), set as `DISCORD_DM_USER` in
-the real `.env`.
+#### A1. `DISCORD_DM_USER` (superseded for Human Interface 2026-09-07, P2-J)
+Human Interface outbound delivery (`company_ops/human_interface.py`'s
+`ask_information`/`ask_judgment`/`request_approval`/`request_action`) was
+switched to posting in the server `#hil` channel via `DISCORD_HIL_CHANNEL`
+(`1546470198825975961`), per Nahar's request that communication stay on the
+server. `DISCORD_DM_USER` is no longer read by `human_interface.py`. It remains
+set in `.env` (`324293400851382273`) and is only used by legacy `discord_bridge.py`
+DM notification flows (`maybe_ask_questions`, daily update).
+
 
 #### A2. `DISCORD_ALLOW_ALL_USERS=true` with no allow-list configured (found 2026-09-06, E2E pass)
 The real `company-ops/.env` has `DISCORD_ALLOW_ALL_USERS=true` and no

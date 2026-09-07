@@ -45,24 +45,14 @@ def _post_message(channel_id: str, text: str) -> None:
         _post(f"{DISCORD_API}/channels/{channel_id}/messages", {"content": chunk})
 
 
-def _create_dm_channel(user_id: str) -> str:
-    result = _post(f"{DISCORD_API}/users/@me/channels", {"recipient_id": user_id})
-    return result["id"]
+def _hil_channel() -> str:
+    channel = os.environ.get("DISCORD_HIL_CHANNEL", "")
+    if not channel:
+        raise RuntimeError("DISCORD_HIL_CHANNEL environment variable is not set")
+    return channel
 
 
-def _send_dm(user_id: str, text: str) -> None:
-    channel_id = _create_dm_channel(user_id)
-    _post_message(channel_id, text)
-
-
-def _dm_target() -> str:
-    target = os.environ.get("DISCORD_DM_USER", "")
-    if not target:
-        raise RuntimeError("DISCORD_DM_USER environment variable is not set")
-    return target
-
-
-def _format_dm(*parts: str) -> str:
+def _format_message(*parts: str) -> str:
     return "\n".join(p for p in parts if p)
 
 
@@ -91,11 +81,11 @@ def ask_information(
         initiated_by=initiated_by,
     )
 
-    body = _format_dm(
+    body = _format_message(
         f"**Information needed**\n{question}",
         f"_Reason: {reason}_" if reason else "",
     )
-    _send_dm(_dm_target(), body)
+    _post_message(_hil_channel(), body)
 
     return {"source": "human", "request_id": request_id, "outcome": None}
 
@@ -118,12 +108,12 @@ def ask_judgment(
         initiated_by=initiated_by,
     )
 
-    body = _format_dm(
+    body = _format_message(
         f"**Judgment call**\n{question}",
         f"Options: {options}" if options else "",
         f"_Reason: {reason}_" if reason else "",
     )
-    _send_dm(_dm_target(), body)
+    _post_message(_hil_channel(), body)
 
     return {"source": "human", "request_id": request_id, "outcome": None}
 
@@ -148,13 +138,13 @@ def request_approval(
         initiated_by=initiated_by,
     )
 
-    body = _format_dm(
+    body = _format_message(
         f"**Approval needed**\n{proposal}",
         f"Estimated cost: {cost_estimate}" if cost_estimate else "",
         f"Risk: {risk}" if risk else "",
         "Reply yes/no.",
     )
-    _send_dm(_dm_target(), body)
+    _post_message(_hil_channel(), body)
 
     return {"source": "human", "request_id": request_id, "outcome": None}
 
@@ -178,11 +168,11 @@ def request_action(
         initiated_by=initiated_by,
     )
 
-    body = _format_dm(
+    body = _format_message(
         f"**Action needed (only Nahar can do this)**\n{action}",
         f"_Reason: {reason}_" if reason else "",
     )
-    _send_dm(_dm_target(), body)
+    _post_message(_hil_channel(), body)
 
     return {"source": "human", "request_id": request_id, "outcome": None}
 

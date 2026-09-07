@@ -34,15 +34,13 @@ class TestHumanInterface(unittest.TestCase):
         _cleanup()
         self.writer = ObserverWriter(OBSERVER_DSN)
         self.sent: list[tuple[tuple, dict]] = []
-        self._orig_send_dm = human_interface._send_dm
-        self._orig_dm_target = human_interface._dm_target
+        self._orig_hil_channel = human_interface._hil_channel
         self._orig_post_message = human_interface._post_message
-        human_interface._send_dm = lambda *a, **k: self.sent.append((a, k))
-        human_interface._dm_target = lambda: "TEST_USER_ID"
+        human_interface._hil_channel = lambda: "TEST_HIL_CHANNEL"
+        human_interface._post_message = lambda *a, **k: self.sent.append((a, k))
 
     def tearDown(self):
-        human_interface._send_dm = self._orig_send_dm
-        human_interface._dm_target = self._orig_dm_target
+        human_interface._hil_channel = self._orig_hil_channel
         human_interface._post_message = self._orig_post_message
         self.writer.close()
         _cleanup()
@@ -62,6 +60,9 @@ class TestHumanInterface(unittest.TestCase):
         self.assertIsNone(result["outcome"])
         self.assertTrue(result["request_id"].startswith("HUMA-"))
         self.assertEqual(len(self.sent), 1)
+        args, _ = self.sent[0]
+        self.assertEqual(args[0], "TEST_HIL_CHANNEL")
+        self.assertIn("**Information needed**", args[1])
 
         n = self._count_rows("What is the repo layout?")
         self.assertEqual(n, 1)
@@ -97,6 +98,9 @@ class TestHumanInterface(unittest.TestCase):
         self.assertIsNone(result["outcome"])
         self.assertTrue(result["request_id"].startswith("HUMA-"))
         self.assertEqual(len(self.sent), 1)
+        args, _ = self.sent[0]
+        self.assertEqual(args[0], "TEST_HIL_CHANNEL")
+        self.assertIn("**Judgment call**", args[1])
 
         cur = self.writer.conn.execute(
             "SELECT type FROM observer.human_requests WHERE id = %s",
@@ -117,6 +121,9 @@ class TestHumanInterface(unittest.TestCase):
         self.assertIsNone(result["outcome"])
         self.assertTrue(result["request_id"].startswith("HUMA-"))
         self.assertEqual(len(self.sent), 1)
+        args, _ = self.sent[0]
+        self.assertEqual(args[0], "TEST_HIL_CHANNEL")
+        self.assertIn("**Approval needed**", args[1])
 
         cur = self.writer.conn.execute(
             "SELECT type FROM observer.human_requests WHERE id = %s",
@@ -136,6 +143,9 @@ class TestHumanInterface(unittest.TestCase):
         self.assertIsNone(result["outcome"])
         self.assertTrue(result["request_id"].startswith("HUMA-"))
         self.assertEqual(len(self.sent), 1)
+        args, _ = self.sent[0]
+        self.assertEqual(args[0], "TEST_HIL_CHANNEL")
+        self.assertIn("**Action needed (only Nahar can do this)**", args[1])
 
         cur = self.writer.conn.execute(
             "SELECT type FROM observer.human_requests WHERE id = %s",
@@ -164,7 +174,20 @@ class TestHumanInterface(unittest.TestCase):
         self.assertEqual(prior["original_id"], request_id)
 
 
-@unittest.skipUnless(OBSERVER_DSN, "TEST_OBSERVER_DATABASE_URL not set")
+class TestHilChannelConfig(unittest.TestCase):
+    def test_hil_channel_raises_when_unset(self):
+        with patch.dict(os.environ, {}, clear=True):
+            if "DISCORD_HIL_CHANNEL" in os.environ:
+                del os.environ["DISCORD_HIL_CHANNEL"]
+            with self.assertRaises(RuntimeError) as ctx:
+                human_interface._hil_channel()
+            self.assertIn("DISCORD_HIL_CHANNEL", str(ctx.exception))
+
+    def test_hil_channel_returns_env_value(self):
+        with patch.dict(os.environ, {"DISCORD_HIL_CHANNEL": "1546470198825975961"}):
+            self.assertEqual(human_interface._hil_channel(), "1546470198825975961")
+
+
 class TestPostMessageTokenError(unittest.TestCase):
     def test_post_message_raises_without_token(self):
         with patch.dict(os.environ, {}, clear=True):
