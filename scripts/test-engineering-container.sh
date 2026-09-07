@@ -23,7 +23,7 @@ REPO_ROOT="$(cd "$OPS_DIR/.." && pwd)"
 
 IMAGE_TAG="engineering:selftest"
 CONTAINER_NAME="engineering-selftest-$$"
-SSH_KEY="$REPO_ROOT/certs/homely-deploy"
+GITHUB_APP_KEY="$REPO_ROOT/certs/buildmyhouse-engineering-app.pem"
 
 # ── cleanup ──────────────────────────────────────────────────────────
 cleanup() {
@@ -31,15 +31,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ── determine if SSH key is available for repo cloning ───────────────
-# All 5 repos in engineering-entrypoint.sh use SSH URLs (git@github.com:...).
-# Even "public" repos need SSH auth for git@ URLs on GitHub.
-SSH_MOUNT_ARGS=()
-if [[ -f "$SSH_KEY" ]]; then
-  SSH_MOUNT_ARGS=(-v "$SSH_KEY:/root/.ssh/id_rsa:ro")
+# ── determine if GitHub App key is available for repo cloning ────────
+# engineering-entrypoint.sh uses GitHub App token-based auth (HTTPS, not SSH).
+# The token is minted at container startup via github-app-token.js.
+GITHUB_APP_MOUNT_ARGS=()
+if [[ -f "$GITHUB_APP_KEY" ]]; then
+  GITHUB_APP_MOUNT_ARGS=(-v "$GITHUB_APP_KEY:/opt/company-ops/certs/buildmyhouse-engineering-app.pem:ro")
 else
-  echo "WARN: SSH key not found at $SSH_KEY — SSH-dependent repo clones will fail."
-  echo "      This is expected if the deploy key is not provisioned on this host."
+  echo "WARN: GitHub App key not found at $GITHUB_APP_KEY — repo clones will fall back to public HTTPS."
+  echo "      Private repos (company-os) will still fail. This is expected if not provisioned yet."
 fi
 
 echo "══════════════════════════════════════════════════════════════"
@@ -86,14 +86,14 @@ fi
 echo ""
 echo "── Step 3: Repo sync (entrypoint) ──"
 # Start a container with the real entrypoint and let it run through repo
-# cloning. The entrypoint exec's supergateway, so the container stays up.
+# cloning. The entrypoint exec's mcp-proxy, so the container stays up.
 # We capture logs to inspect clone outcomes.
 
 # Remove any leftover container with the same name.
 docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
 docker run -d --name "$CONTAINER_NAME" \
-  "${SSH_MOUNT_ARGS[@]}" \
+  "${GITHUB_APP_MOUNT_ARGS[@]}" \
   "$IMAGE_TAG" >/dev/null 2>&1
 
 # Wait for the entrypoint to finish its repo sync and start supergateway.
@@ -104,7 +104,7 @@ docker run -d --name "$CONTAINER_NAME" \
 echo "  Waiting for entrypoint to complete repo sync..."
 ENTRIES=0
 for i in $(seq 1 240); do
-  if docker logs "$CONTAINER_NAME" 2>&1 | grep -q "supergateway\|SSE server started\|Listening on"; then
+  if docker logs "$CONTAINER_NAME" 2>&1 | grep -q "mcp-proxy\|MCP server\|Listening on\|Started on"; then
     ENTRIES=1
     break
   fi
@@ -125,13 +125,13 @@ if [[ "$ENTRIES" -eq 2 ]]; then
 elif [[ "$ENTRIES" -eq 0 ]]; then
   # Timeout hit but container is still running — do a direct process check
   # before declaring FAIL. The log string may not have appeared yet even
-  # though supergateway is actually running (mirrors Step 5's check).
+  # though mcp-proxy is actually running (mirrors Step 5's check).
   if docker exec "$CONTAINER_NAME" bash -c \
-    'for f in /proc/*/cmdline; do cat "$f" 2>/dev/null | tr "\0" " " | grep -q supergateway && exit 0; done; exit 1' \
+    'for f in /proc/*/cmdline; do cat "$f" 2>/dev/null | tr "\0" " " | grep -q "mcp-proxy\|ai-cli-mcp" && exit 0; done; exit 1' \
     >/dev/null 2>&1; then
-    pass "Supergateway started (log string not seen within timeout, process confirmed running)"
+    pass "mcp-proxy/ai-cli-mcp started (log string not seen within timeout, process confirmed running)"
   else
-    fail "Entrypoint did not reach supergateway within 240s"
+    fail "Entrypoint did not reach mcp-proxy/ai-cli-mcp within 240s"
     echo "  Last 30 lines of container logs:"
     echo "$LOGS" | tail -30
   fi
@@ -198,26 +198,38 @@ for i in "${!CLI_CMDS[@]}"; do
   fi
 done
 
-# ── 5. SUPERGATEWAY STAYING UP ─────────────────────────────────────
+# ── 5. MCP-PROXY STAYING UP ────────────────────────────────────────
 echo ""
-echo "── Step 5: Supergateway process ──"
-# The container from step 3 should still be running with supergateway.
+echo "── Step 5: mcp-proxy/ai-cli-mcp process ──"
+# The container from step 3 should still be running with mcp-proxy wrapping ai-cli-mcp.
 if docker inspect --format='{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true; then
   # pgrep may not be installed in bookworm-slim; scan /proc instead
   if docker exec "$CONTAINER_NAME" bash -c \
-    'for f in /proc/*/cmdline; do cat "$f" 2>/dev/null | tr "\0" " " | grep -q supergateway && exit 0; done; exit 1' \
+    'for f in /proc/*/cmdline; do cat "$f" 2>/dev/null | tr "\0" " " | grep -q "mcp-proxy\|ai-cli-mcp" && exit 0; done; exit 1' \
     >/dev/null 2>&1; then
-    pass "Supergateway is running"
+    pass "mcp-proxy/ai-cli-mcp is running"
   else
-    fail "Container running but supergateway process not found"
+    fail "Container running but mcp-proxy/ai-cli-mcp process not found"
   fi
 else
-  fail "Container is not running — supergateway may have crashed"
+  fail "Container is not running — mcp-proxy/ai-cli-mcp may have crashed"
 fi
 
-# ── 6. MCP REGISTRATION ───────────────────────────────────────────
+# ── 6. MCP ENDPOINT CONNECTIVITY ───────────────────────────────────
 echo ""
-echo "── Step 6: MCP registration ──"
+echo "── Step 6: MCP endpoint (port 8000) ──"
+# mcp-proxy should be listening on 0.0.0.0:8000
+if docker exec "$CONTAINER_NAME" bash -c 'curl -s http://localhost:8000/mcp >/dev/null 2>&1'; then
+  pass "MCP endpoint responds on http://localhost:8000/mcp"
+elif docker exec "$CONTAINER_NAME" bash -c 'timeout 2 nc -zv localhost 8000 >/dev/null 2>&1'; then
+  pass "Port 8000 is listening (curl failed but port is open)"
+else
+  fail "Port 8000 is NOT listening — mcp-proxy may not have started correctly"
+fi
+
+# ── 7. MCP REGISTRATION ───────────────────────────────────────────
+echo ""
+echo "── Step 7: MCP registration ──"
 for cli in claude codex; do
   MCP_LIST=$(docker exec "$CONTAINER_NAME" "$cli" mcp list 2>&1 || true)
   if echo "$MCP_LIST" | grep -q "ai-cli-mcp"; then

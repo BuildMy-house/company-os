@@ -433,13 +433,6 @@ posts to the buildmy.house Discord server. Two dedicated channels are needed:
 Already set: `DISCORD_HIL_CHANNEL=1546470198825975961`
 
 #### K2. `#finance` channel ID for financial requests and spending approvals (P3-J/P8-A, 2026-09-07)
-New channel needed for financial/spending-approval requests (distinct from
-general Human Interface traffic). `company_ops/human_interface.py` adds a new
-`request_financial_action()` function that posts financial requests to this
-channel.
-
-**Action needed:** Create a `#finance` (or renamed alternative per Nahar's preference)
-Discord channel in the buildmy.house server, get its numeric ID (right-click
-channel name -> "Copy channel ID"), and populate:
-- `DISCORD_FINANCE_CHANNEL=<numeric_channel_id>` in production `company-ops/.env`
+**RESOLVED — Channel ID provided 2026-09-07:**
+- `DISCORD_FINANCE_CHANNEL=1546550455813931128` (set in production `.env`)
 
