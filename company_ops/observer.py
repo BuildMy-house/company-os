@@ -82,6 +82,7 @@ class ObserverWriter:
         target_value: str,
         confidence: str | None = None,
         evaluation_date: str | None = None,
+        initiated_by: str | None = None,
     ) -> str:
         return self.append(
             "predictions",
@@ -90,6 +91,7 @@ class ObserverWriter:
             target_value=target_value,
             confidence=confidence,
             evaluation_date=evaluation_date,
+            initiated_by=initiated_by,
         )
 
     def evaluate_prediction(
@@ -99,7 +101,7 @@ class ObserverWriter:
         outcome: str,
     ) -> str:
         cur = self.conn.execute(
-            "SELECT decision_id, metric, target_value, confidence, evaluation_date "
+            "SELECT decision_id, metric, target_value, confidence, evaluation_date, initiated_by "
             "FROM observer.predictions WHERE id = %s",
             (prediction_id,),
         )
@@ -115,6 +117,7 @@ class ObserverWriter:
             target_value=original["target_value"],
             confidence=original["confidence"],
             evaluation_date=original["evaluation_date"],
+            initiated_by=original["initiated_by"],
             actual_value=actual_value,
             outcome=outcome,
         )
@@ -127,6 +130,7 @@ class ObserverWriter:
         hypothesis: str,
         status: str = "started",
         started_at: str | None = None,
+        initiated_by: str | None = None,
     ) -> str:
         return self.append(
             "experiments",
@@ -134,11 +138,12 @@ class ObserverWriter:
             hypothesis=hypothesis,
             status=status,
             started_at=started_at if started_at is not None else now(),
+            initiated_by=initiated_by,
         )
 
     def decide_experiment(self, experiment_id: str, decision: str) -> str:
         cur = self.conn.execute(
-            "SELECT name, hypothesis, status, started_at "
+            "SELECT name, hypothesis, status, started_at, initiated_by "
             "FROM observer.experiments WHERE id = %s",
             (experiment_id,),
         )
@@ -155,6 +160,7 @@ class ObserverWriter:
             started_at=original["started_at"],
             decided_at=now(),
             decision=decision,
+            initiated_by=original["initiated_by"],
         )
         self.add_relationship(new_id, experiment_id, "tests")
         return new_id
@@ -170,6 +176,49 @@ class ObserverWriter:
             from_id=from_id,
             to_id=to_id,
             relation_type=relation_type,
+        )
+
+    def record_failure(
+        self,
+        description: str,
+        detected_by: str | None = None,
+        severity: str | None = None,
+        related_ids: str | None = None,
+    ) -> str:
+        return self.append(
+            "failures",
+            description=description,
+            detected_by=detected_by,
+            severity=severity,
+            related_ids=related_ids,
+        )
+
+    def record_recovery(
+        self,
+        failure_id: str,
+        description: str,
+        recovered_by: str | None = None,
+    ) -> str:
+        return self.append(
+            "recoveries",
+            failure_id=failure_id,
+            description=description,
+            recovered_by=recovered_by,
+        )
+
+    def record_autonomy_event(
+        self,
+        dimension: str,
+        event_type: str,
+        initiated_by: str | None = None,
+        related_ids: str | None = None,
+    ) -> str:
+        return self.append(
+            "autonomy_events",
+            dimension=dimension,
+            event_type=event_type,
+            initiated_by=initiated_by,
+            related_ids=related_ids,
         )
 
     def record_human_request(
@@ -211,7 +260,7 @@ class ObserverWriter:
             raise ValueError(
                 f"No human_request found with id {original_id!r}"
             )
-        return self.append(
+        completion_id = self.append(
             "human_requests",
             type=original["type"],
             question=original["question"],
@@ -226,6 +275,14 @@ class ObserverWriter:
             avoidable=avoidable,
             initiated_by=initiated_by,
         )
+        if human_minutes is not None:
+            self.append(
+                "human_minutes",
+                request_id=original_id,
+                minutes=human_minutes,
+                activity=original["type"],
+            )
+        return completion_id
 
     def find_prior_answer(self, question: str) -> dict | None:
         normalized = question.strip().lower()

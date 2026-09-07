@@ -302,6 +302,117 @@ class TestObserverWriter(unittest.TestCase):
         self.assertEqual(row["to_id"], b)
         self.assertEqual(row["relation_type"], "corrects")
 
+    def test_record_failure_round_trips_fields(self):
+        rid = self.writer.record_failure(
+            description="DB connection dropped",
+            detected_by="monitoring",
+            severity="critical",
+            related_ids="DECI-001",
+        )
+        self.assertTrue(rid.startswith("FAIL-"))
+        cur = self.writer.conn.execute(
+            "SELECT * FROM observer.failures WHERE id = %s",
+            (rid,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["description"], "DB connection dropped")
+        self.assertEqual(row["detected_by"], "monitoring")
+        self.assertEqual(row["severity"], "critical")
+        self.assertEqual(row["related_ids"], "DECI-001")
+
+    def test_record_recovery_round_trips_fields(self):
+        failure_id = self.writer.record_failure(
+            description="DB connection dropped",
+        )
+        rid = self.writer.record_recovery(
+            failure_id=failure_id,
+            description="Reconnected after retry",
+            recovered_by="hermes",
+        )
+        self.assertTrue(rid.startswith("RECO-"))
+        cur = self.writer.conn.execute(
+            "SELECT * FROM observer.recoveries WHERE id = %s",
+            (rid,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["failure_id"], failure_id)
+        self.assertEqual(row["description"], "Reconnected after retry")
+        self.assertEqual(row["recovered_by"], "hermes")
+
+    def test_record_autonomy_event_round_trips_fields(self):
+        rid = self.writer.record_autonomy_event(
+            dimension="decision",
+            event_type="auto_escalate",
+            initiated_by="hermes",
+            related_ids="DECI-001",
+        )
+        self.assertTrue(rid.startswith("AUTO-"))
+        cur = self.writer.conn.execute(
+            "SELECT * FROM observer.autonomy_events WHERE id = %s",
+            (rid,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["dimension"], "decision")
+        self.assertEqual(row["event_type"], "auto_escalate")
+        self.assertEqual(row["initiated_by"], "hermes")
+        self.assertEqual(row["related_ids"], "DECI-001")
+
+    def test_record_prediction_initiated_by_round_trips(self):
+        decision_id = self.writer.record_decision(
+            problem="p", decision="d",
+        )
+        pred_id = self.writer.record_prediction(
+            decision_id=decision_id,
+            metric="restore_time",
+            target_value="under 5m",
+            confidence="high",
+            evaluation_date="2026-10-01",
+            initiated_by="grace",
+        )
+        cur = self.writer.conn.execute(
+            "SELECT initiated_by FROM observer.predictions WHERE id = %s",
+            (pred_id,),
+        )
+        row = cur.fetchone()
+        self.assertEqual(row["initiated_by"], "grace")
+
+    def test_record_experiment_initiated_by_round_trips(self):
+        exp_id = self.writer.record_experiment(
+            name="backup window",
+            hypothesis="nightly 03:00 is quietest",
+            initiated_by="grace",
+        )
+        cur = self.writer.conn.execute(
+            "SELECT initiated_by FROM observer.experiments WHERE id = %s",
+            (exp_id,),
+        )
+        row = cur.fetchone()
+        self.assertEqual(row["initiated_by"], "grace")
+
+    def test_complete_human_request_appends_human_minutes_row(self):
+        original_id = self.writer.record_human_request(
+            type="ask_information",
+            question="What is the schema?",
+        )
+        self.writer.complete_human_request(
+            original_id=original_id,
+            outcome="It has 10 tables",
+            human_minutes=12.5,
+        )
+        cur = self.writer.conn.execute(
+            "SELECT request_id, minutes, activity FROM observer.human_minutes "
+            "WHERE request_id = %s",
+            (original_id,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["request_id"], original_id)
+        self.assertEqual(float(row["minutes"]), 12.5)
+        self.assertEqual(row["activity"], "ask_information")
+
 
 @unittest.skipUnless(OBSERVER_DSN, "TEST_OBSERVER_DATABASE_URL not set")
 class TestObserverPermissions(unittest.TestCase):

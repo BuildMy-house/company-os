@@ -107,3 +107,7 @@ CREATE TABLE IF NOT EXISTS observer.relationships (
   relation_type TEXT,
   created_at TEXT NOT NULL
 );
+
+-- v2: Add initiated_by to predictions and experiments.
+ALTER TABLE observer.predictions ADD COLUMN IF NOT EXISTS initiated_by TEXT;
+ALTER TABLE observer.experiments ADD COLUMN IF NOT EXISTS initiated_by TEXT;
