@@ -52,6 +52,126 @@ class ObserverWriter:
         self.conn.execute(stmt, [fields[c] for c in cols])
         return str(fields["id"])
 
+    def record_decision(
+        self,
+        problem: str,
+        decision: str,
+        evidence_refs: str | None = None,
+        reasoning_summary: str | None = None,
+        alternatives_considered: str | None = None,
+        confidence: str | None = None,
+        expected_outcome: str | None = None,
+        initiated_by: str | None = None,
+    ) -> str:
+        return self.append(
+            "decisions",
+            problem=problem,
+            decision=decision,
+            evidence_refs=evidence_refs,
+            reasoning_summary=reasoning_summary,
+            alternatives_considered=alternatives_considered,
+            confidence=confidence,
+            expected_outcome=expected_outcome,
+            initiated_by=initiated_by,
+        )
+
+    def record_prediction(
+        self,
+        decision_id: str,
+        metric: str,
+        target_value: str,
+        confidence: str | None = None,
+        evaluation_date: str | None = None,
+    ) -> str:
+        return self.append(
+            "predictions",
+            decision_id=decision_id,
+            metric=metric,
+            target_value=target_value,
+            confidence=confidence,
+            evaluation_date=evaluation_date,
+        )
+
+    def evaluate_prediction(
+        self,
+        prediction_id: str,
+        actual_value: str,
+        outcome: str,
+    ) -> str:
+        cur = self.conn.execute(
+            "SELECT decision_id, metric, target_value, confidence, evaluation_date "
+            "FROM observer.predictions WHERE id = %s",
+            (prediction_id,),
+        )
+        original = cur.fetchone()
+        if original is None:
+            raise ValueError(
+                f"No prediction found with id {prediction_id!r}"
+            )
+        new_id = self.append(
+            "predictions",
+            decision_id=original["decision_id"],
+            metric=original["metric"],
+            target_value=original["target_value"],
+            confidence=original["confidence"],
+            evaluation_date=original["evaluation_date"],
+            actual_value=actual_value,
+            outcome=outcome,
+        )
+        self.add_relationship(new_id, prediction_id, "evaluates")
+        return new_id
+
+    def record_experiment(
+        self,
+        name: str,
+        hypothesis: str,
+        status: str = "started",
+        started_at: str | None = None,
+    ) -> str:
+        return self.append(
+            "experiments",
+            name=name,
+            hypothesis=hypothesis,
+            status=status,
+            started_at=started_at if started_at is not None else now(),
+        )
+
+    def decide_experiment(self, experiment_id: str, decision: str) -> str:
+        cur = self.conn.execute(
+            "SELECT name, hypothesis, status, started_at "
+            "FROM observer.experiments WHERE id = %s",
+            (experiment_id,),
+        )
+        original = cur.fetchone()
+        if original is None:
+            raise ValueError(
+                f"No experiment found with id {experiment_id!r}"
+            )
+        new_id = self.append(
+            "experiments",
+            name=original["name"],
+            hypothesis=original["hypothesis"],
+            status="decided",
+            started_at=original["started_at"],
+            decided_at=now(),
+            decision=decision,
+        )
+        self.add_relationship(new_id, experiment_id, "tests")
+        return new_id
+
+    def add_relationship(
+        self,
+        from_id: str,
+        to_id: str,
+        relation_type: str,
+    ) -> str:
+        return self.append(
+            "relationships",
+            from_id=from_id,
+            to_id=to_id,
+            relation_type=relation_type,
+        )
+
     def record_human_request(
         self,
         type: str,

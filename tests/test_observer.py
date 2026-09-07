@@ -146,6 +146,162 @@ class TestObserverWriter(unittest.TestCase):
         result = self.writer.find_prior_answer("What is the schema?")
         self.assertIsNone(result)
 
+    def test_record_decision_round_trips_fields(self):
+        rid = self.writer.record_decision(
+            problem="Which DB?",
+            decision="Postgres",
+            evidence_refs="doc-1, doc-2",
+            reasoning_summary="ops knows it",
+            alternatives_considered="SQLite, Mongo",
+            confidence="high",
+            expected_outcome="faster restores",
+            initiated_by="hermes",
+        )
+        self.assertTrue(rid.startswith("DECI-"))
+        cur = self.writer.conn.execute(
+            "SELECT * FROM observer.decisions WHERE id = %s",
+            (rid,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["problem"], "Which DB?")
+        self.assertEqual(row["decision"], "Postgres")
+        self.assertEqual(row["evidence_refs"], "doc-1, doc-2")
+        self.assertEqual(row["reasoning_summary"], "ops knows it")
+        self.assertEqual(row["alternatives_considered"], "SQLite, Mongo")
+        self.assertEqual(row["confidence"], "high")
+        self.assertEqual(row["expected_outcome"], "faster restores")
+        self.assertEqual(row["initiated_by"], "hermes")
+
+    def test_record_prediction_then_evaluate_creates_second_row(self):
+        decision_id = self.writer.record_decision(
+            problem="p", decision="d",
+        )
+        pred_id = self.writer.record_prediction(
+            decision_id=decision_id,
+            metric="restore_time",
+            target_value="under 5m",
+            confidence="high",
+            evaluation_date="2026-10-01",
+        )
+        self.assertTrue(pred_id.startswith("PRED-"))
+
+        new_id = self.writer.evaluate_prediction(
+            prediction_id=pred_id,
+            actual_value="4m",
+            outcome="correct",
+        )
+        self.assertNotEqual(new_id, pred_id)
+
+        # Original row untouched, still has no actual_value.
+        cur = self.writer.conn.execute(
+            "SELECT actual_value, outcome FROM observer.predictions WHERE id = %s",
+            (pred_id,),
+        )
+        orig = cur.fetchone()
+        self.assertIsNotNone(orig)
+        self.assertIsNone(orig["actual_value"])
+        self.assertIsNone(orig["outcome"])
+
+        # New row carries same fields plus actual_value/outcome.
+        cur = self.writer.conn.execute(
+            "SELECT decision_id, metric, target_value, confidence, "
+            "evaluation_date, actual_value, outcome "
+            "FROM observer.predictions WHERE id = %s",
+            (new_id,),
+        )
+        ev = cur.fetchone()
+        self.assertIsNotNone(ev)
+        self.assertEqual(ev["decision_id"], decision_id)
+        self.assertEqual(ev["metric"], "restore_time")
+        self.assertEqual(ev["target_value"], "under 5m")
+        self.assertEqual(ev["confidence"], "high")
+        self.assertEqual(ev["evaluation_date"], "2026-10-01")
+        self.assertEqual(ev["actual_value"], "4m")
+        self.assertEqual(ev["outcome"], "correct")
+
+        # Relationship row links new row to original.
+        cur = self.writer.conn.execute(
+            "SELECT from_id, to_id, relation_type FROM observer.relationships "
+            "WHERE from_id = %s AND to_id = %s",
+            (new_id, pred_id),
+        )
+        rel = cur.fetchone()
+        self.assertIsNotNone(rel)
+        self.assertEqual(rel["relation_type"], "evaluates")
+
+    def test_evaluate_nonexistent_prediction_raises(self):
+        with self.assertRaises(ValueError, msg="must raise for missing id"):
+            self.writer.evaluate_prediction(
+                prediction_id="NOPE-999", actual_value="x", outcome="y"
+            )
+
+    def test_record_experiment_then_decide_creates_second_row(self):
+        exp_id = self.writer.record_experiment(
+            name="backup window",
+            hypothesis="nightly 03:00 is quietest",
+        )
+        self.assertTrue(exp_id.startswith("EXPE-"))
+
+        new_id = self.writer.decide_experiment(
+            experiment_id=exp_id, decision="KEEP",
+        )
+        self.assertNotEqual(new_id, exp_id)
+
+        # Original row untouched, still 'started'.
+        cur = self.writer.conn.execute(
+            "SELECT status, decided_at, decision FROM observer.experiments WHERE id = %s",
+            (exp_id,),
+        )
+        orig = cur.fetchone()
+        self.assertIsNotNone(orig)
+        self.assertEqual(orig["status"], "started")
+        self.assertIsNone(orig["decided_at"])
+        self.assertIsNone(orig["decision"])
+
+        # New row: same name/hypothesis, decided.
+        cur = self.writer.conn.execute(
+            "SELECT name, hypothesis, status, started_at, decided_at, decision "
+            "FROM observer.experiments WHERE id = %s",
+            (new_id,),
+        )
+        dec = cur.fetchone()
+        self.assertIsNotNone(dec)
+        self.assertEqual(dec["name"], "backup window")
+        self.assertEqual(dec["hypothesis"], "nightly 03:00 is quietest")
+        self.assertEqual(dec["status"], "decided")
+        self.assertIsNotNone(dec["started_at"])
+        self.assertIsNotNone(dec["decided_at"])
+        self.assertEqual(dec["decision"], "KEEP")
+
+        cur = self.writer.conn.execute(
+            "SELECT from_id, to_id, relation_type FROM observer.relationships "
+            "WHERE from_id = %s AND to_id = %s",
+            (new_id, exp_id),
+        )
+        rel = cur.fetchone()
+        self.assertIsNotNone(rel)
+        self.assertEqual(rel["relation_type"], "tests")
+
+    def test_decide_nonexistent_experiment_raises(self):
+        with self.assertRaises(ValueError, msg="must raise for missing id"):
+            self.writer.decide_experiment(experiment_id="NOPE-999", decision="KILL")
+
+    def test_add_relationship_appends_row(self):
+        a = self.writer.record_decision(problem="a", decision="a2")
+        b = self.writer.record_decision(problem="b", decision="b2")
+        rid = self.writer.add_relationship(a, b, "corrects")
+        self.assertTrue(rid.startswith("RELA-"))
+        cur = self.writer.conn.execute(
+            "SELECT from_id, to_id, relation_type FROM observer.relationships WHERE id = %s",
+            (rid,),
+        )
+        row = cur.fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["from_id"], a)
+        self.assertEqual(row["to_id"], b)
+        self.assertEqual(row["relation_type"], "corrects")
+
 
 @unittest.skipUnless(OBSERVER_DSN, "TEST_OBSERVER_DATABASE_URL not set")
 class TestObserverPermissions(unittest.TestCase):
