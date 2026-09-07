@@ -367,7 +367,8 @@ and the query-side client (`company_ops/axiom_client.py`, `company-ops telemetry
 CLI verb) were both already fully built before this session — they just have
 no real Axiom account behind them yet, so telemetry silently no-ops (`if
 (!config.token) return`) and query attempts would fail. Needs two SEPARATE
-real Axiom API tokens (an Axiom account/dataset only Nahar can create):
+real Axiom API tokens (an Axiom account/dataset only Nahar can create), plus
+an Axiom organization ID:
 
 1. **App ingest token** (write-only scope) -> `homely/.env.example`'s
    `VITE_AXIOM_TOKEN` (also needs a real `homely/.env` with the real value —
@@ -376,7 +377,12 @@ real Axiom API tokens (an Axiom account/dataset only Nahar can create):
 2. **Query/read token** (read scope) -> `company-ops/.env`'s `AXIOM_TOKEN`
    (used by `company-ops telemetry-query`, which all dispatched coding
    agents should use to check real app telemetry before guessing at root
-   cause on a Homely bug — see `.claude/agents/agent-manager.md`).
+   cause on a Homely bug — see `.claude/agents/agent-manager.md` — and by
+   the `axiom` MCP server `mcp-server-axiom` registered for Claude, Codex,
+   OpenCode, and Hermes).
+3. **Organization ID** -> `company-ops/.env`'s `AXIOM_ORG_ID` (required by
+   the `axiom` MCP server `mcp-server-axiom`). `AXIOM_URL` is optional and
+   defaults to `https://api.axiom.co`.
 
 Both can point at the same dataset (`homely-telemetry` by default, both
 sides already agree on this name) — it's the token *scope* that must differ,
@@ -416,4 +422,24 @@ unset in production `.env` (only placeholders exist in `.env.example`).
 currently running it. Once J1 credentials are supplied, wire up a daily
 execution schedule (e.g. daily at 03:00 UTC) via host systemd timer / crontab
 or a dedicated lightweight container service in `docker-compose.yml`.
+
+## Group K — Discord channels: channel IDs for Human Interface and Financial flows
+
+Hermes communicates with the Board through typed Human Interface calls
+(`ask_information`, `ask_judgment`, `request_approval`, `request_action`) — each
+posts to the buildmy.house Discord server. Two dedicated channels are needed:
+
+#### K1. `#human-in-the-loop` channel ID for general requests (P2-J, 2026-09-06)
+Already set: `DISCORD_HIL_CHANNEL=1546470198825975961`
+
+#### K2. `#finance` channel ID for financial requests and spending approvals (P3-J/P8-A, 2026-09-07)
+New channel needed for financial/spending-approval requests (distinct from
+general Human Interface traffic). `company_ops/human_interface.py` adds a new
+`request_financial_action()` function that posts financial requests to this
+channel.
+
+**Action needed:** Create a `#finance` (or renamed alternative per Nahar's preference)
+Discord channel in the buildmy.house server, get its numeric ID (right-click
+channel name -> "Copy channel ID"), and populate:
+- `DISCORD_FINANCE_CHANNEL=<numeric_channel_id>` in production `company-ops/.env`
 

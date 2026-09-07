@@ -52,6 +52,13 @@ def _hil_channel() -> str:
     return channel
 
 
+def _finance_channel() -> str:
+    channel = os.environ.get("DISCORD_FINANCE_CHANNEL", "")
+    if not channel:
+        raise RuntimeError("DISCORD_FINANCE_CHANNEL environment variable is not set")
+    return channel
+
+
 def _format_message(*parts: str) -> str:
     return "\n".join(p for p in parts if p)
 
@@ -173,6 +180,44 @@ def request_action(
         f"_Reason: {reason}_" if reason else "",
     )
     _post_message(_hil_channel(), body)
+
+    return {"source": "human", "request_id": request_id, "outcome": None}
+
+
+def request_financial_action(
+    writer: ObserverWriter,
+    proposal: str,
+    amount_cents: int | None = None,
+    category: str | None = None,
+    reason: str | None = None,
+    importance: str | None = None,
+    related_ids: str | None = None,
+    initiated_by: str = "hermes",
+    blocking: bool = True,
+) -> dict[str, Any]:
+    """Request financial approval (spend, expense, subscription change).
+
+    Posts to #finance channel and records as observer.human_requests.
+    Amount and category are tracked for expense ledger once approved.
+    """
+    request_id = writer.record_human_request(
+        type="request_financial_action",
+        question=proposal,
+        reason=reason,
+        importance=importance,
+        blocking=blocking,
+        related_ids=related_ids,
+        initiated_by=initiated_by,
+    )
+
+    body = _format_message(
+        f"**Financial approval needed**\n{proposal}",
+        f"Amount: ${amount_cents / 100:.2f}" if amount_cents else "",
+        f"Category: {category}" if category else "",
+        f"Reason: {reason}" if reason else "",
+        "Reply approve/reject.",
+    )
+    _post_message(_finance_channel(), body)
 
     return {"source": "human", "request_id": request_id, "outcome": None}
 
