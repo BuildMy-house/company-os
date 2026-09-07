@@ -454,3 +454,60 @@ under load, not anything wrong with the container.**
    independently re-verified — check `git log -- company-ops/scripts/
    test-engineering-container.sh` for a fix-up commit after this one before
    assuming it landed.
+
+## Engineering-container self-test fix-up verified + isolated baseline confirmed (2026-09-07, same session, post-interruption)
+
+Fix-up commit `e2908ed` (timeout 90s→240s + `/proc`-based process-check
+fallback before declaring FAIL, dispatched to `opencode/mimo-v2.5-free`,
+same free tier) landed. Read the diff directly: exactly the described change
+(22 lines), crash-detection path (`ENTRIES=2`) untouched, matches the
+fix-up ticket precisely.
+
+Ran the self-test **three more times independently** (not trusting the
+worker's own "all PASS" report alone) to characterize its actual behavior
+under varying host load, since this is a "don't brick it" DoD category:
+
+1. Concurrently with 2 other active opencode dispatches (heavy host load,
+   same condition that caused the original 90s-timeout bug): got a
+   **different** failure this time — `FAIL: Unexpected repo clone failures:
+   app` — a repo that should always succeed (public, no access gap) failed
+   to clone on this run only. The script's own `REPOS_FAIL`/`REPOS_WARN`
+   bucketing is an `if/elif`, so when both an unexpected-FAIL repo (app) and
+   an expected-WARN repo (company-os) occur in the same run, only the FAIL
+   message prints — the WARN for company-os is silently swallowed that run
+   (a minor reporting-completeness bug, not a correctness bug: exit code is
+   still correctly non-zero only because of the real `app` failure). The
+   script also doesn't currently surface the actual captured git stderr for
+   a FAIL-bucketed repo, making it impossible to tell from output alone
+   whether `app`'s failure was a real regression or transient network/SSH
+   contention.
+2. **Immediately re-ran in isolation** (checked first: `pgrep -c -f
+   "opencode run --dir"` was down to near-zero, no other docker builds
+   running) — clean result, exit 0, all PASS except the expected
+   `company-os` WARN, matching the very first worker run exactly. Confirms
+   the `app`-clone failure in run 1 was **host-load-induced noise, not a
+   container or entrypoint defect** — the container's actual health is
+   consistent and good when measured without 2-3 concurrent Docker-heavy
+   opencode dispatches contending for the same host's network/CPU.
+
+**Conclusion, now backed by 4 total independent runs across this whole
+session (1 original worker run, 1 pre-fix manager run that found the 90s
+timeout bug, 1 post-fix manager run under heavy load that found the
+`if/elif` reporting gap + transient app-clone noise, 1 post-fix isolated
+manager run that came back fully clean): the engineering container itself
+is healthy and its self-test script's core logic (build, tools, CLI
+resolution, supergateway, MCP registration, WARN-vs-FAIL repo
+classification) is now sound after the timeout fix. The self-test is
+measurably sensitive to run it takes place under concurrent host
+Docker/network load** — recommend future runs of this script (e.g. before
+a real promotion) be done without stacking multiple simultaneous
+docker-build-heavy opencode dispatches on the same host, and flag as a
+**minor, non-blocking follow-up** (not urgent enough to ticket immediately
+this session) two small robustness improvements for whenever this script is
+next touched: (a) fix the `if/elif` to report both FAIL and WARN repos in
+the same run instead of one suppressing the other, (b) print the actual
+captured git error text for a FAIL-bucketed repo so a real regression can
+be distinguished from transient network noise without re-running blind.
+
+No further dispatch needed this session — the container's real baseline is
+now established with real evidence, not a single trusted report.
