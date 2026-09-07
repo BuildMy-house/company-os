@@ -33,7 +33,7 @@ python -m company_ops --db "$COMPANY_DATABASE_URL" status
 ```
 
 The CLI also supports `plan`, `charge`, `revenue`, `route`, `telemetry`,
-`worker`, `deployment`, and `resource-pool`.
+`worker`, `deployment`, `resource-pool`, and `dispatch_capture`.
 
 Copy `mcp-workers.example.json` to `mcp-workers.json`. It uses the public
 `@kud/mcp-opencode` for all three replaceable roles. This means the current
@@ -87,6 +87,32 @@ python -m company_ops resource-pool status opencode-go-weekly
 # List all pools
 python -m company_ops resource-pool list
 ```
+
+## Dispatch capture
+
+Record real per-dispatch token usage from the three CLI tools (opencode, codex,
+agy/Antigravity) into `company.provider_usage` and optionally update a matching
+resource pool's `consumed_amount`:
+
+```sh
+# Capture from a saved opencode run output file
+python -m company_ops.dispatch_capture opencode run-output.txt \
+  --model mimo-v2.5-free --db "$COMPANY_DATABASE_URL"
+
+# Capture from codex with a resource pool update
+python -m company_ops.dispatch_capture codex turn-log.txt \
+  --model o4-mini --resource-pool-id opencode-go-weekly
+
+# Capture from agy
+python -m company_ops.dispatch_capture agy result.json \
+  --model glm-5.3-flash
+```
+
+The parsers sum token counts across multiple events in a session (opencode and
+codex can emit several step/turn events per run). Dollar cost is taken from the
+CLI output when available; otherwise `policy.model_cost()` estimates it for
+known models. Resource pool updates are best-effort and never prevent the
+underlying `provider_usage` record from being written.
 
 ## Portable container
 
