@@ -46,4 +46,4 @@ mcp_servers:
     timeout: 900
   # URL shape inferred; confirm against the installed hermes binary before production use.
   engineering_manager:
-    url: "http://engineering:8000/sse"
+    url: "http://engineering:8000/mcp"
