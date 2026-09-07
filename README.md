@@ -70,22 +70,22 @@ empty — payment processing (Stripe or similar) is deliberately deferred
 until there is something to sell, not forgotten.
 
 `company.resource_pools` tracks subscription/quota-based tool usage
-across free and paid tiers (OpenCode, Codex, Antigravity CLI, future
-Claude). Each pool records its tool, tier, reset period, quota limit,
-and current usage:
+across providers (OpenCode, Codex, Antigravity CLI, future Claude).
+Each pool has a stable caller-supplied `pool_id` (e.g.
+`opencode-go-weekly`), a `level` for the dispatch hop it tracks
+(default `claude_to_worker`), and period/quota metadata:
 
 ```sh
-# Register a pool (e.g. OpenCode free tier: 100 requests per 5h window)
-python -m company_ops resource-pool add opencode free 5h 100 "2026-09-07T12:00:00Z"
+# Record a pool (e.g. OpenCode Go paid $30/week budget)
+python -m company_ops resource-pool record opencode-go-weekly opencode-go dollars 30.00 weekly \
+  2026-09-07T00:00:00+00:00 2026-09-14T00:00:00+00:00 \
+  --consumed 12.50 --source "manual check"
 
-# Record a usage event
-python -m company_ops resource-pool debit POOL-<id>
+# Check pool status (quota, consumed, remaining fractions, thin flag)
+python -m company_ops resource-pool status opencode-go-weekly
 
-# Check current usage
+# List all pools
 python -m company_ops resource-pool list
-
-# Reset after period expires
-python -m company_ops resource-pool reset POOL-<id>
 ```
 
 ## Portable container
