@@ -187,3 +187,164 @@ This migration is additive, not urgent-blocking (existing `.env.example`
 stays as the interim documentation of variable names/shapes); the two
 already-known at-risk Steward tokens (Group D2, above) don't need to wait for
 this to be rotated — that stays a separate, faster-moving task.
+
+## Group F — Claude engineering-manager container credentials
+
+#### F1. Headless Claude authentication not provisioned yet
+The dedicated Claude engineering-manager container needs credentials for its
+headless `claude` CLI. **Needs one of:** a real `ANTHROPIC_API_KEY`, or a
+`CLAUDE_CODE_OAUTH_TOKEN` minted via `claude setup-token` to bill an existing
+Claude subscription instead of a metered API key. Provide either value in the
+real `.env`; no agent should invent or commit it.
+
+#### A3. Public rooms need a second gate (conversation vs. action-triggering) — not built yet, tracked for later (added 2026-09-07)
+Per `/home/nahar/.claude/plans/ticklish-conjuring-horizon.md`'s Phase 2 "Public
+rooms" paragraph: today `DISCORD_ALLOW_ALL_USERS`/`is_user_allowed()` is a
+single binary gate — on, anyone who can reach the bot can both converse with
+it AND trigger a real (non-dry-run) worker dispatch via `run_worker`; off,
+neither. That's an accepted, deliberate simplification for testing on a
+private server only Nahar is on (his call, live 2026-09-07: bridge run for
+real with `DISCORD_ALLOW_ALL_USERS=true` and no `DISCORD_DM_USER` set — see
+`company-ops/PLAN.md`'s dispatch-log note for that date). It stops being
+acceptable the moment any Discord room/server the bot is in becomes public:
+conversational replies (`ask_hermes`) should stay open to any public-room
+user, but anything reaching `run_worker`/a real ticket dispatch must stay
+gated to Nahar (or an explicit allow-list) independent of who's in the room.
+**Needs:** a real second gate in `discord_bridge.py`'s `on_message` handler
+(split the current single `is_allowed()`/`is_user_allowed()` check into a
+conversation-access check and a separate, stricter dispatch-access check)
+before any room is opened to the public. Not built yet — deliberately out of
+scope for the 2026-09-07 live-testing dispatch; do not fold this into the
+existing allow-list semantics as a quiet patch later, it needs its own
+ticket on `company-ops/PLAN.md` when actually picked up.
+
+## Group G — Discord bridge: real numeric Discord ID needed to re-open access (2026-09-07)
+
+Live `discord_bridge.py` was just locked down to fully-closed (denies every
+sender) at Nahar's request, pending his real numeric Discord user ID. His
+given identifier "nahar5755" (with "i think") cannot be used: read
+`discord_bridge.py` directly and confirmed the allow-list only ever
+compares `str(message.author.id)` (numeric Discord snowflake, e.g.
+`123456789012345678`) — there is no username/display-name matching code
+path anywhere in `is_user_allowed`/`is_allowed`, so a username string would
+never match even if it were correct.
+
+**G1 — get your real numeric Discord user ID and give it here so
+`company-ops/.env`'s `DISCORD_ALLOWED_USERS` can be set to it.** Steps:
+Discord Settings -> Advanced -> enable Developer Mode, then right-click
+your own name/avatar anywhere (server member list, a message, your own
+profile) -> "Copy User ID". That numeric string is what goes in
+`DISCORD_ALLOWED_USERS`.
+
+Current interim state (fully closed, not "nahar5755"-keyed): `.env` has
+`DISCORD_ALLOW_ALL_USERS=false` and
+`DISCORD_ALLOWED_USERS=PENDING_REAL_SNOWFLAKE_ID_NOT_YET_PROVIDED` (a
+placeholder value that can never match a real numeric ID, chosen instead
+of leaving `DISCORD_ALLOWED_USERS` empty — see G2 below for why empty is
+unsafe). Bridge process was restarted to pick this up (old PID 597973
+killed, new PID 618593 confirmed reconnected: "Hermes Discord bridge
+online as homely_ceo#9585"). Right now nobody, including you, can reach
+the bot at all until G1 is done.
+
+## Group G2 — latent fail-open bug in discord_bridge.py's allow-list check (found during G1, not yet fixed)
+
+`is_user_allowed()`/`is_allowed()` in `discord_bridge.py` (lines ~86-101)
+have this shape:
+```
+if ALLOW_ALL_USERS: return True
+if ALLOWED_USERS and sender_id not in ALLOWED_USERS: return False
+return True
+```
+If `ALLOWED_USERS` is empty (i.e. `DISCORD_ALLOWED_USERS` unset/blank) AND
+`ALLOW_ALL_USERS=false`, the second `if` is falsy regardless of
+`sender_id`, so both functions fall through to `return True` — i.e.
+"disable the allow-all flag with no allow-list configured" silently
+**allows everyone** instead of denying everyone. This is a footgun: the
+intuitive-looking "safe default" of `ALLOW_ALL_USERS=false` +
+`ALLOWED_USERS` unset does NOT lock the bridge down. Worked around for
+now with the placeholder value above (forces the non-empty-set branch,
+which correctly denies). Suggest a real fix later: flip the fallthrough so
+an empty `ALLOWED_USERS` with `ALLOW_ALL_USERS=false` denies by default
+(fail-closed), matching the intuitive semantics — a small, well-scoped
+ticket for `discord_bridge.py` + `tests/test_discord_bridge.py` whenever
+this area is next touched.
+
+## Group G — UPDATE (2026-09-07, later same day): real numeric ID received, G1 resolved
+
+Nahar provided his real numeric Discord user ID: `324293400851382273`
+(valid 18-digit snowflake format). `company-ops/.env`'s
+`DISCORD_ALLOWED_USERS` is now set to this real value (superseding the
+`PENDING_REAL_SNOWFLAKE_ID_NOT_YET_PROVIDED` placeholder from the entry
+above), with `DISCORD_ALLOW_ALL_USERS=false` unchanged. Bridge restarted
+again (old PID 618593 killed, new PID 619447 confirmed reconnected:
+"Hermes Discord bridge online as homely_ceo#9585"). Only Nahar's Discord
+account (matching this numeric ID) can now reach the bot via DM or guild
+mention; every other sender is denied by the existing non-empty-
+`ALLOWED_USERS` branch. **G1 is resolved — no further action needed from
+Nahar for this specific lockdown.** G2 (the fail-open bug when
+`ALLOWED_USERS` is empty) remains open as a real but no-longer-urgent
+code-quality fix for whenever `discord_bridge.py` is next touched.
+
+## Group G2 — RESOLVED (2026-09-07)
+
+Fixed in commit `a99fd01` (`fix(discord_bridge): deny by default when
+allow-list is empty and allow-all is false`). `is_user_allowed()` and
+`is_allowed()` in `discord_bridge.py` now fail closed: with
+`DISCORD_ALLOWED_USERS` empty and `DISCORD_ALLOW_ALL_USERS` false/unset,
+both functions return `False` for every sender instead of the old
+fall-through `True`. The `ALLOWED_CHANNELS`-only restriction path in
+`is_allowed()` is unaffected (a channel-only allow-list with no user
+allow-list still behaves as before).
+
+Verification performed independently (not just trusted from the
+implementing worker's self-report):
+- Read the actual diff in `company-ops/discord_bridge.py` and confirmed
+  the logic against every case (allow-all true; non-empty user list, in/
+  not-in; channel-only list, in/not-in; fully empty — the new deny case).
+- `python3 -m unittest tests.test_discord_bridge -v` from `company-ops/`:
+  26/26 passed (24 previously-existing behaviors unchanged +
+  2 new tests for the empty-allow-list-denies case). The pre-existing
+  `test_no_restrictions` tests in both `IsAllowedTests` and
+  `IsUserAllowedTests` were correctly flipped from `assertTrue` to
+  `assertFalse` (renamed to `test_no_restrictions_denies_by_default`) —
+  they encoded the old buggy behavior and had to change, not just be left
+  passing.
+- Restarted the live bridge process end-to-end: `SIGTERM`'d the running
+  PID (619447), confirmed exit, relaunched via
+  `set -a; source .env; set +a; .venv/bin/python3 discord_bridge.py`
+  (the same env-sourcing method the process was actually running under —
+  the checked-in `hermes-discord.service` unit is not installed/enabled
+  in systemd, so this manual method is the real deployment path today),
+  confirmed the log shows `Hermes Discord bridge online as
+  homely_ceo#9585` again, confirmed via `/proc/<pid>/environ` on the new
+  PID that `DISCORD_ALLOW_ALL_USERS=false` and
+  `DISCORD_ALLOWED_USERS=324293400851382273` (Nahar's real ID, unchanged)
+  are in effect, and confirmed no duplicate/zombie `discord_bridge.py`
+  processes remain after the restart.
+- The workaround placeholder value mentioned in the original G2 entry
+  above was already superseded by Nahar's real ID before this fix
+  (see the G1 update below it); this fix makes that workaround
+  unnecessary in general going forward — an empty `DISCORD_ALLOWED_USERS`
+  with `DISCORD_ALLOW_ALL_USERS=false` now correctly denies everyone by
+  default without needing a placeholder value to force it.
+
+No further action needed on G2.
+
+## Group H — Engineering container: deploy key needs push access on 5 bmh repos
+
+#### H1. Mounted SSH deploy key lacks access to the new BuildMy-house repos
+The mounted SSH deploy key (`certs/homely-deploy`, mounted at
+`/root/.ssh/id_rsa` in the `engineering` service) currently only has access
+to the old `NaharEmet/homely` repo.
+
+It needs push access added on each of these repos before the engineering
+container can push changes to them: `BuildMy-house/app`,
+`BuildMy-house/website`, `BuildMy-house/company-os`, `BuildMy-house/hermees`,
+and `BuildMy-house/observer-website`. This is a GitHub-side permission change
+only Nahar can grant: add the key as a deploy key with write access on each
+repo, or grant the key's associated account org-level write access. No agent
+should attempt to grant this.
+
+Read access to `app`, `website`, `hermees`, and `observer-website` works
+without the key because they are public repos; only push/write is blocked.
+`company-os` is private and needs the key granted for both read and write.

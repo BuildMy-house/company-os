@@ -15,5 +15,40 @@ services:
       - ../certs/homely-deploy:/root/.ssh/id_rsa:ro
     command: ["hermes", "gateway", "run"]
 
+  engineering:
+    build:
+      context: .
+      dockerfile: Dockerfile.engineering
+      additional_contexts:
+        manager-def: ../.claude/agents
+        skills-src: ../.agents/skills
+    working_dir: /workspace/app-checkout
+    environment:
+      - APP_REPO_URL=git@github.com:BuildMy-house/app.git
+      - WEBSITE_REPO_URL=git@github.com:BuildMy-house/website.git
+      - COMPANY_OS_REPO_URL=git@github.com:BuildMy-house/company-os.git
+      - HERMEES_REPO_URL=git@github.com:BuildMy-house/hermees.git
+      - OBSERVER_WEBSITE_REPO_URL=git@github.com:BuildMy-house/observer-website.git
+    env_file:
+      - path: .env
+        required: false
+    stdin_open: true
+    tty: true
+    volumes:
+      - engineering-checkout:/workspace/app-checkout
+      - website-checkout:/workspace/website-checkout
+      - company-os-checkout:/workspace/company-os-checkout
+      - hermees-checkout:/workspace/hermees-checkout
+      - observer-website-checkout:/workspace/observer-website-checkout
+      - ../certs/homely-deploy:/root/.ssh/id_rsa:ro
+    expose:
+      - "8000"
+    entrypoint: ["bash", "/opt/company-ops/scripts/engineering-entrypoint.sh"]
+
 volumes:
   hermes-data:
+  engineering-checkout:
+  website-checkout:
+  company-os-checkout:
+  hermees-checkout:
+  observer-website-checkout:
