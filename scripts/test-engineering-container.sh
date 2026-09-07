@@ -97,10 +97,13 @@ docker run -d --name "$CONTAINER_NAME" \
   "$IMAGE_TAG" >/dev/null 2>&1
 
 # Wait for the entrypoint to finish its repo sync and start supergateway.
-# Give it up to 90 seconds (cloning can be slow on first run).
+# 240s ceiling: 5 sequential SSH repo clones + two cold `npx -y` installs
+# (supergateway, ai-cli-mcp) can easily exceed 90s under concurrent host
+# load (other docker/npm processes). 240s gives real headroom without
+# waiting forever if something is genuinely stuck.
 echo "  Waiting for entrypoint to complete repo sync..."
 ENTRIES=0
-for i in $(seq 1 90); do
+for i in $(seq 1 240); do
   if docker logs "$CONTAINER_NAME" 2>&1 | grep -q "supergateway\|SSE server started\|Listening on"; then
     ENTRIES=1
     break
@@ -120,9 +123,18 @@ if [[ "$ENTRIES" -eq 2 ]]; then
   echo "  Last 30 lines of container logs:"
   echo "$LOGS" | tail -30
 elif [[ "$ENTRIES" -eq 0 ]]; then
-  fail "Entrypoint did not reach supergateway within 90s"
-  echo "  Last 30 lines of container logs:"
-  echo "$LOGS" | tail -30
+  # Timeout hit but container is still running — do a direct process check
+  # before declaring FAIL. The log string may not have appeared yet even
+  # though supergateway is actually running (mirrors Step 5's check).
+  if docker exec "$CONTAINER_NAME" bash -c \
+    'for f in /proc/*/cmdline; do cat "$f" 2>/dev/null | tr "\0" " " | grep -q supergateway && exit 0; done; exit 1' \
+    >/dev/null 2>&1; then
+    pass "Supergateway started (log string not seen within timeout, process confirmed running)"
+  else
+    fail "Entrypoint did not reach supergateway within 240s"
+    echo "  Last 30 lines of container logs:"
+    echo "$LOGS" | tail -30
+  fi
 else
   pass "Entrypoint completed and supergateway started"
 fi
