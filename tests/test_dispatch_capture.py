@@ -18,14 +18,14 @@ _DSN = os.environ.get("TEST_COMPANY_DATABASE_URL", "")
 # ── Realistic sample fixtures ──────────────────────────────────────────
 
 OPENCODE_NDJSON = json.dumps({
-    "event": "step_finish",
+    "type": "step_finish",
     "part": {
         "tokens": {"total": 1500, "input": 1000, "output": 500, "reasoning": 0,
                     "cache": {"write": 0, "read": 0}},
         "cost": 0.042,
     },
 }) + "\n" + json.dumps({
-    "event": "step_finish",
+    "type": "step_finish",
     "part": {
         "tokens": {"total": 800, "input": 500, "output": 300, "reasoning": 0,
                     "cache": {"write": 0, "read": 0}},
@@ -34,12 +34,12 @@ OPENCODE_NDJSON = json.dumps({
 })
 
 CODEX_NDJSON = json.dumps({
-    "event": "turn.completed",
+    "type": "turn.completed",
     "usage": {"input_tokens": 2000, "output_tokens": 750,
               "cached_input_tokens": 100, "cache_write_input_tokens": 50,
               "reasoning_output_tokens": 0},
 }) + "\n" + json.dumps({
-    "event": "turn.completed",
+    "type": "turn.completed",
     "usage": {"input_tokens": 500, "output_tokens": 200,
               "cached_input_tokens": 0, "cache_write_input_tokens": 0,
               "reasoning_output_tokens": 0},
@@ -66,7 +66,7 @@ class ParseOpencodeTests(unittest.TestCase):
         self.assertEqual(result["cost_cents"], 6)         # round((0.042+0.018)*100)
 
     def test_zero_cost_free_tier(self):
-        line = json.dumps({"event": "step_finish", "part": {
+        line = json.dumps({"type": "step_finish", "part": {
             "tokens": {"total": 100, "input": 60, "output": 40, "reasoning": 0,
                         "cache": {"write": 0, "read": 0}},
             "cost": 0,
@@ -86,7 +86,7 @@ class ParseOpencodeTests(unittest.TestCase):
         self.assertEqual(result["input_tokens"], 0)
 
     def test_non_step_finish_events_ignored(self):
-        line = json.dumps({"event": "step_start", "part": {}})
+        line = json.dumps({"type": "step_start", "part": {}})
         result = parse_opencode_output(line, "model")
         self.assertEqual(result["input_tokens"], 0)
 

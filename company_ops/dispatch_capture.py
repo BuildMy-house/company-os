@@ -38,7 +38,7 @@ def parse_opencode_output(raw_text: str, model: str) -> dict:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if obj.get("event") != "step_finish":
+        if obj.get("type") != "step_finish":
             continue
         found = True
         part = obj.get("part", {})
@@ -78,7 +78,7 @@ def parse_codex_output(raw_text: str, model: str) -> dict:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if obj.get("event") != "turn.completed":
+        if obj.get("type") != "turn.completed":
             continue
         found = True
         usage = obj.get("usage", {})
