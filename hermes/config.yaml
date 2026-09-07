@@ -44,3 +44,6 @@ mcp_servers:
       PATH: "/root/.hermes/tools/opencode/node_modules/.bin:/usr/local/bin:/usr/bin:/bin"
     connect_timeout: 60
     timeout: 900
+  # URL shape inferred; confirm against the installed hermes binary before production use.
+  engineering_manager:
+    url: "http://engineering:8000/sse"
