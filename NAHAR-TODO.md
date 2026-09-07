@@ -30,19 +30,22 @@ set in `.env` (`324293400851382273`) and is only used by legacy `discord_bridge.
 DM notification flows (`maybe_ask_questions`, daily update).
 
 
-#### A2. `DISCORD_ALLOW_ALL_USERS=true` with no allow-list configured (found 2026-09-06, E2E pass)
-The real `company-ops/.env` has `DISCORD_ALLOW_ALL_USERS=true` and no
-`DISCORD_ALLOWED_USERS` set. This makes the P2-F DM allow-list security fix
-(commit `54d89a5`, gating DMs on `is_user_allowed()`) a **no-op in
-production** — any Discord user who can DM the bot or @mention it in an
-allowed channel can currently trigger a real (non-dry-run) worker dispatch.
-**Needs a decision:** either set `DISCORD_ALLOW_ALL_USERS=false` and populate
-`DISCORD_ALLOWED_USERS` with your real Discord user ID(s) (and
-`DISCORD_ALLOWED_CHANNELS` if channel-scoping is also wanted), or an explicit,
-deliberate call from you to keep it open (not recommended given Group C's
-item below — this is exactly why the `hermes gateway run` container stays off
-this session). Not invented or changed by any agent — this is your policy
-call.
+#### A2. ~~`DISCORD_ALLOW_ALL_USERS=true` with no allow-list configured~~ — RESOLVED (confirmed 2026-09-07)
+Found 2026-09-06 (E2E pass). Re-checked live 2026-09-07: production `.env`
+now has `DISCORD_ALLOW_ALL_USERS=false` and `DISCORD_ALLOWED_USERS=324293400851382273`
+set — the P2-F DM allow-list fix (commit `54d89a5`) is live and enforced, not
+a no-op. No further action needed on this item.
+
+**New, separate finding (2026-09-07):** `GATEWAY_ALLOW_ALL_USERS=true` is
+also set in `.env` — this is a different, vendor-level (`hermes gateway`)
+flag, not the Discord-specific one above. Traced it to only affect the
+WhatsApp/Yuanbao platform adapters (`grep` inside the running container
+shows it referenced in `whatsapp_common.py`/`whatsapp_cloud.py`/`yuanbao.py`
+only). No WhatsApp/Telegram/Yuanbao credentials exist in `.env`, so this
+flag is currently inert — not a live gap today, but worth setting to `false`
+explicitly (or scoping it) before any of those platforms are ever wired up,
+so it isn't accidentally wide-open the moment a new platform's credentials
+are added.
 
 ### Group B — blocks real data/analytics
 
@@ -320,24 +323,23 @@ implementing worker's self-report):
 
 No further action needed on G2.
 
-## Group H — Engineering container: deploy key needs push access on 5 bmh repos
+## Group H — Engineering container: repo access (GitHub App auth)
 
-#### H1. Mounted SSH deploy key lacks access to the new BuildMy-house repos
-The mounted SSH deploy key (`certs/homely-deploy`, mounted at
-`/root/.ssh/id_rsa` in the `engineering` service) currently only has access
-to the old `NaharEmet/homely` repo.
+#### H1. ~~Mounted SSH deploy key lacks access to the new BuildMy-house repos~~ — RESOLVED / SUPERSEDED (2026-09-07)
+SSH deploy key approach retired for the engineering container. Repo access
+switched to GitHub App authentication (`buildmyhouse-engineering`, App ID `4857525`,
+Installation ID `159686448`, private key `certs/buildmyhouse-engineering-app.pem`).
+Tokens are minted automatically at container startup via `company-ops/scripts/github-app-token.js`
+using RS256 JWTs and used for HTTPS clone/fetch (`x-access-token:<token>@github.com/...`).
 
-It needs push access added on each of these repos before the engineering
-container can push changes to them: `BuildMy-house/app`,
-`BuildMy-house/website`, `BuildMy-house/company-os`, `BuildMy-house/hermees`,
-and `BuildMy-house/observer-website`. This is a GitHub-side permission change
-only Nahar can grant: add the key as a deploy key with write access on each
-repo, or grant the key's associated account org-level write access. No agent
-should attempt to grant this.
-
-Read access to `app`, `website`, `hermees`, and `observer-website` works
-without the key because they are public repos; only push/write is blocked.
-`company-os` is private and needs the key granted for both read and write.
+**Action needed in GitHub App settings:**
+To allow git clone and push on private repos (`company-os`), the GitHub App requires
+**Repository permissions -> Contents: Read and write**:
+1. Go to: `https://github.com/organizations/BuildMy-house/settings/apps/buildmyhouse-engineering/permissions`
+2. Under **Repository permissions** -> **Contents**: select **"Read and write"**
+3. Click **"Save changes"**
+4. Go to: `https://github.com/organizations/BuildMy-house/settings/installations/159686448`
+   and click **"Review and accept permissions"**
 
 #### A4. Discord reply-auto-capture for Human Interface requests not built (found 2026-09-07)
 `company_ops/human_interface.py`'s `ask_information`/`ask_judgment`/
