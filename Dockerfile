@@ -5,7 +5,7 @@ ENV PATH="/opt/company-ops-venv/bin:${PATH}"
 WORKDIR /opt/company-ops
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3-venv git openssh-client curl \
+  && apt-get install -y --no-install-recommends python3-venv git openssh-client curl postgresql-client \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /root/.ssh \
   && ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null
