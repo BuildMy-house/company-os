@@ -291,3 +291,164 @@ board ticket — this is an operational run, logged here for the record.
   of the file rather than physically re-sorted under Group A — a later
   in-place move was blocked by the harness's own write-classifier; content
   is correct and cross-referenced, just not physically adjacent to A1/A2.)
+
+## Full plan audit (2026-09-07, fresh manager instance)
+
+Independent status pass through `/home/nahar/.claude/plans/ticklish-conjuring-horizon.md`
+phase by phase, cross-checked against actual repo state (source files, git log,
+`sql/*.sql`, `NAHAR-TODO.md`) rather than trusted from board text alone. A
+concurrent manager instance (working resource-pool tracking + P1-F backup) was
+active during this audit — its in-flight files were read but not modified.
+
+### Launch-gate capability areas (12) — real status
+
+| # | Capability | Real status |
+|---|---|---|
+| 1 | Agent organization | Running (opencode-manager loop). Codex/Antigravity confirmed usable as workers. Engineering-container department path now real: `hermes/config.yaml`'s `engineering_manager: url: http://engineering:8000/sse` entry exists on disk and is functionally correct (self-test passing, see below) but **is uncommitted** (`git diff company-ops/hermes/config.yaml` shows it as a pending change) — this is the one concrete piece of P-MGR1's stated goal that never actually landed as a tracked commit; P-MGR2-5 built on top of it without ever committing the base wiring. Board's P-MGR1 row still literally says status `dispatching`, which is stale in one direction (the container itself is real, built, and self-test-passing) and accurate in another (the wiring line to Hermees is real but not yet committed). |
+| 2 | Company OS (memory/policies/constitution/self-mod safety) | Self-modification safety mechanism landed this session (`test-engineering-container.sh` + `docs/DEPLOY-ENGINEERING.md`, commit e521db0, see below). Memory workflow (`company-ops/memory/{research,hypotheses,...}/`) and `policies/autonomy.md` (Phase 6) **do not exist** — confirmed via `ls`, zero hits. Not started. |
+| 3 | Company PG | Schema/roles done (Phase 1). Finance (P3-A) done. Resource-pool accounting (P3-B) landed this run by the concurrent instance (commits ed19809 + a correction b583d84 — still being iterated as of this audit, not this instance's territory to verify). GA4/GSC/Clarity/web ingestion (Phase 7) not started — no `web.*`/`marketing.*` tables exist in `sql/company_schema.sql`. |
+| 4 | Observer PG | Hard boundary done and re-verified (Phase 1). Typed decision/prediction/experiment/relationship helpers done (P4-A, commit 7618c93). Autonomy-dimension SQL views (Phase 5) **not built** — `grep -rn "CREATE VIEW" sql/*.sql` returns zero hits anywhere in the schema. |
+| 5 | Human Interface | 4 typed calls + search-before-ask done (P2-G). Discord bridge live-tested for real (2026-09-07 log entry). **Public-rooms two-gate split (conversation vs. dispatch-triggering) confirmed NOT built** — read `discord_bridge.py` directly: both the DM path (`is_user_allowed`) and the mention path (`is_allowed`) gate identically before ever reaching `run_worker`; there is no separate conversational-only path. Correctly tracked as NAHAR-TODO Group A item A3, not silently dropped. |
+| 6 | Experiment engine | Only the append-only `observer.experiments` table + a typed `record_experiment`-style helper exist (part of P4-A). The actual experiment-engine CLI verbs (`experiment start/measure/decide`) and the Company-PG-side `experiments.experiments/metrics/results` evidence tables described in Phase 4 **do not exist** — `grep -n "add_parser" company_ops/cli.py` shows no `experiment` subparser. **Not started**, despite Phase 4's Observer-provenance half being done — these are two different halves of Phase 4 and only one landed. |
+| 7 | Economic system | Finance expenses/revenue (P3-A) + resource pools (P3-B, in flight) done/in-flight. Monthly spend-review ritual (Phase 8) not started — no cron/scheduler code found referencing it. |
+| 8 | Product control | Running for Homely via the existing opencode-manager loop (unchanged, this is the root `PLAN.md`, not `company-ops/PLAN.md`) — not yet Hermees-initiated (Hermees has no live decision-loop wired to actually call it yet, only the MCP path exists). |
+| 9 | Website control | Not started — `site-homely` has no Hermees-driven control loop, only a manually-dispatched P9-F ticket (see Phase 9 below). |
+| 10 | Marketing framework | Not started — zero `marketing.*` tables, no channel/content/campaign schema. |
+| 11 | Organizational learning | Resource-pool pacing (part of Phase 5's spirit) landed this run. Engineering-container self-modification safety (canary/candidate/previous convention) landed this session — see Phase 9 below. Broader autonomy-dimension views/evals still not started. |
+| 12 | Observer from Day 1 | Still true, unchanged since Phase 1. |
+
+### Phase-by-phase
+
+- **Phase 1 (Postgres backbone)** — DONE, verified. Schema, roles, hard
+  Observer boundary, ledger.py/observer.py Postgres swap all landed and
+  independently re-verified per board rows P1-A/B/C/C2/D/D2/E. Confirmed by
+  reading `sql/company_schema.sql`/`observer_schema.sql` directly: all tables
+  the plan calls for exist.
+- **Phase 2 (Human Interface, Discord)** — DONE for the core 4 typed calls +
+  bridge swap (P2-F/P2-G). **Public-rooms two-gate split NOT built** (see
+  capability #5 above) — correctly tracked, not a stale claim.
+- **Phase 3 (finance + resource pools)** — Finance (P3-A) DONE. Resource-pool
+  accounting (P3-B) IN FLIGHT as of this audit (concurrent instance actively
+  iterating, commits ed19809/b583d84 present but not yet marked done on the
+  board) — do not treat as complete until that instance's own verification
+  lands.
+- **Phase 4 (decisions/predictions/experiments/provenance)** — HALF DONE.
+  Observer-side typed helpers (decisions/predictions/experiments/
+  relationships as append-only rows) are done (P4-A). The Company-PG-side
+  "experiment engine" (evidence tables + `experiment start/measure/decide`
+  CLI, the actual measurement/KEEP-CHANGE-KILL loop) is NOT built. This is a
+  real, previously-unflagged gap — the board's Phase 4 row only ever covered
+  the Observer-provenance half.
+- **Phase 5 (autonomy instrumentation)** — NOT STARTED. No SQL views, no
+  `initiated_by`/`detected_by`/`recovered_by` rollup queries found beyond the
+  raw columns already written by P4-A/P2-G. Resource-pool pacing (Phase 3's
+  addendum, adjacent to Phase 5's spirit) is the only related instrumentation
+  actually landing this run, and that's Phase 3's remit, not Phase 5's.
+- **Phase 6 (memory/policy)** — NOT STARTED. `company-ops/memory/` and
+  `company-ops/policies/` directories do not exist. The board's own
+  "Note for whoever writes the Phase 6 ticket" (the Infisical cert-exclusion
+  line) is still an unclaimed reminder, not yet acted on.
+- **Phase 7 (marketing/community)** — NOT STARTED. No `marketing.*` schema,
+  no GA4/GSC/Clarity/Discord-engagement/Substack ingestion code anywhere in
+  `company_ops/`.
+- **Phase 8 (monthly spend review)** — NOT STARTED. No cron/scheduler
+  artifact references a spend-review ritual.
+- **Phase 9 (testing/CI/canary)** — Mostly DONE for Homely/company-ops CI
+  (P9-A/B/C/D all verified, real commits). **site-homely (P9-F) still
+  `in_progress`** — real commit 7b68188 landed (deploy.yml + wrangler.jsonc +
+  DEPLOY.md), correctly blocked on Cloudflare credentials
+  (`NAHAR-TODO.md` Group D1), matches board text. **Engineering-container
+  self-modification safety — DONE this session** (new work, not previously
+  tracked as its own ticket): `company-ops/scripts/test-engineering-container.sh`
+  + `company-ops/docs/DEPLOY-ENGINEERING.md` landed (commit e521db0) and
+  independently re-run by the manager directly (not just trusting the
+  dispatched worker's self-report) — see result below.
+
+### Engineering-container self-test — real baseline established this session
+
+Dispatched to `opencode/mimo-v2.5-free` (free tier; ticket text fully
+specified the checklist and root context, so free-tier execution was
+appropriate per the cost ladder — no escalation needed). Built
+`company-ops/scripts/test-engineering-container.sh` (242 lines, tags a
+scratch `engineering:selftest` image, never touches `:candidate`/`:latest`/
+`:previous`) and `company-ops/docs/DEPLOY-ENGINEERING.md` (candidate → passes
+self-test → promote to live tag, `:previous` retained for rollback,
+documented as a manual procedure for now — explicitly not over-automated).
+Committed as `e521db0` (diff confirmed to touch exactly those 2 files, no
+scope leakage into any concurrent instance's territory).
+
+Worker's own run (clean, all-PASS):
+
+```
+PASS: Image built successfully as engineering:selftest
+PASS: git and ssh-keyscan resolve
+PASS: Entrypoint completed and supergateway started
+WARN: Repo clone skipped (expected access gap): company-os
+PASS: Repos cloned successfully: app website hermees observer-website
+PASS: claude resolves (2.1.263)
+PASS: opencode resolves (1.18.29)
+PASS: codex resolves (0.153.4)
+PASS: Supergateway is running
+PASS: claude mcp list shows ai-cli-mcp
+PASS: codex mcp list shows ai-cli-mcp
+```
+
+**Manager's own independent re-run (not just trusted from the report) found
+a real bug in the script itself, not in the container**: run a second time
+directly by this manager instance (concurrently with other host activity —
+a realistic, not contrived, condition), Step 3's repo-sync wait loop hit its
+fixed 90-second timeout and reported `FAIL: Entrypoint did not reach
+supergateway within 90s`, while the *same* container, checked moments later
+by the script's own Steps 4-6, showed `claude`/`opencode`/`codex` all
+resolving, `Supergateway is running` (PASS), and both `claude mcp list`/
+`codex mcp list` correctly showing `ai-cli-mcp` registered — i.e. the
+entrypoint actually did finish successfully, just slower than 90s (5 repo
+clones over SSH plus two cold `npx -y` installs, under concurrent host
+load). Also notable: `company-os` cloned successfully on this run (not the
+expected WARN) — the deploy-key access gap is evidently intermittent/
+recently-resolved, not deterministic; either way, that's a WARN-or-PASS
+outcome either way, not the bug.
+
+This is a **script reliability bug (false-negative timeout), not a
+container defect** — the container is genuinely healthy in both runs. A
+narrow fix-up ticket was dispatched immediately (same free tier; small,
+well-scoped, root cause already diagnosed) to raise the timeout and add a
+direct process-existence fallback check before declaring FAIL, without
+changing the crash-detection logic that should still fail fast on a real
+entrypoint crash. Status as of this writing: **in flight, not yet verified**
+— do not treat the self-test script as fully hardened until that fix-up
+lands and is independently re-run. The underlying finding stands regardless:
+**the engineering container itself passes its self-test's real assertions
+(build, tools, repos, CLIs, supergateway, MCP registration) — the only
+failure mode found so far is the test script's own timeout being too tight
+under load, not anything wrong with the container.**
+
+### Open findings from this audit (not yet ticketed)
+
+1. **`hermes/config.yaml`'s `engineering_manager` MCP wiring is real and
+   working but uncommitted** (3-line diff, `git diff company-ops/hermes/config.yaml`).
+   This is the actual substance of P-MGR1's original goal; it should be
+   committed and the board's P-MGR1 row corrected from `dispatching` to
+   `done` once committed and re-verified. Left uncommitted by this audit
+   deliberately (out of this instance's assigned scope, and a source-file
+   commit call best left to whichever instance actually owns Phase-1-adjacent
+   config right now) — flagging here so it isn't lost.
+2. **Phase 4's "experiment engine" half (Company-PG evidence tables +
+   `experiment start/measure/decide` CLI) has never been ticketed** — only
+   the Observer-provenance half (P4-A) exists. Needs its own ticket when
+   Phase 4 is next picked up; do not assume Phase 4 is complete from the
+   board's current single P4-A row.
+3. **Phases 5, 6, 7, 8 are all genuinely not started** — no partial work,
+   no stale "done" claims found for any of them. This matches what the board
+   already says (they're absent from the claim board entirely, correctly not
+   claimed as done anywhere).
+4. **`test-engineering-container.sh`'s Step 3 wait loop has a false-negative
+   timeout bug** (found by the manager's own independent re-run, not by the
+   original worker) — a fixed 90s wait for the "supergateway" log string can
+   time out under real host load even though the container finishes
+   successfully moments later. A narrow fix-up (raise timeout, add a direct
+   process-existence fallback check) was dispatched to a free-tier worker
+   immediately; status as of this writing is IN FLIGHT, not yet
+   independently re-verified — check `git log -- company-ops/scripts/
+   test-engineering-container.sh` for a fix-up commit after this one before
+   assuming it landed.
