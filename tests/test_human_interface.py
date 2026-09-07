@@ -174,5 +174,26 @@ class TestPostMessageTokenError(unittest.TestCase):
                 human_interface._post_message("12345", "hello")
 
 
+class TestPostHasUserAgent(unittest.TestCase):
+    @patch("company_ops.human_interface.urllib.request.urlopen")
+    def test_post_sets_user_agent(self, mock_urlopen):
+        from io import BytesIO
+
+        mock_resp = BytesIO(b'{"id": "123"}')
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = lambda *a: False
+        mock_urlopen.return_value = mock_resp
+
+        with patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "fake-token"}):
+            human_interface._post("https://discord.com/api/v10/test", {"x": 1})
+
+        self.assertEqual(mock_urlopen.call_count, 1)
+        req = mock_urlopen.call_args[0][0]
+        ua = req.get_header("User-agent")
+        self.assertIsNotNone(ua, "User-Agent header must be set")
+        self.assertTrue(len(ua) > 0, "User-Agent must not be empty")
+        self.assertNotIn("Python-urllib", ua, "User-Agent must not be Python default")
+
+
 if __name__ == "__main__":
     unittest.main()

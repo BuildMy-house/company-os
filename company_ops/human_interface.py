@@ -33,6 +33,7 @@ def _post(url: str, body: dict[str, Any]) -> dict[str, Any]:
         headers={
             "Authorization": f"Bot {token}",
             "Content-Type": "application/json",
+            "User-Agent": "DiscordBot (https://buildmy.house, 1.0)",
         },
     )
     with urllib.request.urlopen(req) as resp:  # noqa: S310
