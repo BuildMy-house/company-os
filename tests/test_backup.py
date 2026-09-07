@@ -149,6 +149,127 @@ class RunBackupTests(unittest.TestCase):
             "https://example.r2.cloudflarestorage.com", "key-id", "secret",
         )
 
+    def test_default_retention_is_seven(self):
+        env = {k: v for k, v in _REQUIRED_ENV.items() if k != "R2_BACKUP_KEEP_LAST"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch("company_ops.backup.run_pg_dump") as dump, \
+             mock.patch("company_ops.backup.compress_file",
+                        return_value="dump.sql.gz") as compress, \
+             mock.patch("company_ops.backup.upload_to_r2") as upload, \
+             mock.patch("company_ops.backup.enforce_retention",
+                        return_value=[]) as retention, \
+             mock.patch("company_ops.backup.os.path.getsize",
+                        return_value=1234), \
+             mock.patch("company_ops.backup.os.remove") as remove:
+            summary = backup.run_backup()
+
+        retention.assert_called_once_with(
+            "homely-company", "backups/", 7,
+            "https://example.r2.cloudflarestorage.com", "key-id", "secret",
+        )
+
+
+class RunRestoreTests(unittest.TestCase):
+    def test_restore_plain_sql(self):
+        with mock.patch("company_ops.backup.subprocess.run") as run_mock:
+            backup.run_restore("postgresql://u:p@localhost:5432/db", "/path/to/dump.sql")
+        run_mock.assert_called_once_with(
+            ["psql", "--dbname=postgresql://u:p@localhost:5432/db", "--file", "/path/to/dump.sql", "--quiet", "-v", "ON_ERROR_STOP=1"],
+            check=True,
+        )
+
+    def test_restore_gzipped_sql(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gz_path = os.path.join(tmp, "dump.sql.gz")
+            with gzip.open(gz_path, "wb") as f:
+                f.write(b"CREATE TABLE y ();\n")
+
+            with mock.patch("company_ops.backup.subprocess.run") as run_mock:
+                backup.run_restore("postgresql://u:p@localhost:5432/db", gz_path)
+
+            run_mock.assert_called_once()
+            args = run_mock.call_args[0][0]
+            self.assertEqual(args[0], "psql")
+            self.assertEqual(args[1], "--dbname=postgresql://u:p@localhost:5432/db")
+            self.assertEqual(args[2], "--file")
+            decompressed_path = args[3]
+            self.assertTrue(decompressed_path.endswith(".sql"))
+            self.assertFalse(os.path.exists(decompressed_path))
+
+
+SUPERUSER_TEST_DSN = "postgresql://postgres:localtestpw@localhost:5544/postgres"
+
+
+def _can_connect_to_test_pg() -> bool:
+    try:
+        import psycopg
+        with psycopg.connect(SUPERUSER_TEST_DSN, connect_timeout=1):
+            return True
+    except Exception:
+        return False
+
+
+class LiveBackupRestoreIntegrationTests(unittest.TestCase):
+    @unittest.skipUnless(_can_connect_to_test_pg(), "Local test Postgres (localhost:5544) not reachable")
+    def test_live_dump_and_restore_roundtrip(self):
+        import psycopg
+
+        src_dsn = "postgresql://postgres:localtestpw@localhost:5544/homely_company"
+        scratch_db = "test_backup_restore_scratch"
+        scratch_dsn = f"postgresql://postgres:localtestpw@localhost:5544/{scratch_db}"
+
+        with psycopg.connect(SUPERUSER_TEST_DSN, autocommit=True) as conn:
+            conn.execute(f"DROP DATABASE IF EXISTS {scratch_db}")
+            conn.execute(f"CREATE DATABASE {scratch_db}")
+
+        self.addCleanup(self._cleanup_scratch_db, scratch_db)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dump_path = os.path.join(tmpdir, "backup.sql")
+            backup.run_pg_dump(src_dsn, dump_path)
+            self.assertTrue(os.path.exists(dump_path))
+
+            gz_path = backup.compress_file(dump_path)
+            self.assertTrue(gz_path.endswith(".gz"))
+            self.assertTrue(os.path.exists(gz_path))
+
+            backup.run_restore(scratch_dsn, gz_path)
+
+        with psycopg.connect(src_dsn) as sconn, psycopg.connect(scratch_dsn) as rconn:
+            with sconn.cursor() as scur, rconn.cursor() as rcur:
+                scur.execute("""
+                    SELECT table_schema, table_name
+                    FROM information_schema.tables
+                    WHERE table_schema IN ('company', 'observer')
+                    ORDER BY table_schema, table_name;
+                """)
+                src_tables = scur.fetchall()
+
+                rcur.execute("""
+                    SELECT table_schema, table_name
+                    FROM information_schema.tables
+                    WHERE table_schema IN ('company', 'observer')
+                    ORDER BY table_schema, table_name;
+                """)
+                restored_tables = rcur.fetchall()
+
+                self.assertEqual(src_tables, restored_tables)
+                self.assertGreater(len(restored_tables), 0)
+
+                for schema, table in src_tables:
+                    full_name = f'"{schema}"."{table}"'
+                    scur.execute(f"SELECT COUNT(*) FROM {full_name}")
+                    rcur.execute(f"SELECT COUNT(*) FROM {full_name}")
+                    self.assertEqual(scur.fetchone()[0], rcur.fetchone()[0])
+
+    def _cleanup_scratch_db(self, db_name: str):
+        try:
+            import psycopg
+            with psycopg.connect(SUPERUSER_TEST_DSN, autocommit=True) as conn:
+                conn.execute(f"DROP DATABASE IF EXISTS {db_name}")
+        except Exception:
+            pass
+
 
 if __name__ == "__main__":
     unittest.main()

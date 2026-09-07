@@ -381,3 +381,39 @@ real Axiom API tokens (an Axiom account/dataset only Nahar can create):
 Both can point at the same dataset (`homely-telemetry` by default, both
 sides already agree on this name) — it's the token *scope* that must differ,
 not necessarily the dataset.
+
+## Group J — Postgres backups: Cloudflare R2 credentials + scheduler wiring (2026-09-07)
+
+The local pg_dump extraction, gzip compression, and database restore mechanism
+(`company_ops/backup.py`) has been proven to work live end-to-end against the
+real production Postgres database (`company-ops-postgres-1`). Plain and
+compressed `.gz` dumps were generated and restored into an isolated scratch
+Postgres instance with 100% roundtrip fidelity (all 21 tables across both
+`company` and `observer` schemas matched exactly in table structure, columns,
+constraints, and row data). Default backup retention was updated to 7 (roughly
+a week of daily backups).
+
+#### J1. Cloudflare R2 credentials needed for offsite backup upload
+While the pg_dump and restore mechanisms are proven, the actual offsite upload
+leg (`upload_to_r2`) and retention cleanup (`enforce_retention`) to Cloudflare R2
+remain untested against real Cloudflare infrastructure pending real R2
+credentials. `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_ENDPOINT` are
+unset in production `.env` (only placeholders exist in `.env.example`).
+
+**Needs from Nahar:**
+1. Create a Cloudflare R2 bucket (e.g. `homely-company`).
+2. Provision an R2 API Token with Object Read & Write permissions on that bucket.
+3. Populate values in production `company-ops/.env`:
+   - `R2_ENDPOINT=https://<cloudflare_account_id>.r2.cloudflarestorage.com`
+   - `R2_BUCKET=homely-company`
+   - `R2_ACCESS_KEY_ID=<key_id>`
+   - `R2_SECRET_ACCESS_KEY=<secret>`
+   - `R2_BACKUP_KEEP_LAST=7` (defaults to 7 if omitted)
+
+#### J2. Automated cron / scheduler wiring for pg-backup
+`company-ops/scripts/pg-backup.sh` is an executable wrapper around
+`python -m company_ops.backup`, but no automated scheduler or cron job is
+currently running it. Once J1 credentials are supplied, wire up a daily
+execution schedule (e.g. daily at 03:00 UTC) via host systemd timer / crontab
+or a dedicated lightweight container service in `docker-compose.yml`.
+

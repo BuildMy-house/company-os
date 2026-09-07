@@ -35,6 +35,25 @@ def run_pg_dump(dsn: str, dump_path: str, schemas: list[str] = SCHEMAS) -> None:
     subprocess.run(cmd, check=True)
 
 
+def run_restore(dsn: str, dump_path: str) -> None:
+    """Restore a plain-SQL or gzipped dump file into the target database via psql."""
+    if dump_path.endswith(".gz"):
+        with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as tmp:
+            tmp_sql_path = tmp.name
+        try:
+            with gzip.open(dump_path, "rb") as gz_in, open(tmp_sql_path, "wb") as sql_out:
+                while chunk := gz_in.read(1024 * 1024):
+                    sql_out.write(chunk)
+            cmd = ["psql", f"--dbname={dsn}", "--file", tmp_sql_path, "--quiet", "-v", "ON_ERROR_STOP=1"]
+            subprocess.run(cmd, check=True)
+        finally:
+            if os.path.exists(tmp_sql_path):
+                os.remove(tmp_sql_path)
+    else:
+        cmd = ["psql", f"--dbname={dsn}", "--file", dump_path, "--quiet", "-v", "ON_ERROR_STOP=1"]
+        subprocess.run(cmd, check=True)
+
+
 def compress_file(path: str) -> str:
     """Gzip the file at path to path + '.gz' (stdlib gzip), delete original.
 
@@ -125,7 +144,7 @@ def run_backup(
     access_key_id = _require(r2_access_key_id, "R2_ACCESS_KEY_ID")
     secret_access_key = _require(r2_secret_access_key, "R2_SECRET_ACCESS_KEY")
     if keep_last is None:
-        keep_last = int(os.environ.get("R2_BACKUP_KEEP_LAST", "30"))
+        keep_last = int(os.environ.get("R2_BACKUP_KEEP_LAST", "7"))
     if keep_last < 0:
         raise ValueError("keep_last must be >= 0")
 
