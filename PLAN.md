@@ -91,8 +91,8 @@ documented to set it.
 
 | Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
 |--------|-------|------|--------------|------------|--------|-------|
-| P3-A | Real cost tracking: finance_expenses/finance_revenue tables, expense CLI verb, ads action cost | P1-A/B/D2 | company-ops/sql/company_schema.sql, company_ops/ledger.py, company_ops/cli.py, company_ops/policy.py, company-ops/README.md, tests/test_finance.py (new) | opencode | todo | dispatching now, parallel with P4-A (disjoint files) |
-| P4-A | Observer provenance: typed decision/prediction/experiment/relationship helpers on ObserverWriter | P1-E | company_ops/observer.py, tests/test_observer.py | opencode | todo | dispatching now, parallel with P3-A (disjoint files); observer.decisions/predictions/experiments/relationships tables already exist from P1-A, no schema change needed |
+| P3-A | Real cost tracking: finance_expenses/finance_revenue tables, expense CLI verb, ads action cost | P1-A/B/D2 | company-ops/sql/company_schema.sql, company_ops/ledger.py, company_ops/cli.py, company_ops/policy.py, company-ops/README.md, tests/test_finance.py (new) | opencode (tokenrouter/z-ai/glm-5.3-free) | in_progress | root cause of prior 401 found+fixed: TOKENROUTER_API_KEY lives in company-ops/.env but was never exported to the shell opencode.json's `{env:...}` reads from - exporting it makes tokenrouter/z-ai/glm-5.3-free reachable and live-confirmed working (trivial pong test succeeded, cost:0). Redispatched via `opencode run` with the key exported, 2026-09-07 |
+| P4-A | Observer provenance: typed decision/prediction/experiment/relationship helpers on ObserverWriter | P1-E | company_ops/observer.py, tests/test_observer.py | opencode (tokenrouter/z-ai/glm-5.3-free) | in_progress | redispatched 2026-09-07 with TOKENROUTER_API_KEY exported (see P3-A note, same root cause fix applies to all three tickets); parallel with P3-A/P1-F (disjoint files) |
 
 ## Note for whoever writes the Phase 6 ticket (policies/autonomy.md doesn't exist yet)
 
@@ -118,7 +118,7 @@ concrete gap, not implied by anything already landed.
 
 | Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
 |--------|-------|------|--------------|------------|--------|-------|
-| P1-F | Scheduled pg_dump (company+observer schemas) -> Cloudflare R2 backup, with retention | P1-A/B | company-ops/scripts/pg-backup.sh (new), company_ops/backup.py (new), tests/test_backup.py (new), company-ops/pyproject.toml, company-ops/docs/BACKUP.md (new), company-ops/.env.example | opencode | todo | dispatching now, parallel with P3-A/P4-A (disjoint files; deliberately does NOT touch cli.py or README.md, both currently in-flight) |
+| P1-F | Scheduled pg_dump (company+observer schemas) -> Cloudflare R2 backup, with retention | P1-A/B | company-ops/scripts/pg-backup.sh (new), company_ops/backup.py (new), tests/test_backup.py (new), company-ops/pyproject.toml, company-ops/docs/BACKUP.md (new), company-ops/.env.example | opencode (tokenrouter/z-ai/glm-5.3-free) | in_progress | redispatched 2026-09-07 with TOKENROUTER_API_KEY exported (see P3-A note); parallel with P3-A/P4-A (disjoint files; deliberately does NOT touch cli.py or README.md, both currently in-flight) |
 
 ## Manager container — Hermees's path to the Claude engineering manager (new, fresh manager instance 2026-09-06)
 
