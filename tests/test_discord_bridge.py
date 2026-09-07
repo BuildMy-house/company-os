@@ -87,9 +87,13 @@ class IsAllowedTests(unittest.TestCase):
         _mod.ALLOWED_USERS = set(users) if users else set()
         _mod.ALLOWED_CHANNELS = set(channels) if channels else set()
 
-    def test_no_restrictions(self):
+    def test_no_restrictions_denies_by_default(self):
         self._set()
-        self.assertTrue(is_allowed("123", "456"))
+        self.assertFalse(is_allowed("123", "456"))
+
+    def test_empty_allowlist_no_allow_all_denies(self):
+        self._set(allow_all=False, users=[], channels=[])
+        self.assertFalse(is_allowed("anyone", "anywhere"))
 
     def test_user_allow_list_blocks(self):
         self._set(users=["111", "222"])
@@ -125,9 +129,13 @@ class IsUserAllowedTests(unittest.TestCase):
         _mod.ALLOW_ALL_USERS = allow_all
         _mod.ALLOWED_USERS = set(users) if users else set()
 
-    def test_no_restrictions(self):
+    def test_no_restrictions_denies_by_default(self):
         self._set()
-        self.assertTrue(is_user_allowed("123"))
+        self.assertFalse(is_user_allowed("123"))
+
+    def test_empty_allowlist_no_allow_all_denies(self):
+        self._set(allow_all=False, users=[])
+        self.assertFalse(is_user_allowed("anyone"))
 
     def test_user_in_list(self):
         self._set(users=["111", "222"])

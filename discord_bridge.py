@@ -86,17 +86,20 @@ def split_reply(text: str) -> list[str]:
 def is_user_allowed(sender_id: str) -> bool:
     if ALLOW_ALL_USERS:
         return True
-    if ALLOWED_USERS and sender_id not in ALLOWED_USERS:
-        return False
-    return True
+    if ALLOWED_USERS:
+        return sender_id in ALLOWED_USERS
+    return False
 
 
 def is_allowed(sender_id: str, channel_id: str) -> bool:
     if ALLOW_ALL_USERS:
         return True
-    if ALLOWED_USERS and sender_id not in ALLOWED_USERS:
-        return False
+    if ALLOWED_USERS:
+        if sender_id not in ALLOWED_USERS:
+            return False
     if ALLOWED_CHANNELS and channel_id not in ALLOWED_CHANNELS:
+        return False
+    if not ALLOWED_USERS and not ALLOWED_CHANNELS:
         return False
     return True
 
