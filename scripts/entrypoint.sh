@@ -33,8 +33,8 @@ done
 
 chmod 644 /opt/data/.env
 
-REPO_DIR="/opt/homely-ceo"
-REMOTE="git@github.com:NaharEmet/homely-ceo.git"
+REPO_DIR="/opt/hermees"
+REMOTE="git@github.com:BuildMy-house/hermees.git"
 
 # Clone or pull on start
 if [[ -d "$REPO_DIR/.git" ]]; then
