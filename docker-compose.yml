@@ -15,6 +15,27 @@ services:
       - ../certs/homely-deploy:/root/.ssh/id_rsa:ro
     command: ["hermes", "gateway", "run"]
 
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: homely_company
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../company-ops/sql/company_schema.sql:/docker-entrypoint-initdb.d/01-company_schema.sql:ro
+      - ../company-ops/sql/observer_schema.sql:/docker-entrypoint-initdb.d/02-observer_schema.sql:ro
+      - ../company-ops/sql/roles.sql:/docker-entrypoint-initdb.d/03-roles.sql:ro
+      - ../company-ops/scripts/04-set-role-passwords.sh:/docker-entrypoint-initdb.d/04-set-role-passwords.sh:ro
+    env_file:
+      - path: .env
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d homely_company"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   engineering:
     build:
       context: .
@@ -52,3 +73,4 @@ volumes:
   company-os-checkout:
   hermees-checkout:
   observer-website-checkout:
+  postgres-data:
