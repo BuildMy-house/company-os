@@ -14,8 +14,11 @@ from .workers import load_workers, run_worker
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .spend_review import _ensure_env, compile_spend_review, resolve_dsn, run_spend_review
+    _ensure_env()
     parser = argparse.ArgumentParser(prog="company-ops")
-    parser.add_argument("--db", default=os.environ.get("COMPANY_DATABASE_URL") or os.environ.get("TEST_COMPANY_DATABASE_URL", ""))
+    parser.add_argument("--db", default=os.environ.get("TEST_COMPANY_DATABASE_URL") or os.environ.get("COMPANY_DATABASE_URL", ""))
+    parser.add_argument("--observer-db", default=os.environ.get("TEST_OBSERVER_DATABASE_URL") or os.environ.get("OBSERVER_DATABASE_URL", ""))
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("init")
     sub.add_parser("status")
@@ -39,7 +42,22 @@ def main(argv: list[str] | None = None) -> int:
     rp_rec = rp_sub.add_parser("record"); rp_rec.add_argument("pool_id"); rp_rec.add_argument("provider"); rp_rec.add_argument("unit"); rp_rec.add_argument("quota_amount", type=float); rp_rec.add_argument("period_type"); rp_rec.add_argument("period_start"); rp_rec.add_argument("period_end_or_reset_at"); rp_rec.add_argument("--consumed", type=float, default=0); rp_rec.add_argument("--source", default=""); rp_rec.add_argument("--level", default="claude_to_worker")
     rp_status = rp_sub.add_parser("status"); rp_status.add_argument("pool_id")
     rp_sub.add_parser("list")
+    sr = sub.add_parser("spend-review")
+    sr_sub = sr.add_subparsers(dest="sr_command", required=True)
+    sr_comp = sr_sub.add_parser("compile")
+    sr_comp.add_argument("--days", type=int, default=30, help="Trailing days to review (default: 30)")
+    sr_comp.add_argument("--as-of", default=None, help="As-of ISO timestamp (default: now)")
+    sr_run = sr_sub.add_parser("run")
+    sr_run.add_argument("--days", type=int, default=30, help="Trailing days to review (default: 30)")
+    sr_run.add_argument("--as-of", default=None, help="As-of ISO timestamp (default: now)")
+    sr_run.add_argument("--proposal", default=None, help="Concrete proposal to request approval for")
+    sr_run.add_argument("--dry-run", action="store_true", help="Compile and format without firing Human Interface")
+    sr_run.add_argument("--initiated-by", default="spend_review", help="Initiator identifier for human_interface")
     args = parser.parse_args(argv)
+    if args.db:
+        args.db = resolve_dsn(args.db)
+    if getattr(args, "observer_db", None):
+        args.observer_db = resolve_dsn(args.observer_db)
     if args.command == "route":
         print(json.dumps(choose_provider(args.task_type, not args.no_free), sort_keys=True)); return 0
     if args.command == "telemetry":
@@ -94,6 +112,23 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, default=str, sort_keys=True)); return 0
         finally:
             rp_conn.close()
+    if args.command == "spend-review":
+        if args.sr_command == "compile":
+            result = compile_spend_review(args.db, days=args.days, as_of=args.as_of)
+        elif args.sr_command == "run":
+            result = run_spend_review(
+                company_db=args.db,
+                observer_writer=args.observer_db,
+                days=args.days,
+                as_of=args.as_of,
+                proposal=args.proposal,
+                dry_run=args.dry_run,
+                initiated_by=args.initiated_by,
+            )
+        else:
+            parser.error("unknown spend-review subcommand")
+        print(json.dumps(result, default=str, sort_keys=True))
+        return 0
     ledger = Ledger(args.db); ledger.init()
     try:
         if args.command == "init": result = {"dsn": args.db, "status": "ready"}
