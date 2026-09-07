@@ -119,6 +119,12 @@ infrastructure layer, not just code discipline" principle as the Phase 1
 Observer Postgres role. Corresponding account-setup item tracked in
 `company-ops/NAHAR-TODO.md` Group E (Infisical).
 
+## Phase 8 — Monthly spend review ritual (recurring Human Interface ritual)
+
+| Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
+|---|---|---|---|---|---|---|
+| P8-A | Monthly spend review ritual: report compilation + `spend-review` CLI verb + Human Interface integration | P3-A, P2-G | company-ops/company_ops/spend_review.py, company-ops/company_ops/cli.py, tests/test_spend_review.py | antigravity | claimed | Phase 8 spend review rollup and human interface trigger |
+
 ## Backup mechanism (new, per architecture correction 2026-09-06)
 
 Production Postgres is now self-hosted/local, not Neon (see NAHAR-TODO.md
