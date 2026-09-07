@@ -359,3 +359,25 @@ design is "on a DM, check for the most recent open (uncompleted) human_request
 and treat the message as its reply instead of dispatching a new worker prompt" --
 deliberately not implemented here so it isn't done as a rushed side effect of
 a different ticket.
+
+## Group I — Axiom telemetry credentials needed (2026-09-07)
+
+The app-side Axiom telemetry pipeline (`homely/src/telemetry/{config,transport,events,logger,context}.ts`)
+and the query-side client (`company_ops/axiom_client.py`, `company-ops telemetry-query`
+CLI verb) were both already fully built before this session — they just have
+no real Axiom account behind them yet, so telemetry silently no-ops (`if
+(!config.token) return`) and query attempts would fail. Needs two SEPARATE
+real Axiom API tokens (an Axiom account/dataset only Nahar can create):
+
+1. **App ingest token** (write-only scope) -> `homely/.env.example`'s
+   `VITE_AXIOM_TOKEN` (also needs a real `homely/.env` with the real value —
+   this gets embedded in the built app, so it must be a genuinely
+   ingest-only-scoped token, never a token with read/query/admin rights).
+2. **Query/read token** (read scope) -> `company-ops/.env`'s `AXIOM_TOKEN`
+   (used by `company-ops telemetry-query`, which all dispatched coding
+   agents should use to check real app telemetry before guessing at root
+   cause on a Homely bug — see `.claude/agents/agent-manager.md`).
+
+Both can point at the same dataset (`homely-telemetry` by default, both
+sides already agree on this name) — it's the token *scope* that must differ,
+not necessarily the dataset.
