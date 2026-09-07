@@ -197,6 +197,14 @@ headless `claude` CLI. **Needs one of:** a real `ANTHROPIC_API_KEY`, or a
 Claude subscription instead of a metered API key. Provide either value in the
 real `.env`; no agent should invent or commit it.
 
+#### F2. Gemini CLI not added — Google retired it June 2026, obsolete
+Google retired Gemini CLI in June 2026; it is obsolete and was NOT added to
+this container. Its successor, Antigravity CLI (`agy`, installed via
+`curl -fsSL https://antigravity.google/cli/install.sh | bash` on Linux), is
+not yet a decided tool in this architecture — Nahar is evaluating it locally
+first. Do NOT add Antigravity to this container proactively; that is a future
+ticket once he has actually tried it, not something to build ahead of now.
+
 #### A3. Public rooms need a second gate (conversation vs. action-triggering) — not built yet, tracked for later (added 2026-09-07)
 Per `/home/nahar/.claude/plans/ticklish-conjuring-horizon.md`'s Phase 2 "Public
 rooms" paragraph: today `DISCORD_ALLOW_ALL_USERS`/`is_user_allowed()` is a
