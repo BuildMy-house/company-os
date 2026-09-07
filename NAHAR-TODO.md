@@ -337,3 +337,22 @@ should attempt to grant this.
 Read access to `app`, `website`, `hermees`, and `observer-website` works
 without the key because they are public repos; only push/write is blocked.
 `company-os` is private and needs the key granted for both read and write.
+
+#### A4. Discord reply-auto-capture for Human Interface requests not built (found 2026-09-07)
+`company_ops/human_interface.py`'s `ask_information`/`ask_judgment`/
+`request_approval`/`request_action` each write an open `observer.human_requests`
+row and send a real Discord DM, but there is no code path anywhere that
+listens for Nahar's reply and calls `complete_human_interface_request()`
+automatically. Confirmed by direct read of `discord_bridge.py`'s `on_message`:
+every DM (including a genuine reply to a pending request) is routed straight
+into `ask_hermes`/`run_worker` as a fresh worker-dispatch prompt, with no
+lookup against open `observer.human_requests` rows first. Today, the only way
+a request actually gets completed is a manual direct call to
+`complete_human_interface_request()` (e.g. this session's live-test round-trip
+in `PLAN.md`) -- not a real Discord reply. Not built this session, per explicit
+coordinator direction to stop after verifying/fixing existing gaps rather than
+add new capability. When picked up, needs its own scoped ticket: a minimal
+design is "on a DM, check for the most recent open (uncompleted) human_request
+and treat the message as its reply instead of dispatching a new worker prompt" --
+deliberately not implemented here so it isn't done as a rushed side effect of
+a different ticket.
