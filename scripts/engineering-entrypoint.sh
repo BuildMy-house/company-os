@@ -34,4 +34,4 @@ for repo in \
   sync_repo "$name" "${!url_var}" "$path" || true
 done
 
-exec npx -y supergateway --stdio "npx -y @steipete/claude-code-mcp@latest" --port 8000 --outputTransport sse
+exec npx -y supergateway --stdio "npx -y ai-cli-mcp@latest" --port 8000 --outputTransport sse
