@@ -18,7 +18,7 @@ RUN npm install -g @anthropic-ai/claude-code@latest \
   && codex mcp add ai-cli-mcp -- npx -y ai-cli-mcp@latest \
   && mkdir -p /opt/company-ops/.claude/agents /opt/company-ops/.claude/skills
 
-COPY --from=manager-def opencode-manager.md /opt/company-ops/.claude/agents/opencode-manager.md
+COPY --from=manager-def agent-manager.md /opt/company-ops/.claude/agents/agent-manager.md
 COPY --from=skills-src . /opt/company-ops/.claude/skills/
 COPY scripts/engineering-entrypoint.sh /opt/company-ops/scripts/engineering-entrypoint.sh
 
