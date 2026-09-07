@@ -179,6 +179,7 @@ Pre-dispatch audit findings (this manager instance, 2026-09-06):
 | Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
 |--------|-------|------|--------------|------------|--------|-------|
 | P-MGR1 | Dockerfile.manager: containerize the Claude engineering-manager (claude+opencode+codex CLIs + claude-code-mcp wrapper) for Hermees's `mcp-workers.json` claude role | — | company-ops/Dockerfile.manager (new), company-ops/docker-compose.yml, company-ops/mcp-workers.json, company-ops/mcp-workers.example.json, company-ops/.env.example, company-ops/NAHAR-TODO.md | codex | dispatching | see ticket prompt in dispatch log; does not touch ledger.py/cli.py/policy.py/observer.py/sql/company_schema.sql (other instance's territory) |
+| P-MGR2 | Extend engineering container to clone/sync all 5 BuildMy-house repos (app, website, company-os, hermees, observer-website), not just app | P-MGR1 | company-ops/scripts/engineering-entrypoint.sh, company-ops/docker-compose.yml (engineering service only), company-ops/NAHAR-TODO.md | codex | dispatching | builds on top of P-MGR1's currently-uncommitted engineering-entrypoint.sh/docker-compose.yml already in the working tree (P-MGR1 itself still unverified/uncommitted as of this claim); does not touch Dockerfile.engineering, mcp-workers*.json, or any real git remote cutover (that's separately sequenced per the plan's Multi-repo access section) |
 
 **Containment bug caught before landing (2026-09-06, coordinator catch, not self-found):**
 first Codex dispatch's `docker-compose.yml` draft for `claude-manager` had
@@ -226,3 +227,61 @@ round is preserved unchanged. Redesign dispatched to Codex
 (background task, in flight). Nothing committed yet — holding per
 standing verification discipline until this lands and is independently
 checked.
+
+## Live-testing note (2026-09-07) — discord_bridge.py run for real
+
+Per Nahar's explicit direction (accepted risk, private single-user Discord
+server): started `discord_bridge.py` as a genuine long-running process for
+Nahar to interact with directly (not a bounded ~25s test window). Not a
+board ticket — this is an operational run, logged here for the record.
+
+- Ran with the real `.env` as-is: `DISCORD_ALLOW_ALL_USERS=true`,
+  `DISCORD_DM_USER` unset — both pre-existing states, Group A of
+  `NAHAR-TODO.md`, left unchanged per Nahar's instruction (not loosened
+  further, not tightened either — his call to accept for now).
+- Deployment path chosen: direct `.venv/bin/python3 discord_bridge.py`,
+  fully detached (`setsid nohup ... &`, then `disown`; confirmed PPID=1,
+  own session/pgid — survives independent of the dispatching shell/session).
+  Deliberately did NOT use the `hermes-discord.service` systemd unit this
+  time: the user systemd session's PATH
+  (`systemctl --user show-environment`) doesn't include the nvm-managed
+  `node`/`npx` this machine actually uses (`~/.nvm/versions/node/v24.19.0/
+  bin`), and `mcp-workers.json`'s worker dispatch shells out to
+  `npx -y @kud/mcp-opencode` — running under systemd as-is would connect to
+  Discord fine but silently fail the moment anyone actually messaged the
+  bot (worker dispatch would error, no `npx` on PATH). Fixing that needs
+  either a `PATH=`/`Environment=` line added to `hermes-discord.service` or
+  a node install reachable from a bare PATH (e.g. `/usr/local/bin`, which
+  needs sudo, not attempted) — noted here as a follow-up if the systemd path
+  is wanted for persistence-across-reboot later; direct-launch has no such
+  gap since it inherits an interactive shell's full PATH.
+- Confirmed genuinely live, not just started-and-killed: log shows the
+  real Gateway handshake completing — `Hermes Discord bridge online as
+  homely_ceo#9585` — and the process was still running with no new log
+  lines (no reconnect/crash loop) after this manager's own multi-check
+  session. `discord.py>=2.4` from `pyproject.toml`'s `[discord]` extra
+  is already installed inside `company-ops/.venv` (`discord.py 2.7.1`,
+  confirmed via `.venv/bin/python3 -c "import discord"`) — no missing
+  dependency, that only looked missing when checked against the system
+  Python instead of the project venv.
+- Startup-time scheduler jobs (`Daily update`/`Investor update` in
+  `discord_bridge.py`'s `scheduler()`, which fire immediately on process
+  start since `next_run` initializes to 0) safely no-op'd
+  (`DISCORD_ANNOUNCE_CHANNEL`/`DISCORD_DM_USER` both unset in the real
+  `.env`) — confirmed no unintended worker dispatch/cost fired on startup.
+- **How Nahar can reach it:** DM the bot directly (`homely_ceo#9585`) on
+  whatever Discord server he already has it added to, or @-mention it in
+  any channel there — `DISCORD_ALLOW_ALL_USERS=true` means no allow-list
+  restriction is currently gating either path, and no `DISCORD_ALLOWED_
+  CHANNELS` is set so every channel the bot can see is reachable. A real
+  message will route through `run_worker` -> `npx -y @kud/mcp-opencode`
+  (`opencode/mimo-v2.5-free`) for a live, non-dry-run reply.
+- Did NOT send any test messages myself, per instruction — left it live
+  and reachable for Nahar to message directly.
+- Added `NAHAR-TODO.md` item A3: the Phase 2 "Public rooms" two-gate
+  follow-up (conversation access vs. action-triggering access) is not
+  built and was explicitly out of scope for this run; tracked there so it
+  isn't lost before any room goes public. (Filed via `cat >>` at the end
+  of the file rather than physically re-sorted under Group A — a later
+  in-place move was blocked by the harness's own write-classifier; content
+  is correct and cross-referenced, just not physically adjacent to A1/A2.)
