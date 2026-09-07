@@ -45,11 +45,14 @@ services:
         skills-src: ../.agents/skills
     working_dir: /workspace/app-checkout
     environment:
-      - APP_REPO_URL=git@github.com:BuildMy-house/app.git
-      - WEBSITE_REPO_URL=git@github.com:BuildMy-house/website.git
-      - COMPANY_OS_REPO_URL=git@github.com:BuildMy-house/company-os.git
-      - HERMEES_REPO_URL=git@github.com:BuildMy-house/hermees.git
-      - OBSERVER_WEBSITE_REPO_URL=git@github.com:BuildMy-house/observer-website.git
+      - GITHUB_APP_ID=4857525
+      - GITHUB_APP_INSTALLATION_ID=159686448
+      - GITHUB_APP_PRIVATE_KEY_PATH=/etc/github/buildmyhouse-engineering-app.pem
+      - APP_REPO_URL=https://github.com/BuildMy-house/app.git
+      - WEBSITE_REPO_URL=https://github.com/BuildMy-house/website.git
+      - COMPANY_OS_REPO_URL=https://github.com/BuildMy-house/company-os.git
+      - HERMEES_REPO_URL=https://github.com/BuildMy-house/hermees.git
+      - OBSERVER_WEBSITE_REPO_URL=https://github.com/BuildMy-house/observer-website.git
     env_file:
       - path: .env
         required: false
@@ -61,7 +64,7 @@ services:
       - company-os-checkout:/workspace/company-os-checkout
       - hermees-checkout:/workspace/hermees-checkout
       - observer-website-checkout:/workspace/observer-website-checkout
-      - ../certs/homely-deploy:/root/.ssh/id_rsa:ro
+      - ../certs/buildmyhouse-engineering-app.pem:/etc/github/buildmyhouse-engineering-app.pem:ro
     expose:
       - "8000"
     entrypoint: ["bash", "/opt/company-ops/scripts/engineering-entrypoint.sh"]
