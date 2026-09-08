@@ -219,10 +219,21 @@ fi
 echo ""
 echo "── Step 6: MCP endpoint (port 8000) ──"
 # mcp-proxy should be listening on 0.0.0.0:8000
-if docker exec "$CONTAINER_NAME" bash -c 'curl -s http://localhost:8000/mcp >/dev/null 2>&1'; then
-  pass "MCP endpoint responds on http://localhost:8000/mcp"
-elif docker exec "$CONTAINER_NAME" bash -c 'timeout 2 nc -zv localhost 8000 >/dev/null 2>&1'; then
-  pass "Port 8000 is listening (curl failed but port is open)"
+# Note: mcp-proxy can take 15-20 seconds to fully initialize after entrypoint,
+# so we retry with backoff rather than failing on first attempt.
+PORT_OK=0
+for attempt in $(seq 1 30); do
+  if docker exec "$CONTAINER_NAME" bash -c 'exec 3<>/dev/tcp/localhost/8000 2>/dev/null && exit 0 || exit 1' >/dev/null 2>&1; then
+    PORT_OK=1
+    break
+  fi
+  if [[ $attempt -lt 30 ]]; then
+    sleep 1
+  fi
+done
+
+if [[ $PORT_OK -eq 1 ]]; then
+  pass "MCP endpoint listening on port 8000"
 else
   fail "Port 8000 is NOT listening — mcp-proxy may not have started correctly"
 fi

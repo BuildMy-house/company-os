@@ -10,7 +10,7 @@ RUN apt-get update \
   && mkdir -p /root/.ssh \
   && ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null
 
-RUN npm install -g opencode-ai@latest \
+RUN npm install -g opencode-ai@latest infisical@latest \
   && mkdir -p /root/.config/opencode
 
 RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-browser --skip-computer-use --skip-setup || true \

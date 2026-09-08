@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 set -e
 
+# ── Infisical Secrets Injection ─────────────────────────────────────────────
+# If INFISICAL_TOKEN is set, fetch secrets from Infisical workspace and inject
+# them into the environment. Otherwise, proceed with .env or existing env vars.
+if [ -n "${INFISICAL_TOKEN:-}" ]; then
+  echo "[infisical] Fetching secrets from Infisical workspace..."
+  SECRETS_FILE=$(mktemp)
+  trap "rm -f $SECRETS_FILE" EXIT
+
+  if infisical export --token "$INFISICAL_TOKEN" > "$SECRETS_FILE" 2>/dev/null; then
+    echo "[infisical] Secrets loaded successfully"
+    set -a
+    source "$SECRETS_FILE"
+    set +a
+  else
+    echo "[infisical] ERROR: Failed to fetch secrets from Infisical" >&2
+    exit 1
+  fi
+else
+  echo "[infisical] INFISICAL_TOKEN not set; using .env or existing environment variables"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Mint GitHub App installation token ──────────────────────────────────
@@ -81,4 +102,4 @@ for repo in \
   sync_repo "$name" "${!url_var:-}" "$path" || true
 done
 
-exec npx -y mcp-proxy --port 8000 -- npx -y ai-cli-mcp@latest
+exec npx -y mcp-proxy --host 0.0.0.0 --port 8000 -- npx -y ai-cli-mcp@latest
