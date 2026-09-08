@@ -14,6 +14,8 @@ RUN apt-get update \
 RUN npm install -g @anthropic-ai/claude-code@latest \
   && npm install -g opencode-ai@latest \
   && npm install -g @openai/codex@latest \
+  && npm install -g ai-cli-mcp@latest \
+  && mkdir -p /root/.config/ai-cli \
   && claude mcp add ai-cli-mcp -s user -- npx -y ai-cli-mcp@latest \
   && codex mcp add ai-cli-mcp -- npx -y ai-cli-mcp@latest \
   && mkdir -p /opt/company-ops/.claude/agents /opt/company-ops/.claude/skills
