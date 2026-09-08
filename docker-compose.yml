@@ -53,6 +53,9 @@ services:
       - COMPANY_OS_REPO_URL=https://github.com/BuildMy-house/company-os.git
       - HERMEES_REPO_URL=https://github.com/BuildMy-house/hermees.git
       - OBSERVER_WEBSITE_REPO_URL=https://github.com/BuildMy-house/observer-website.git
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CODEX_API_KEY=${CODEX_API_KEY}
+      - OPENCODE_API_KEY=${OPENCODE_API_KEY}
     env_file:
       - path: .env
         required: false
@@ -65,6 +68,8 @@ services:
       - hermees-checkout:/workspace/hermees-checkout
       - observer-website-checkout:/workspace/observer-website-checkout
       - ../certs/buildmyhouse-engineering-app.pem:/etc/github/buildmyhouse-engineering-app.pem:ro
+      # Optional: bind-mount host's ai-cli config for persistence
+      - ~/.config/ai-cli:/root/.config/ai-cli
     expose:
       - "8000"
     entrypoint: ["bash", "/opt/company-ops/scripts/engineering-entrypoint.sh"]
