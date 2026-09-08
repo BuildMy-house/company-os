@@ -22,6 +22,61 @@ else
   echo "[infisical] INFISICAL_TOKEN not set; using .env or existing environment variables"
 fi
 
+# ── AI-CLI-MCP Configuration ────────────────────────────────────────
+echo "[ai-cli] Setting up ai-cli-mcp configuration..."
+mkdir -p /root/.config/ai-cli
+
+# Create config if not already present
+if [[ ! -f /root/.config/ai-cli/config.toml ]]; then
+  cat > /root/.config/ai-cli/config.toml <<'AICLI_EOF'
+[worker.cheap]
+agent = "opencode"
+model = "oc-opencode/big-pickle"
+timeout_seconds = 300
+description = "Free tier, default for mechanical tasks"
+
+[worker.balanced]
+agent = "opencode"
+model = "oc-opencode/mimo-v2.5-free"
+timeout_seconds = 300
+description = "Free tier, can stall on 30-50+ tool calls"
+
+[worker.hard]
+agent = "claude"
+model = "opus"
+timeout_seconds = 900
+description = "Claude Opus, highest capability"
+
+[worker.quick]
+agent = "opencode"
+model = "oc-opencode/nemotron-3-ultra-free"
+timeout_seconds = 180
+description = "Free tier, fast alternative"
+
+[default]
+worker = "cheap"
+mcp_server_port = 3001
+logging_level = "info"
+AICLI_EOF
+  echo "[ai-cli] Created default config at /root/.config/ai-cli/config.toml"
+fi
+
+# Export environment variables for ai-cli
+if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+  export ANTHROPIC_API_KEY
+  echo "[ai-cli] ANTHROPIC_API_KEY set"
+fi
+if [[ -n "${CODEX_API_KEY:-}" ]]; then
+  export CODEX_API_KEY
+  echo "[ai-cli] CODEX_API_KEY set"
+fi
+if [[ -n "${OPENCODE_API_KEY:-}" ]]; then
+  export OPENCODE_API_KEY
+  echo "[ai-cli] OPENCODE_API_KEY set"
+fi
+
+echo "[ai-cli] ai-cli-mcp configured and ready"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Mint GitHub App installation token ──────────────────────────────────
