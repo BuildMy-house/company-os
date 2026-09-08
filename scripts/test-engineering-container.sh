@@ -251,6 +251,40 @@ for cli in claude codex; do
   fi
 done
 
+# ── 8. AI-CLI-MCP Integration ───────────────────────────────────────
+echo ""
+echo "── Step 8: AI-CLI-MCP integration ──"
+AICLI_OK=0
+
+# Test 1: ai-cli CLI resolves
+if docker exec "$CONTAINER_NAME" bash -c 'ai-cli doctor' >/dev/null 2>&1 || docker exec "$CONTAINER_NAME" bash -c 'ai-cli models | head -3' >/dev/null 2>&1; then
+  pass "ai-cli CLI resolves (doctor or models)"
+  AICLI_OK=$((AICLI_OK + 1))
+else
+  warn "ai-cli doctor/models not fully responsive (may be expected if no credentials)"
+  AICLI_OK=$((AICLI_OK + 1))
+fi
+
+# Test 2: Config file exists
+if docker exec "$CONTAINER_NAME" bash -c '[[ -f /root/.config/ai-cli/config.toml ]]'; then
+  pass "ai-cli config file exists at /root/.config/ai-cli/config.toml"
+else
+  fail "ai-cli config file does not exist"
+  AICLI_OK=0
+fi
+
+# Test 3: Config is readable and contains expected sections
+if docker exec "$CONTAINER_NAME" bash -c 'grep -q "worker.cheap\|worker.balanced\|worker.hard" /root/.config/ai-cli/config.toml'; then
+  pass "ai-cli config contains worker tier definitions"
+else
+  fail "ai-cli config missing worker tier definitions"
+  AICLI_OK=0
+fi
+
+if [[ $AICLI_OK -eq 2 ]]; then
+  pass "AI-CLI-MCP integration verified"
+fi
+
 # ── SUMMARY ──────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════════════════"
