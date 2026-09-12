@@ -20,6 +20,7 @@ from companyd.companyd import (
     GenerationStatus,
     RuntimeControl,
     StateCheckpoint,
+    StateManager,
     SyntheticTests,
 )
 
@@ -560,3 +561,247 @@ class TestOrchestrationHandlers:
         result = listener._process_request({"command": "bogus"})
         assert result["status"] == "error"
         assert "Unknown command" in result["message"]
+
+
+# =============================================================================
+# T2.6: Checkpoint Generation (checkpoint_generation / restore_tasks)
+# =============================================================================
+
+
+class TestCheckpointGeneration:
+    @pytest.fixture
+    def sm(self, runtime_control, checkpoint_store):
+        return StateManager(runtime_control, checkpoint_store)
+
+    def _make_gen(self, sm, name, status):
+        gen = Generation(
+            name=name,
+            component=Component.ENGINEERING,
+            status=status,
+            created_at=datetime.datetime.utcnow(),
+        )
+        sm.generations[name] = gen
+        return gen
+
+    def test_checkpoint_saves_active_tasks(self, sm):
+        self._make_gen(sm, "E10", GenerationStatus.DRAINING)
+
+        cp = StateCheckpoint(
+            deployment_id="task-0",
+            component="engineering",
+            generation="E10",
+            status="TESTING",
+            metadata={"branch": "feat/0", "commit": "sha0"},
+        )
+        sm.checkpoint_store.save_checkpoint(cp)
+
+        result = sm.checkpoint_generation("E10")
+        assert result["status"] == "checkpointed"
+        assert result["checkpoints_saved"] == 1
+
+        stored = sm.checkpoint_store.get_checkpoint("engineering", "E10")
+        assert stored is not None
+        assert stored.status == "INTERRUPTED"
+
+    def test_checkpoint_updates_pg_status(self, sm):
+        self._make_gen(sm, "E10", GenerationStatus.DRAINING)
+
+        cp = StateCheckpoint(
+            deployment_id="task-pg",
+            component="engineering",
+            generation="E10",
+            status="STARTING",
+        )
+        sm.checkpoint_store.save_checkpoint(cp)
+
+        sm.checkpoint_generation("E10")
+
+        stored = sm.checkpoint_store.get_checkpoint("engineering", "E10")
+        assert stored.status == "INTERRUPTED"
+
+    def test_checkpoint_nonexistent_gen_returns_error(self, sm):
+        result = sm.checkpoint_generation("E999")
+        assert result["status"] == "error"
+        assert "not found" in result["error_message"]
+
+    def test_checkpoint_wrong_status_returns_error(self, sm):
+        self._make_gen(sm, "E10", GenerationStatus.BUILDING)
+        result = sm.checkpoint_generation("E10")
+        assert result["status"] == "error"
+        assert "not DRAINING" in result["error_message"]
+
+    def test_checkpoint_concurrent_saves(self, sm):
+        self._make_gen(sm, "E10", GenerationStatus.DRAINING)
+
+        errors = []
+
+        def save_checkpoint(idx):
+            try:
+                cp = StateCheckpoint(
+                    deployment_id=f"conc-{idx}",
+                    component="engineering",
+                    generation=f"E10-{idx}",
+                    status="WARMING",
+                )
+                sm.checkpoint_store.save_checkpoint(cp)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=save_checkpoint, args=(i,)) for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        all_cps = sm.checkpoint_store.get_all_checkpoints()
+        eng_cps = [cp for cp in all_cps if cp.component == "engineering" and cp.generation.startswith("E10-")]
+        assert len(eng_cps) == 10
+
+
+class TestRestoreTasks:
+    @pytest.fixture
+    def sm(self, runtime_control, checkpoint_store):
+        return StateManager(runtime_control, checkpoint_store)
+
+    def _make_gen(self, sm, name, component, status):
+        gen = Generation(
+            name=name,
+            component=component,
+            status=status,
+            created_at=datetime.datetime.utcnow(),
+        )
+        sm.generations[name] = gen
+        return gen
+
+    def test_restore_loads_from_store(self, sm):
+        self._make_gen(sm, "E9", Component.ENGINEERING, GenerationStatus.DRAINING)
+
+        cp = StateCheckpoint(
+            deployment_id="task-restore",
+            component="engineering",
+            generation="E9",
+            status="INTERRUPTED",
+            metadata={"branch": "feat/restore", "commit": "sha9"},
+        )
+        sm.checkpoint_store.save_checkpoint(cp)
+
+        self._make_gen(sm, "E10", Component.ENGINEERING, GenerationStatus.READY)
+
+        result = sm.restore_tasks("E10")
+        assert result["status"] == "restored"
+        assert result["checkpoints_found"] == 1
+
+    def test_restore_creates_recovery_manifest(self, sm):
+        self._make_gen(sm, "E9", Component.ENGINEERING, GenerationStatus.DRAINING)
+
+        cp = StateCheckpoint(
+            deployment_id="task-manifest",
+            component="engineering",
+            generation="E9",
+            status="INTERRUPTED",
+            metadata={
+                "branch": "feat/login",
+                "commit": "abc123def",
+                "worktree_path": "/tmp/worktree",
+                "last_message": "Implement cache layer",
+            },
+        )
+        sm.checkpoint_store.save_checkpoint(cp)
+
+        self._make_gen(sm, "E10", Component.ENGINEERING, GenerationStatus.READY)
+
+        result = sm.restore_tasks("E10")
+        assert len(result["recovery_manifest"]) == 1
+        entry = result["recovery_manifest"][0]
+        assert entry["task_id"] == "task-manifest"
+        assert entry["branch"] == "feat/login"
+        assert entry["commit"] == "abc123def"
+        assert entry["worktree_path"] == "/tmp/worktree"
+        assert entry["last_message"] == "Implement cache layer"
+
+    def test_restore_filters_by_component(self, sm):
+        self._make_gen(sm, "E9", Component.ENGINEERING, GenerationStatus.DRAINING)
+        self._make_gen(sm, "H5", Component.HERMEES, GenerationStatus.DRAINING)
+
+        for comp, gen, task_id in [
+            ("engineering", "E9", "eng-task"),
+            ("hermees", "H5", "herm-task"),
+        ]:
+            cp = StateCheckpoint(
+                deployment_id=task_id,
+                component=comp,
+                generation=gen,
+                status="INTERRUPTED",
+            )
+            sm.checkpoint_store.save_checkpoint(cp)
+
+        self._make_gen(sm, "E10", Component.ENGINEERING, GenerationStatus.READY)
+
+        result = sm.restore_tasks("E10")
+        assert result["checkpoints_found"] == 1
+        assert result["recovery_manifest"][0]["task_id"] == "eng-task"
+
+    def test_restore_mark_as_restored_in_pg(self, sm):
+        self._make_gen(sm, "E9", Component.ENGINEERING, GenerationStatus.DRAINING)
+
+        cp = StateCheckpoint(
+            deployment_id="task-pg-restore",
+            component="engineering",
+            generation="E9",
+            status="INTERRUPTED",
+        )
+        sm.checkpoint_store.save_checkpoint(cp)
+
+        self._make_gen(sm, "E10", Component.ENGINEERING, GenerationStatus.READY)
+
+        sm.restore_tasks("E10")
+
+        restored_cp = sm.checkpoint_store.get_checkpoint("engineering", "E10")
+        assert restored_cp is not None
+        assert restored_cp.status == "RESTORED"
+
+    def test_restore_nonexistent_gen_returns_error(self, sm):
+        result = sm.restore_tasks("E999")
+        assert result["status"] == "error"
+        assert "not found" in result["error_message"]
+
+    def test_checkpoint_restore_roundtrip(self, sm):
+        self._make_gen(sm, "E9", Component.ENGINEERING, GenerationStatus.DRAINING)
+
+        task_data = {
+            "deployment_id": "roundtrip-task",
+            "component": "engineering",
+            "generation": "E9",
+            "status": "TESTING",
+            "metadata": {
+                "branch": "feat/roundtrip",
+                "commit": "round123",
+                "worktree_path": "/tmp/rt-worktree",
+                "last_message": "Roundtrip test",
+            },
+        }
+        cp = StateCheckpoint(**task_data)
+        sm.checkpoint_store.save_checkpoint(cp)
+
+        result_cp = sm.checkpoint_generation("E9")
+        assert result_cp["status"] == "checkpointed"
+        assert result_cp["checkpoints_saved"] == 1
+
+        stored = sm.checkpoint_store.get_checkpoint("engineering", "E9")
+        assert stored.status == "INTERRUPTED"
+        assert stored.metadata["branch"] == "feat/roundtrip"
+        assert stored.metadata["commit"] == "round123"
+
+        self._make_gen(sm, "E10", Component.ENGINEERING, GenerationStatus.READY)
+
+        result_restore = sm.restore_tasks("E10")
+        assert result_restore["status"] == "restored"
+        assert result_restore["checkpoints_restored"] == 1
+
+        entry = result_restore["recovery_manifest"][0]
+        assert entry["task_id"] == "roundtrip-task"
+        assert entry["branch"] == "feat/roundtrip"
+        assert entry["commit"] == "round123"
+        assert entry["worktree_path"] == "/tmp/rt-worktree"
+        assert entry["last_message"] == "Roundtrip test"

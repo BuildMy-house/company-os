@@ -40,3 +40,6 @@ mcp_servers:
   # URL shape inferred; confirm against the installed hermes binary before production use.
   engineering_manager:
     url: "http://engineering:8000/mcp"
+  companyd_deployment:
+    url: "http://localhost:8001/mcp"
+    description: "Autonomous multi-generation deployment orchestration"

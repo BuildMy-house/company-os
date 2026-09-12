@@ -311,6 +311,7 @@ class StateCheckpoint:
     drain_duration_seconds: int = 0
     created_at: str = ""
     updated_at: str = ""
+    metadata: Optional[Dict] = None
 
     def to_dict(self) -> Dict:
         return dataclasses.asdict(self)
@@ -1251,6 +1252,122 @@ class StateManager:
 
         return actions
 
+    def checkpoint_generation(self, gen_id: str) -> Dict:
+        """Checkpoint all active tasks in a draining generation.
+
+        Called when drain window expires without all tasks completing.
+        """
+        gen = self.generations.get(gen_id)
+        if not gen:
+            return {
+                "status": "error",
+                "generation": gen_id,
+                "error_message": f"Generation {gen_id} not found",
+            }
+        if gen.status != GenerationStatus.DRAINING:
+            return {
+                "status": "error",
+                "generation": gen_id,
+                "error_message": f"Generation {gen_id} is not DRAINING (current: {gen.status.value})",
+            }
+
+        all_checkpoints = self.checkpoint_store.get_all_checkpoints()
+        gen_checkpoints = [
+            cp for cp in all_checkpoints
+            if cp.component == gen.component.value and cp.generation == gen_id
+        ]
+
+        active = [
+            cp for cp in gen_checkpoints
+            if cp.status not in {
+                GenerationStatus.ACTIVE.value,
+                GenerationStatus.RETIRED.value,
+                GenerationStatus.ROLLED_BACK.value,
+                GenerationStatus.FAILED.value,
+            }
+        ]
+
+        count = 0
+        for cp in active:
+            interrupted = StateCheckpoint(
+                deployment_id=cp.deployment_id,
+                component=cp.component,
+                generation=cp.generation,
+                status="INTERRUPTED",
+                self_test_passed=cp.self_test_passed,
+                health_check_passed=cp.health_check_passed,
+                active_tasks_at_drain=cp.active_tasks_at_drain,
+                drain_duration_seconds=cp.drain_duration_seconds,
+                created_at=cp.created_at,
+                metadata=cp.metadata,
+            )
+            self.checkpoint_store.save_checkpoint(interrupted)
+            count += 1
+            self.logger.info(f"Checkpointed task {cp.deployment_id} as INTERRUPTED")
+
+        return {
+            "status": "checkpointed",
+            "generation": gen_id,
+            "checkpoints_saved": count,
+        }
+
+    def restore_tasks(self, new_gen_id: str) -> Dict:
+        """Restore tasks from previous generation's checkpoints.
+
+        Called after new generation passes all tests (READY state).
+        """
+        new_gen = self.generations.get(new_gen_id)
+        if not new_gen:
+            return {
+                "status": "error",
+                "generation": new_gen_id,
+                "error_message": f"Generation {new_gen_id} not found",
+            }
+
+        resumable = self.checkpoint_store.get_resumable()
+        previous_gen_checkpoints = [
+            cp for cp in resumable
+            if cp.component == new_gen.component.value
+            and cp.generation != new_gen_id
+            and cp.status == "INTERRUPTED"
+        ]
+
+        recovery_manifest = []
+        restored = 0
+        for cp in previous_gen_checkpoints:
+            meta = cp.metadata or {}
+            manifest_entry = {
+                "task_id": cp.deployment_id,
+                "branch": meta.get("branch", ""),
+                "commit": meta.get("commit", ""),
+                "worktree_path": meta.get("worktree_path", ""),
+                "last_message": meta.get("last_message", ""),
+            }
+            recovery_manifest.append(manifest_entry)
+
+            restored_checkpoint = StateCheckpoint(
+                deployment_id=cp.deployment_id,
+                component=cp.component,
+                generation=new_gen_id,
+                status="RESTORED",
+                self_test_passed=cp.self_test_passed,
+                health_check_passed=cp.health_check_passed,
+                active_tasks_at_drain=cp.active_tasks_at_drain,
+                drain_duration_seconds=cp.drain_duration_seconds,
+                created_at=cp.created_at,
+                metadata=cp.metadata,
+            )
+            self.checkpoint_store.save_checkpoint(restored_checkpoint)
+            restored += 1
+
+        return {
+            "status": "restored",
+            "generation": new_gen_id,
+            "recovery_manifest": recovery_manifest,
+            "checkpoints_found": len(previous_gen_checkpoints),
+            "checkpoints_restored": restored,
+        }
+
     def persist_to_db(
         self,
         generation: Generation,
@@ -1570,12 +1687,16 @@ class SystemdSocketListener:
                     old_gen.transition(GenerationStatus.DRAINING)
                     old_gen.drain_start = datetime.datetime.utcnow()
 
+            # Restore tasks from previous generation's checkpoints
+            recovery = self.state_manager.restore_tasks(gen.name)
+
             return {
                 "status": "success",
                 "command": "activate",
                 "generation": generation_name,
                 "previous_generation": switch_info.get("previous_generation"),
                 "switched_at": switch_info.get("switched_at"),
+                "recovery_manifest": recovery.get("recovery_manifest", []),
             }
         except GenerationStateError as e:
             return {"status": "error", "command": "activate", "message": str(e)}
@@ -1607,8 +1728,10 @@ class SystemdSocketListener:
 
             # Check if drain already timed out
             if drain_window.is_timed_out():
+                checkpoint_result = self.state_manager.checkpoint_generation(gen.name)
                 self.state_manager.transition(gen, GenerationStatus.DRAIN_TIMEOUT)
                 drain_info = drain_window.finish()
+                drain_info["checkpoint"] = checkpoint_result
 
             deployment = self._find_deployment(gen)
             if deployment:
