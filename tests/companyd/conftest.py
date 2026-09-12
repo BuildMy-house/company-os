@@ -9,13 +9,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from companyd.companyd import (
+    CheckpointStore,
     Component,
+    CompanyDB,
     Deployment,
     DockerLifecycle,
+    DrainWindow,
     Generation,
     GenerationStatus,
     HealthCheck,
     RuntimeControl,
+    StateCheckpoint,
     SyntheticTests,
 )
 
@@ -107,3 +111,21 @@ def runtime_control(tmp_path):
     """RuntimeControl backed by a temp file."""
     state_file = tmp_path / "runtime_control.json"
     return RuntimeControl(state_file=state_file)
+
+
+@pytest.fixture
+def checkpoint_store(tmp_path):
+    """CheckpointStore backed by a temp directory."""
+    return CheckpointStore(state_dir=tmp_path)
+
+
+@pytest.fixture
+def drain_window():
+    """A DrainWindow for Engineering component."""
+    return DrainWindow("E42", Component.ENGINEERING, max_duration_seconds=1800)
+
+
+@pytest.fixture
+def company_db():
+    """CompanyDB without a real connection (stub mode)."""
+    return CompanyDB(dsn=None)

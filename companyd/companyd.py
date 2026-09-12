@@ -20,6 +20,7 @@ import threading
 import time
 import traceback
 import uuid
+import urllib.request
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -246,6 +247,11 @@ class Deployment:
     previous_generation: Optional[str] = None
     rollback_required: bool = False
     rollback_reason: str = ""
+    self_test_passed: bool = False
+    health_check_passed: bool = False
+    active_tasks_at_drain: int = 0
+    drain_duration_seconds: int = 0
+    human_intervention_required: bool = False
 
     def update_status(self, new_status: GenerationStatus) -> None:
         """Update deployment status."""
@@ -279,6 +285,11 @@ class Deployment:
             "previous_generation": self.previous_generation,
             "rollback_required": self.rollback_required,
             "rollback_reason": self.rollback_reason,
+            "self_test_passed": self.self_test_passed,
+            "health_check_passed": self.health_check_passed,
+            "active_tasks_at_drain": self.active_tasks_at_drain,
+            "drain_duration_seconds": self.drain_duration_seconds,
+            "human_intervention_required": self.human_intervention_required,
         }
 
 
@@ -286,11 +297,114 @@ class Deployment:
 # Runtime Control — Atomic Generation Pointer
 # =============================================================================
 
+@dataclass
+class StateCheckpoint:
+    """Snapshot of deployment state at a lifecycle milestone for crash recovery."""
+
+    deployment_id: str
+    component: str
+    generation: str
+    status: str
+    self_test_passed: bool = False
+    health_check_passed: bool = False
+    active_tasks_at_drain: int = 0
+    drain_duration_seconds: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+
+    def to_dict(self) -> Dict:
+        return dataclasses.asdict(self)
+
+
+class CheckpointStore:
+    """Persists deployment checkpoints for crash recovery."""
+
+    def __init__(self, state_dir: Path = COMPANYD_HOME):
+        self.state_dir = state_dir
+        self.logger = logging.getLogger(f"{__name__}.CheckpointStore")
+        self._checkpoints_file = state_dir / "checkpoints.json"
+        self._lock = threading.Lock()
+        self._load()
+
+    def _load(self) -> None:
+        self._checkpoints: Dict[str, Dict] = {}
+        if self._checkpoints_file.exists():
+            try:
+                with open(self._checkpoints_file, "r") as f:
+                    self._checkpoints = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                self._checkpoints = {}
+
+    def _save(self) -> None:
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        lock_file = self._checkpoints_file.with_suffix(".lock")
+        with open(lock_file, "w") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            try:
+                with open(self._checkpoints_file, "w") as f:
+                    json.dump(self._checkpoints, f, indent=2)
+            finally:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+    def save_checkpoint(self, checkpoint: StateCheckpoint) -> None:
+        """Persist a deployment checkpoint atomically."""
+        with self._lock:
+            key = f"{checkpoint.component}:{checkpoint.generation}"
+            checkpoint.updated_at = datetime.datetime.utcnow().isoformat()
+            self._checkpoints[key] = checkpoint.to_dict()
+            self._save()
+            self.logger.info(
+                f"Checkpoint saved: {key} -> {checkpoint.status}"
+            )
+
+    def get_checkpoint(self, component: str, generation: str) -> Optional[StateCheckpoint]:
+        """Retrieve a checkpoint by component and generation."""
+        key = f"{component}:{generation}"
+        data = self._checkpoints.get(key)
+        if data:
+            return StateCheckpoint(**data)
+        return None
+
+    def get_all_checkpoints(self) -> List[StateCheckpoint]:
+        """Return all stored checkpoints."""
+        return [StateCheckpoint(**v) for v in self._checkpoints.values()]
+
+    def remove_checkpoint(self, component: str, generation: str) -> None:
+        """Remove a checkpoint (e.g. after successful retirement)."""
+        with self._lock:
+            key = f"{component}:{generation}"
+            self._checkpoints.pop(key, None)
+            self._save()
+
+    def get_resumable(self) -> List[StateCheckpoint]:
+        """Return checkpoints for deployments that were interrupted mid-flight.
+
+        A deployment is resumable if it's not in a terminal state (ACTIVE, RETIRED,
+        ROLLED_BACK, FAILED) and not in BUILDING (which must restart from scratch).
+        """
+        terminal = {
+            GenerationStatus.ACTIVE.value,
+            GenerationStatus.RETIRED.value,
+            GenerationStatus.ROLLED_BACK.value,
+            GenerationStatus.FAILED.value,
+        }
+        return [
+            cp for cp in self.get_all_checkpoints()
+            if cp.status not in terminal and cp.status != GenerationStatus.BUILDING.value
+        ]
+
+
+# =============================================================================
+# Runtime Control — Atomic Generation Pointer
+# =============================================================================
+
+
 class RuntimeControl:
     """Manages atomic active-generation pointer per component with file-based locking."""
 
     def __init__(self, state_file: Path = COMPANYD_RUNTIME_CONTROL_FILE):
         self.state_file = state_file
+        self.logger = logging.getLogger(f"{__name__}.RuntimeControl")
         self._lock = threading.RLock()
         self._load_or_init()
 
@@ -337,6 +451,191 @@ class RuntimeControl:
             if component.value in self.state:
                 return self.state[component.value]["active_generation"]
         return None
+
+    def get_previous(self, component: Component) -> Optional[str]:
+        """Get the generation that was active before the current one."""
+        with self._lock:
+            entry = self.state.get(component.value)
+            if entry:
+                return entry.get("previous_generation")
+        return None
+
+    def atomic_switch(
+        self,
+        component: Component,
+        new_generation: str,
+    ) -> Dict:
+        """Atomically switch active generation from old to new.
+
+        Uses fcntl.flock on runtime_control.json for zero-downtime pointer swap.
+        Returns the switch record with previous generation for rollback.
+        """
+        with self._lock:
+            old_generation = self.get_active(component)
+            now = datetime.datetime.utcnow().isoformat()
+
+            self.state[component.value] = {
+                "active_generation": new_generation,
+                "previous_generation": old_generation,
+                "updated_at": now,
+                "switched_at": now,
+            }
+            self._save()
+
+            self.logger.info(
+                f"Atomic switch: {component.value} {old_generation} -> {new_generation}"
+            )
+            return {
+                "component": component.value,
+                "previous_generation": old_generation,
+                "new_generation": new_generation,
+                "switched_at": now,
+            }
+
+    def rollback(self, component: Component) -> Optional[Dict]:
+        """Rollback to the previous generation.
+
+        Swaps the pointer back to previous_generation. Returns rollback info
+        or None if no previous generation exists.
+        """
+        with self._lock:
+            entry = self.state.get(component.value)
+            if not entry or not entry.get("previous_generation"):
+                self.logger.warning(
+                    f"No previous generation to rollback for {component.value}"
+                )
+                return None
+
+            previous = entry["previous_generation"]
+            now = datetime.datetime.utcnow().isoformat()
+
+            self.state[component.value] = {
+                "active_generation": previous,
+                "previous_generation": entry["active_generation"],
+                "updated_at": now,
+                "rolled_back_at": now,
+            }
+            self._save()
+
+            self.logger.info(
+                f"Rollback: {component.value} {entry['active_generation']} -> {previous}"
+            )
+            return {
+                "component": component.value,
+                "rolled_back_from": entry["active_generation"],
+                "rolled_back_to": previous,
+                "rolled_back_at": now,
+            }
+
+
+# =============================================================================
+# Drain Window — Graceful Drain with Timeout
+# =============================================================================
+
+
+class DrainWindow:
+    """Manages the drain period for an active generation being replaced.
+
+    During a drain window:
+    - No new work is routed to the old generation
+    - Existing tasks are allowed to complete
+    - After timeout, remaining tasks are forcefully abandoned
+    """
+
+    def __init__(
+        self,
+        generation_name: str,
+        component: Component,
+        max_duration_seconds: int = 1800,
+    ):
+        self.generation_name = generation_name
+        self.component = component
+        self.max_duration_seconds = max_duration_seconds
+        self.logger = logging.getLogger(f"{__name__}.DrainWindow")
+        self.start_time: Optional[datetime.datetime] = None
+        self.end_time: Optional[datetime.datetime] = None
+        self.active_tasks_at_start: int = 0
+        self.completed_tasks: int = 0
+        self.timed_out: bool = False
+        self._lock = threading.Lock()
+
+    def begin(self, active_tasks: int = 0) -> Dict:
+        """Start the drain window. Returns initial drain state."""
+        with self._lock:
+            self.start_time = datetime.datetime.utcnow()
+            self.active_tasks_at_start = active_tasks
+            self.completed_tasks = 0
+            self.timed_out = False
+            self.logger.info(
+                f"Drain started for {self.component.value}/{self.generation_name} "
+                f"with {active_tasks} active tasks, timeout={self.max_duration_seconds}s"
+            )
+            return {
+                "status": "draining",
+                "generation": self.generation_name,
+                "component": self.component.value,
+                "start_time": self.start_time.isoformat(),
+                "max_duration_seconds": self.max_duration_seconds,
+                "active_tasks_at_start": active_tasks,
+            }
+
+    def record_task_completed(self) -> None:
+        """Record that one task has completed during drain."""
+        with self._lock:
+            self.completed_tasks += 1
+            self.logger.info(
+                f"Task completed during drain: {self.completed_tasks}/{self.active_tasks_at_start}"
+            )
+
+    def is_complete(self) -> bool:
+        """Check if all tasks have drained."""
+        with self._lock:
+            if self.active_tasks_at_start == 0:
+                return True
+            return self.completed_tasks >= self.active_tasks_at_start
+
+    def is_timed_out(self) -> bool:
+        """Check if the drain window has exceeded max duration."""
+        with self._lock:
+            if self.start_time is None:
+                return False
+            elapsed = (datetime.datetime.utcnow() - self.start_time).total_seconds()
+            if elapsed >= self.max_duration_seconds and not self.timed_out:
+                self.timed_out = True
+                self.logger.warning(
+                    f"Drain timed out for {self.component.value}/{self.generation_name} "
+                    f"after {elapsed:.0f}s ({self.completed_tasks}/{self.active_tasks_at_start} tasks completed)"
+                )
+            return self.timed_out
+
+    def finish(self) -> Dict:
+        """End the drain window and return summary."""
+        with self._lock:
+            self.end_time = datetime.datetime.utcnow()
+            # Check timeout before finishing
+            if self.start_time and not self.timed_out:
+                elapsed_check = (self.end_time - self.start_time).total_seconds()
+                if elapsed_check >= self.max_duration_seconds:
+                    self.timed_out = True
+            elapsed = 0
+            if self.start_time:
+                elapsed = (self.end_time - self.start_time).total_seconds()
+            self.logger.info(
+                f"Drain finished: {self.component.value}/{self.generation_name} "
+                f"timed_out={self.timed_out}, tasks={self.completed_tasks}/{self.active_tasks_at_start}, "
+                f"elapsed={elapsed:.0f}s"
+            )
+            return {
+                "status": "drain_timeout" if self.timed_out else "drained",
+                "generation": self.generation_name,
+                "component": self.component.value,
+                "start_time": self.start_time.isoformat() if self.start_time else None,
+                "end_time": self.end_time.isoformat(),
+                "elapsed_seconds": elapsed,
+                "active_tasks_at_start": self.active_tasks_at_start,
+                "completed_tasks": self.completed_tasks,
+                "timed_out": self.timed_out,
+            }
 
 
 # =============================================================================
@@ -514,8 +813,6 @@ class HealthCheck:
         start = time.time()
 
         try:
-            import urllib.request
-
             response = urllib.request.urlopen(url, timeout=timeout_sec)
             elapsed_ms = (time.time() - start) * 1000
 
@@ -542,14 +839,120 @@ class HealthCheck:
 
 
 # =============================================================================
+# Company Database — Hermees Reconciliation Queries
+# =============================================================================
+
+
+class CompanyDB:
+    """Lightweight Postgres connector for Hermees state reconciliation checks.
+
+    Uses standard psycopg2 if available; falls back to no-op stubs if not installed.
+    """
+
+    def __init__(self, dsn: Optional[str] = None):
+        self.logger = logging.getLogger(f"{__name__}.CompanyDB")
+        self._dsn = dsn or os.environ.get("COMPANY_DATABASE_URL")
+        self._conn = None
+
+    def connect(self) -> bool:
+        """Attempt to connect to Postgres. Returns True if successful."""
+        if not self._dsn:
+            self.logger.info("No COMPANY_DATABASE_URL set, using stub checks")
+            return False
+        try:
+            import psycopg2
+            self._conn = psycopg2.connect(self._dsn)
+            self._conn.autocommit = True
+            self.logger.info("Connected to Company database")
+            return True
+        except ImportError:
+            self.logger.warning("psycopg2 not installed, using stub checks")
+            return False
+        except Exception as e:
+            self.logger.warning(f"Failed to connect to database: {e}")
+            return False
+
+    def check_active_deployments(self, component: str) -> Dict:
+        """Check if there are other active deployments for this component."""
+        if not self._conn:
+            return {"connected": False, "active_count": 0, "status": "stub"}
+        try:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM deployments WHERE component = %s AND status = 'ACTIVE'",
+                (component,),
+            )
+            count = cur.fetchone()[0]
+            return {"connected": True, "active_count": count, "status": "ok"}
+        except Exception as e:
+            return {"connected": True, "active_count": 0, "status": f"error: {e}"}
+
+    def check_recent_decisions(self, component: str, hours: int = 24) -> Dict:
+        """Check recent decisions from the observer schema."""
+        if not self._conn:
+            return {"connected": False, "count": 0, "status": "stub"}
+        try:
+            cur = self._conn.cursor()
+            cur.execute(
+                """SELECT COUNT(*) FROM observer.decisions
+                   WHERE created_at > NOW() - INTERVAL '%s hours'""",
+                (hours,),
+            )
+            count = cur.fetchone()[0]
+            return {"connected": True, "count": count, "status": "ok"}
+        except Exception as e:
+            return {"connected": True, "count": 0, "status": f"error: {e}"}
+
+    def check_active_experiments(self) -> Dict:
+        """Check for active experiments that might conflict with deployment."""
+        if not self._conn:
+            return {"connected": False, "count": 0, "status": "stub"}
+        try:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM observer.experiments WHERE status = 'active'"
+            )
+            count = cur.fetchone()[0]
+            return {"connected": True, "count": count, "status": "ok"}
+        except Exception as e:
+            return {"connected": True, "count": 0, "status": f"error: {e}"}
+
+    def check_recent_failures(self, component: str, hours: int = 1) -> Dict:
+        """Check for recent failures that might indicate instability."""
+        if not self._conn:
+            return {"connected": False, "count": 0, "status": "stub"}
+        try:
+            cur = self._conn.cursor()
+            cur.execute(
+                """SELECT COUNT(*) FROM observer.failures
+                   WHERE created_at > NOW() - INTERVAL '%s hours'""",
+                (hours,),
+            )
+            count = cur.fetchone()[0]
+            return {"connected": True, "count": count, "status": "ok"}
+        except Exception as e:
+            return {"connected": True, "count": 0, "status": f"error: {e}"}
+
+    def close(self) -> None:
+        if self._conn:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+
+
+# =============================================================================
 # Synthetic Tests
 # =============================================================================
+
 
 class SyntheticTests:
     """Runs end-to-end validation of a new generation."""
 
-    def __init__(self):
+    def __init__(self, company_db: Optional[CompanyDB] = None):
         self.logger = logging.getLogger(f"{__name__}.SyntheticTests")
+        self.company_db = company_db
 
     def engineering_self_test(self, generation: Generation) -> Dict:
         """Simulate a small task dispatch to validate Engineering generation."""
@@ -601,7 +1004,12 @@ class SyntheticTests:
         return test_results
 
     def hermees_reconciliation(self, generation: Generation) -> Dict:
-        """Validate Hermees state coherence and readiness for handover."""
+        """Validate Hermees state coherence and readiness for handover.
+
+        Checks Company PG for active deployments, recent decisions, active
+        experiments, and recent failures. If CompanyDB is not connected,
+        falls back to stub checks that always pass.
+        """
         self.logger.info(f"Running Hermees reconciliation for {generation.name}")
 
         test_results = {
@@ -619,20 +1027,76 @@ class SyntheticTests:
             test_results["checks"]["health_check"] = health_result["status"] == "OK"
             test_results["details"] += f"Health check: {health_result['status']}\n"
 
-            # Check 2: Company state loading (would verify state can be loaded from PG)
-            test_results["checks"]["company_state_load"] = True
-            test_results["details"] += "Company state load: STUB (would verify PG connectivity)\n"
+            # Check 2: Company state loading — verify PG connectivity
+            if self.company_db and self.company_db._conn:
+                try:
+                    cur = self.company_db._conn.cursor()
+                    cur.execute("SELECT 1")
+                    test_results["checks"]["company_state_load"] = True
+                    test_results["details"] += "Company state load: PG connected\n"
+                except Exception as e:
+                    test_results["checks"]["company_state_load"] = False
+                    test_results["details"] += f"Company state load: FAILED ({e})\n"
+            else:
+                test_results["checks"]["company_state_load"] = True
+                test_results["details"] += "Company state load: STUB (no PG configured)\n"
 
-            # Check 3: Active projects verification
-            test_results["checks"]["active_projects"] = True
-            test_results["details"] += "Active projects: STUB (would enumerate projects)\n"
+            # Check 3: Active deployments — no conflicting active deployments
+            if self.company_db:
+                deploy_check = self.company_db.check_active_deployments("engineering")
+                if deploy_check["connected"]:
+                    conflict = deploy_check["active_count"] > 0
+                    test_results["checks"]["active_deployments"] = not conflict
+                    test_results["details"] += (
+                        f"Active deployments: {deploy_check['active_count']} "
+                        f"({'CONFLICT' if conflict else 'OK'})\n"
+                    )
+                else:
+                    test_results["checks"]["active_deployments"] = True
+                    test_results["details"] += "Active deployments: STUB (no PG)\n"
+            else:
+                test_results["checks"]["active_deployments"] = True
+                test_results["details"] += "Active deployments: STUB (no CompanyDB)\n"
 
-            # Check 4: Engineering state verification
-            test_results["checks"]["engineering_state"] = True
-            test_results["details"] += "Engineering state: STUB (would verify compatibility)\n"
+            # Check 4: Recent failures — reject if critical failures in last hour
+            if self.company_db:
+                fail_check = self.company_db.check_recent_failures("hermees", hours=1)
+                if fail_check["connected"]:
+                    has_failures = fail_check["count"] > 0
+                    test_results["checks"]["recent_failures"] = not has_failures
+                    test_results["details"] += (
+                        f"Recent failures: {fail_check['count']} "
+                        f"({'REJECT' if has_failures else 'OK'})\n"
+                    )
+                else:
+                    test_results["checks"]["recent_failures"] = True
+                    test_results["details"] += "Recent failures: STUB (no PG)\n"
+            else:
+                test_results["checks"]["recent_failures"] = True
+                test_results["details"] += "Recent failures: STUB (no CompanyDB)\n"
 
-            # Overall: handover accepted if health check passed
-            test_results["handover_accepted"] = test_results["checks"]["health_check"]
+            # Check 5: Active experiments — warn but don't block
+            if self.company_db:
+                exp_check = self.company_db.check_active_experiments()
+                if exp_check["connected"]:
+                    test_results["checks"]["active_experiments"] = True
+                    test_results["details"] += (
+                        f"Active experiments: {exp_check['count']} (advisory)\n"
+                    )
+                else:
+                    test_results["checks"]["active_experiments"] = True
+                    test_results["details"] += "Active experiments: STUB (no PG)\n"
+            else:
+                test_results["checks"]["active_experiments"] = True
+                test_results["details"] += "Active experiments: STUB (no CompanyDB)\n"
+
+            # Overall: handover accepted if health check AND core PG checks pass
+            test_results["handover_accepted"] = all([
+                test_results["checks"]["health_check"],
+                test_results["checks"]["company_state_load"],
+                test_results["checks"]["active_deployments"],
+                test_results["checks"]["recent_failures"],
+            ])
 
             self.logger.info(
                 f"Hermees reconciliation for {generation.name}: "
@@ -653,8 +1117,9 @@ class SyntheticTests:
 class StateManager:
     """Orchestrates generation lifecycle and state transitions."""
 
-    def __init__(self, runtime_control: RuntimeControl):
+    def __init__(self, runtime_control: RuntimeControl, checkpoint_store: Optional[CheckpointStore] = None):
         self.runtime_control = runtime_control
+        self.checkpoint_store = checkpoint_store or CheckpointStore()
         self.logger = logging.getLogger(f"{__name__}.StateManager")
         self.generations: Dict[str, Generation] = {}
         self.deployments: Dict[str, Deployment] = {}
@@ -692,6 +1157,99 @@ class StateManager:
     def get_deployment_history(self, component: Component) -> List[Deployment]:
         """Get all deployments for a component."""
         return [d for d in self.deployments.values() if d.component == component]
+
+    def create_deployment(
+        self,
+        component: Component,
+        git_sha: str,
+        docker_image: str = "",
+        generation_name: Optional[str] = None,
+        previous_generation: Optional[str] = None,
+    ) -> Tuple[Generation, Deployment]:
+        """Create a new generation and its deployment record, save checkpoint."""
+        gen = self.create_generation(component, git_sha, generation_name)
+        deployment = Deployment(
+            id=str(uuid.uuid4()),
+            component=component,
+            generation=gen,
+            git_sha=git_sha,
+            docker_image=docker_image or f"{component.value}:{gen.name}",
+            status=gen.status,
+            created_at=datetime.datetime.utcnow(),
+            previous_generation=previous_generation,
+        )
+        self.deployments[deployment.id] = deployment
+
+        checkpoint = StateCheckpoint(
+            deployment_id=deployment.id,
+            component=component.value,
+            generation=gen.name,
+            status=gen.status.value,
+            created_at=datetime.datetime.utcnow().isoformat(),
+        )
+        self.checkpoint_store.save_checkpoint(checkpoint)
+
+        self.logger.info(f"Created deployment {deployment.id} for {gen.name}")
+        return gen, deployment
+
+    def resume_interrupted_deployments(self) -> List[Dict]:
+        """On startup, resume deployments that were interrupted mid-flight.
+
+        Returns a list of resume actions taken.
+        """
+        resumable = self.checkpoint_store.get_resumable()
+        actions = []
+
+        for cp in resumable:
+            component = Component(cp.component)
+            self.logger.info(
+                f"Resuming interrupted deployment: {cp.component}/{cp.generation} "
+                f"at status {cp.status}"
+            )
+
+            # Recreate the generation from checkpoint
+            gen = Generation(
+                name=cp.generation,
+                component=component,
+                status=GenerationStatus(cp.status),
+                created_at=datetime.datetime.fromisoformat(cp.created_at),
+            )
+            self.generations[cp.generation] = gen
+
+            # Determine resume action based on where it stopped
+            action = {
+                "generation": cp.generation,
+                "component": cp.component,
+                "stopped_at": cp.status,
+                "action": "none",
+            }
+
+            status = GenerationStatus(cp.status)
+            if status in (GenerationStatus.STARTING, GenerationStatus.WARMING):
+                # Was mid-start: retry from STARTING
+                action["action"] = "retry_start"
+            elif status == GenerationStatus.TESTING:
+                # Was mid-test: retry tests
+                action["action"] = "retry_test"
+            elif status == GenerationStatus.DRAINING:
+                # Was mid-drain: check if timed out or finish drain
+                if cp.drain_duration_seconds > 0:
+                    action["action"] = "check_drain_timeout"
+                else:
+                    action["action"] = "retry_drain"
+            elif status in (
+                GenerationStatus.TEST_FAILED,
+                GenerationStatus.ACTIVATION_FAILED,
+                GenerationStatus.BUILD_FAILED,
+            ):
+                # Failed states: rollback
+                action["action"] = "rollback"
+                gen.transition(GenerationStatus.ROLLED_BACK)
+
+            actions.append(action)
+            self.logger.info(f"Resume action for {cp.generation}: {action['action']}")
+
+        return actions
 
     def persist_to_db(
         self,
@@ -814,69 +1372,295 @@ class SystemdSocketListener:
             return self._handle_status(args)
         elif command == "logs":
             return self._handle_logs(args)
+        elif command == "rollback":
+            return self._handle_rollback(args)
         else:
             return {"status": "error", "message": f"Unknown command: {command}"}
 
     def _handle_build(self, args: Dict) -> Dict:
-        """Phase 1: Stub for build command."""
-        return {
-            "status": "success",
-            "command": "build",
-            "message": "Build command received (stub for Phase 1)",
-            "component": args.get("component"),
-            "git_sha": args.get("git_sha"),
-        }
+        """Build a new generation image from a git SHA."""
+        component_str = args.get("component")
+        git_sha = args.get("git_sha")
+        if not component_str or not git_sha:
+            return {"status": "error", "message": "Requires 'component' and 'git_sha'"}
+
+        try:
+            component = Component(component_str)
+        except ValueError:
+            return {"status": "error", "message": f"Unknown component: {component_str}"}
+
+        try:
+            gen, deployment = self.state_manager.create_deployment(
+                component=component,
+                git_sha=git_sha,
+                previous_generation=self.state_manager.runtime_control.get_active(component),
+            )
+
+            docker = DockerLifecycle()
+            image_tag = docker.build(component, git_sha, gen.name)
+
+            gen.build_start = datetime.datetime.utcnow()
+            deployment.build_start = gen.build_start
+            self.state_manager.transition(gen, GenerationStatus.STARTING)
+            deployment.update_status(GenerationStatus.STARTING)
+
+            self.state_manager.checkpoint_store.save_checkpoint(StateCheckpoint(
+                deployment_id=deployment.id,
+                component=component.value,
+                generation=gen.name,
+                status=gen.status.value,
+                created_at=deployment.created_at.isoformat(),
+            ))
+
+            return {
+                "status": "success",
+                "command": "build",
+                "generation": gen.name,
+                "image_tag": image_tag,
+                "git_sha": git_sha,
+            }
+        except DockerError as e:
+            return {"status": "error", "command": "build", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "command": "build", "message": str(e)}
 
     def _handle_start(self, args: Dict) -> Dict:
-        """Phase 1: Stub for start command."""
-        return {
-            "status": "success",
-            "command": "start",
-            "message": "Start command received (stub for Phase 1)",
-            "generation": args.get("generation"),
-            "mode": args.get("mode", "WARMING"),
-        }
+        """Start a generation container in WARMING mode."""
+        generation_name = args.get("generation")
+        mode = args.get("mode", "WARMING")
+        port = args.get("port", 8000)
+
+        if not generation_name:
+            return {"status": "error", "message": "Requires 'generation'"}
+
+        gen = self.state_manager.generations.get(generation_name)
+        if not gen:
+            return {"status": "error", "message": f"Generation {generation_name} not found"}
+
+        try:
+            docker = DockerLifecycle()
+            container_id = docker.start(gen, mode=mode, port=port)
+
+            gen.build_end = datetime.datetime.utcnow()
+            gen.build_start = gen.build_start or gen.build_end
+            self.state_manager.transition(gen, GenerationStatus.WARMING)
+
+            deployment = self._find_deployment(gen)
+            if deployment:
+                deployment.build_end = gen.build_end
+                deployment.update_status(GenerationStatus.WARMING)
+                self.state_manager.checkpoint_store.save_checkpoint(StateCheckpoint(
+                    deployment_id=deployment.id,
+                    component=gen.component.value,
+                    generation=gen.name,
+                    status=gen.status.value,
+                    health_check_passed=False,
+                    created_at=deployment.created_at.isoformat(),
+                ))
+
+            return {
+                "status": "success",
+                "command": "start",
+                "generation": generation_name,
+                "container_id": container_id,
+                "mode": mode,
+            }
+        except DockerError as e:
+            return {"status": "error", "command": "start", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "command": "start", "message": str(e)}
 
     def _handle_test(self, args: Dict) -> Dict:
-        """Phase 1: Stub for test command."""
-        return {
-            "status": "success",
-            "command": "test",
-            "message": "Test command received (stub for Phase 1)",
-            "generation": args.get("generation"),
-        }
+        """Run synthetic tests on a generation."""
+        generation_name = args.get("generation")
+        if not generation_name:
+            return {"status": "error", "message": "Requires 'generation'"}
+
+        gen = self.state_manager.generations.get(generation_name)
+        if not gen:
+            return {"status": "error", "message": f"Generation {generation_name} not found"}
+
+        try:
+            self.state_manager.transition(gen, GenerationStatus.TESTING)
+            gen.test_start = datetime.datetime.utcnow()
+
+            tests = SyntheticTests()
+            if gen.component == Component.ENGINEERING:
+                results = tests.engineering_self_test(gen)
+            else:
+                results = tests.hermees_reconciliation(gen)
+
+            gen.test_end = datetime.datetime.utcnow()
+            passed = results.get("passed", False) or results.get("handover_accepted", False)
+
+            if passed:
+                self.state_manager.transition(gen, GenerationStatus.READY)
+            else:
+                self.state_manager.transition(gen, GenerationStatus.TEST_FAILED)
+
+            deployment = self._find_deployment(gen)
+            if deployment:
+                deployment.test_start = gen.test_start
+                deployment.test_end = gen.test_end
+                deployment.test_passed = passed
+                deployment.self_test_passed = results.get("checks", {}).get("health_check", False)
+                deployment.health_check_passed = results.get("checks", {}).get("health_check", False)
+                deployment.test_summary = json.dumps(results.get("checks", {}))
+                deployment.update_status(gen.status)
+                self.state_manager.checkpoint_store.save_checkpoint(StateCheckpoint(
+                    deployment_id=deployment.id,
+                    component=gen.component.value,
+                    generation=gen.name,
+                    status=gen.status.value,
+                    self_test_passed=deployment.self_test_passed,
+                    health_check_passed=deployment.health_check_passed,
+                    created_at=deployment.created_at.isoformat(),
+                ))
+
+            return {
+                "status": "success",
+                "command": "test",
+                "generation": generation_name,
+                "passed": passed,
+                "checks": results.get("checks", {}),
+                "new_status": gen.status.value,
+            }
+        except GenerationStateError as e:
+            return {"status": "error", "command": "test", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "command": "test", "message": str(e)}
 
     def _handle_activate(self, args: Dict) -> Dict:
-        """Phase 1: Stub for activate command."""
-        return {
-            "status": "success",
-            "command": "activate",
-            "message": "Activate command received (stub for Phase 1)",
-            "generation": args.get("generation"),
-        }
+        """Atomically switch active generation pointer."""
+        generation_name = args.get("generation")
+        if not generation_name:
+            return {"status": "error", "message": "Requires 'generation'"}
+
+        gen = self.state_manager.generations.get(generation_name)
+        if not gen:
+            return {"status": "error", "message": f"Generation {generation_name} not found"}
+
+        try:
+            # Atomic switch via RuntimeControl
+            switch_info = self.state_manager.runtime_control.atomic_switch(
+                gen.component, gen.name
+            )
+
+            gen.activate_time = datetime.datetime.utcnow()
+            self.state_manager.transition(gen, GenerationStatus.ACTIVE)
+
+            deployment = self._find_deployment(gen)
+            if deployment:
+                deployment.activate_time = gen.activate_time
+                deployment.update_status(GenerationStatus.ACTIVE)
+                self.state_manager.checkpoint_store.save_checkpoint(StateCheckpoint(
+                    deployment_id=deployment.id,
+                    component=gen.component.value,
+                    generation=gen.name,
+                    status=gen.status.value,
+                    health_check_passed=deployment.health_check_passed,
+                    created_at=deployment.created_at.isoformat(),
+                ))
+
+            # Start draining the old generation
+            old_name = switch_info.get("previous_generation")
+            if old_name and old_name in self.state_manager.generations:
+                old_gen = self.state_manager.generations[old_name]
+                if old_gen.status == GenerationStatus.ACTIVE:
+                    old_gen.transition(GenerationStatus.DRAINING)
+                    old_gen.drain_start = datetime.datetime.utcnow()
+
+            return {
+                "status": "success",
+                "command": "activate",
+                "generation": generation_name,
+                "previous_generation": switch_info.get("previous_generation"),
+                "switched_at": switch_info.get("switched_at"),
+            }
+        except GenerationStateError as e:
+            return {"status": "error", "command": "activate", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "command": "activate", "message": str(e)}
 
     def _handle_drain(self, args: Dict) -> Dict:
-        """Phase 1: Stub for drain command."""
-        return {
-            "status": "success",
-            "command": "drain",
-            "message": "Drain command received (stub for Phase 1)",
-            "generation": args.get("generation"),
-            "max_duration": args.get("max_duration", 1800),
-        }
+        """Drain an active generation with timeout."""
+        generation_name = args.get("generation")
+        max_duration = args.get("max_duration", 1800)
+
+        if not generation_name:
+            return {"status": "error", "message": "Requires 'generation'"}
+
+        gen = self.state_manager.generations.get(generation_name)
+        if not gen:
+            return {"status": "error", "message": f"Generation {generation_name} not found"}
+
+        try:
+            # Start drain if not already draining
+            if gen.status == GenerationStatus.ACTIVE:
+                self.state_manager.transition(gen, GenerationStatus.DRAINING)
+                gen.drain_start = datetime.datetime.utcnow()
+
+            drain_window = DrainWindow(
+                gen.name, gen.component, max_duration_seconds=max_duration
+            )
+            drain_info = drain_window.begin(active_tasks=args.get("active_tasks", 0))
+
+            # Check if drain already timed out
+            if drain_window.is_timed_out():
+                self.state_manager.transition(gen, GenerationStatus.DRAIN_TIMEOUT)
+                drain_info = drain_window.finish()
+
+            deployment = self._find_deployment(gen)
+            if deployment:
+                deployment.drain_start = gen.drain_start
+                deployment.active_tasks_at_drain = drain_info.get("active_tasks_at_start", 0)
+                deployment.drain_duration_seconds = max_duration
+                deployment.update_status(gen.status)
+
+            return {
+                "status": "success",
+                "command": "drain",
+                "generation": generation_name,
+                "drain_info": drain_info,
+            }
+        except GenerationStateError as e:
+            return {"status": "error", "command": "drain", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "command": "drain", "message": str(e)}
 
     def _handle_status(self, args: Dict) -> Dict:
-        """Phase 1: Return status of a generation or component."""
+        """Return status of a generation, component, or full system overview."""
         component = args.get("component")
         generation_name = args.get("generation")
+        overview = args.get("overview", False)
+
+        if overview:
+            result = {"status": "success", "overview": {}}
+            for comp in Component:
+                active = self.state_manager.runtime_control.get_active(comp)
+                gens = [
+                    g.to_dict()
+                    for g in self.state_manager.generations.values()
+                    if g.component == comp
+                ]
+                result["overview"][comp.value] = {
+                    "active_generation": active,
+                    "total_generations": len(gens),
+                    "generations": gens,
+                }
+            return result
 
         if generation_name:
             if generation_name in self.state_manager.generations:
                 gen = self.state_manager.generations[generation_name]
-                return {
+                deployment = self._find_deployment(gen)
+                result = {
                     "status": "success",
                     "generation": gen.to_dict(),
                 }
+                if deployment:
+                    result["deployment"] = deployment.to_dict()
+                return result
             else:
                 return {
                     "status": "error",
@@ -885,26 +1669,96 @@ class SystemdSocketListener:
 
         if component:
             component_obj = Component(component)
-            gens = [g for g in self.state_manager.generations.values() if g.component == component_obj]
+            gens = [
+                g.to_dict()
+                for g in self.state_manager.generations.values()
+                if g.component == component_obj
+            ]
+            active = self.state_manager.runtime_control.get_active(component_obj)
             return {
                 "status": "success",
                 "component": component,
-                "generations": [g.to_dict() for g in gens],
+                "active_generation": active,
+                "generations": gens,
             }
 
         return {
             "status": "error",
-            "message": "Must specify either component or generation",
+            "message": "Must specify component, generation, or overview=true",
         }
 
     def _handle_logs(self, args: Dict) -> Dict:
-        """Phase 1: Stub for logs command."""
+        """Get recent container logs for a generation."""
+        generation_name = args.get("generation")
+        lines = args.get("lines", 100)
+
+        if not generation_name:
+            return {"status": "error", "message": "Requires 'generation'"}
+
+        gen = self.state_manager.generations.get(generation_name)
+        if not gen:
+            return {"status": "error", "message": f"Generation {generation_name} not found"}
+
+        try:
+            docker = DockerLifecycle()
+            logs = docker.logs(gen, lines=lines)
+            return {
+                "status": "success",
+                "command": "logs",
+                "generation": generation_name,
+                "lines": lines,
+                "logs": logs,
+            }
+        except Exception as e:
+            return {"status": "error", "command": "logs", "message": str(e)}
+
+    def _find_deployment(self, gen: Generation) -> Optional[Deployment]:
+        """Find the deployment record for a generation."""
+        for d in self.state_manager.deployments.values():
+            if d.generation.name == gen.name and d.component == gen.component:
+                return d
+        return None
+
+    def _handle_rollback(self, args: Dict) -> Dict:
+        """Rollback to the previous generation."""
+        component_str = args.get("component")
+        generation_name = args.get("generation")
+
+        if not component_str:
+            return {"status": "error", "message": "Requires 'component'"}
+
+        try:
+            component = Component(component_str)
+        except ValueError:
+            return {"status": "error", "message": f"Unknown component: {component_str}"}
+
+        # If a specific generation is named, roll back that one
+        if generation_name:
+            gen = self.state_manager.generations.get(generation_name)
+            if gen:
+                try:
+                    gen.transition(GenerationStatus.ROLLED_BACK)
+                except GenerationStateError:
+                    # Force rollback for terminal failed states
+                    if gen.status in (
+                        GenerationStatus.TEST_FAILED,
+                        GenerationStatus.ACTIVATION_FAILED,
+                        GenerationStatus.BUILD_FAILED,
+                        GenerationStatus.DRAIN_TIMEOUT,
+                    ):
+                        gen.status = GenerationStatus.ROLLED_BACK
+                    else:
+                        return {"status": "error", "message": f"Cannot rollback {generation_name} from {gen.status}"}
+
+        # Atomic rollback via RuntimeControl
+        rollback_info = self.state_manager.runtime_control.rollback(component)
+        if not rollback_info:
+            return {"status": "error", "message": f"No previous generation to rollback for {component_str}"}
+
         return {
             "status": "success",
-            "command": "logs",
-            "message": "Logs command received (stub for Phase 1)",
-            "generation": args.get("generation"),
-            "lines": args.get("lines", 100),
+            "command": "rollback",
+            "rollback": rollback_info,
         }
 
 
@@ -916,6 +1770,7 @@ AVAILABLE_COMMANDS = {
     "drain": "Drain an active generation (finish existing tasks, then retire)",
     "status": "Get status of a generation or all generations for a component",
     "logs": "Get recent container logs for a generation",
+    "rollback": "Rollback to the previous generation",
 }
 
 
@@ -965,7 +1820,15 @@ def main() -> int:
 
     # Initialize state management
     runtime_control = RuntimeControl()
-    state_manager = StateManager(runtime_control)
+    checkpoint_store = CheckpointStore()
+    state_manager = StateManager(runtime_control, checkpoint_store)
+
+    # Resume any interrupted deployments from crash recovery
+    resume_actions = state_manager.resume_interrupted_deployments()
+    if resume_actions:
+        logger.info(f"Resumed {len(resume_actions)} interrupted deployment(s)")
+        for action in resume_actions:
+            logger.info(f"  {action['generation']}: {action['action']}")
 
     # Load runtime control state
     for component in Component:
