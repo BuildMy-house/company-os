@@ -2,7 +2,7 @@
 
 Small, portable control-plane foundation for the autonomous Homely workflow.
 It keeps exact company state in Postgres (the `company`/`observer` schemas) and emits separate JSONL telemetry. The
-R2, Slack, Hermes, Claude, and OpenCode integrations are intentionally
+R2, Hermes, Claude, and OpenCode integrations are intentionally
 adapters/configuration points until credentials and deployment policy exist.
 
 ## Runtime direction
@@ -122,7 +122,9 @@ docker compose run --rm company-ops status
 ```
 
 The image installs Hermes and includes a credential-free provider config;
-provide `TOKENROUTER_API_KEY` through `.env` at runtime. The MCP package is
+provide `OPENCODE_GO_API_KEY`, `ZAI_CODING_PLAN_API_KEY`, and
+`TOKENROUTER_API_KEY` (free tier — prefer it) through `.env` at runtime. The
+MCP package is
 downloaded by `npx` only when a worker is actually executed. Mount the
 repository and provide secrets at runtime. Do not bake credentials into the
 image. `scripts/git-backup.sh` commits and pushes a backup branch when

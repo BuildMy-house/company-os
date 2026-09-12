@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ── Infisical Secrets Injection ─────────────────────────────────────────────
-# If INFISICAL_TOKEN is set, fetch secrets from Infisical workspace and inject
-# them into the environment. Otherwise, proceed with .env or existing env vars.
-if [ -n "${INFISICAL_TOKEN:-}" ]; then
-  echo "[infisical] Fetching secrets from Infisical workspace..."
+# Requires INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/SECRET (+ HOST_URL/PROJECT_ID).
+# Fetches every secret in the project/environment and injects them into the
+# environment. Actual credentials (AXIOM_TOKEN, GITHUB_APP_*, etc.) live only
+# in Infisical, never in .env or git — only the bootstrap identity does.
+if [ -n "${INFISICAL_UNIVERSAL_AUTH_CLIENT_ID:-}" ]; then
+  echo "[infisical] Fetching secrets from Infisical (${INFISICAL_ENV:-dev})..."
   SECRETS_FILE=$(mktemp)
   trap "rm -f $SECRETS_FILE" EXIT
 
-  if infisical export --token "$INFISICAL_TOKEN" > "$SECRETS_FILE" 2>/dev/null; then
+  if node "$SCRIPT_DIR/fetch-infisical-secrets.js" > "$SECRETS_FILE"; then
     echo "[infisical] Secrets loaded successfully"
     set -a
     source "$SECRETS_FILE"
@@ -19,7 +23,35 @@ if [ -n "${INFISICAL_TOKEN:-}" ]; then
     exit 1
   fi
 else
-  echo "[infisical] INFISICAL_TOKEN not set; using .env or existing environment variables"
+  echo "[infisical] INFISICAL_UNIVERSAL_AUTH_CLIENT_ID not set; using .env or existing environment variables"
+fi
+
+# ── Agent MCP Configuration (Axiom, Infisical) ──────────────────────────────
+# Wires the fetched credentials into user-scope MCP config for every agent
+# (Claude, OpenCode, Codex), so any repo the container works in gets the same
+# tool access regardless of that repo's own committed config.
+echo "[mcp-config] Generating axiom/infisical MCP config for Claude and OpenCode..."
+node "$SCRIPT_DIR/generate-agent-mcp-config.js"
+
+if [ -n "${AXIOM_TOKEN:-}" ]; then
+  codex mcp add axiom \
+    --env AXIOM_TOKEN="$AXIOM_TOKEN" \
+    --env AXIOM_ORG_ID="${AXIOM_ORG_ID:-}" \
+    --env AXIOM_URL="${AXIOM_ENDPOINT:-https://api.axiom.co}" \
+    -- npx -y mcp-server-axiom >/dev/null 2>&1 \
+    && echo "[mcp-config] wrote axiom to codex" \
+    || echo "[mcp-config] WARN: codex mcp add axiom failed" >&2
+fi
+
+if [ -n "${INFISICAL_UNIVERSAL_AUTH_CLIENT_ID:-}" ]; then
+  codex mcp add infisical \
+    --env INFISICAL_HOST_URL="${INFISICAL_HOST_URL:-https://app.infisical.com}" \
+    --env INFISICAL_AUTH_METHOD=universal-auth \
+    --env INFISICAL_UNIVERSAL_AUTH_CLIENT_ID="$INFISICAL_UNIVERSAL_AUTH_CLIENT_ID" \
+    --env INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET="$INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET" \
+    -- npx -y --legacy-peer-deps @infisical/mcp >/dev/null 2>&1 \
+    && echo "[mcp-config] wrote infisical to codex" \
+    || echo "[mcp-config] WARN: codex mcp add infisical failed" >&2
 fi
 
 # ── AI-CLI-MCP Configuration ────────────────────────────────────────
@@ -29,6 +61,12 @@ mkdir -p /root/.config/ai-cli
 # Create config if not already present
 if [[ ! -f /root/.config/ai-cli/config.toml ]]; then
   cat > /root/.config/ai-cli/config.toml <<'AICLI_EOF'
+[worker.free]
+agent = "opencode"
+model = "tokenrouter/z-ai/glm-5.3-free"
+timeout_seconds = 300
+description = "TokenRouter — FREE, no cost. Default worker; exploit as heavily as it can handle before escalating to a paid/quota-limited tier."
+
 [worker.cheap]
 agent = "opencode"
 model = "oc-opencode/big-pickle"
@@ -54,7 +92,7 @@ timeout_seconds = 180
 description = "Free tier, fast alternative"
 
 [default]
-worker = "cheap"
+worker = "free"
 mcp_server_port = 3001
 logging_level = "info"
 AICLI_EOF
@@ -74,10 +112,20 @@ if [[ -n "${OPENCODE_API_KEY:-}" ]]; then
   export OPENCODE_API_KEY
   echo "[ai-cli] OPENCODE_API_KEY set"
 fi
+if [[ -n "${OPENCODE_GO_API_KEY:-}" ]]; then
+  export OPENCODE_GO_API_KEY
+  echo "[ai-cli] OPENCODE_GO_API_KEY set"
+fi
+if [[ -n "${ZAI_CODING_PLAN_API_KEY:-}" ]]; then
+  export ZAI_CODING_PLAN_API_KEY
+  echo "[ai-cli] ZAI_CODING_PLAN_API_KEY set"
+fi
+if [[ -n "${TOKENROUTER_API_KEY:-}" ]]; then
+  export TOKENROUTER_API_KEY
+  echo "[ai-cli] TOKENROUTER_API_KEY set (free tier — default worker)"
+fi
 
 echo "[ai-cli] ai-cli-mcp configured and ready"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Mint GitHub App installation token ──────────────────────────────────
 GITHUB_TOKEN=""
