@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -105,6 +106,25 @@ def is_allowed(sender_id: str, channel_id: str) -> bool:
 
 
 async def ask_hermes(prompt: str) -> str:
+    if WORKER == "hermes":
+        # The "hermes" role used to route through generic opencode (via
+        # @kud/mcp-opencode), which has its own built-in identity that wins
+        # over a "You are Hermes..." string merely prepended to the user
+        # turn — replies came back self-identifying as opencode instead of
+        # the actual CEO persona in SOUL.md. Call the real `hermes` CLI
+        # directly instead; it already has SOUL.md loaded and the
+        # engineering_manager MCP wired in via hermes/config.yaml.
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run, ["hermes", "-z", prompt],
+                capture_output=True, text=True, timeout=TIMEOUT,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return f"[bridge error] {exc}"
+        if proc.returncode != 0:
+            return f"[hermes error] {(proc.stderr or proc.stdout).strip()}"
+        return proc.stdout.strip() or "[empty reply from Hermes]"
+
     try:
         result = await asyncio.to_thread(
             run_worker, WORKER, TASK_TYPE, prompt, load_workers(WORKER_CONFIG),

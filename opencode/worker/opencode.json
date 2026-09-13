@@ -4,9 +4,9 @@
   "mcp": {
     "steward": {
       "type": "remote",
-      "url": "https://homely.stewardacs.xyz/mcp/coding/sse",
+      "url": "https://buildmyhouse.stewardacs.xyz/mcp/sse",
       "headers": {
-        "Authorization": "Bearer acs_dev_087c451c1bc53e1f816292e2416dabe516ab8b3a509091710fc95861ee2b1aa5"
+        "Authorization": "Bearer {env:STEWARD_TOKEN}"
       }
     },
     "axiom": {

@@ -1,6 +1,6 @@
 model:
-  default: tencent/hy3:free
-  provider: custom:nous
+  default: z-ai/glm-5.3-free
+  provider: custom:tokenrouter
 
 custom_providers:
   - name: nous
@@ -10,6 +10,15 @@ custom_providers:
       tags:
         - product=hermes-agent
         - user=hermes-agent
+  # Default provider: Nous's free tencent/hy3:free model was discontinued
+  # ("This model's free period has ended") and NOUS_API_KEY was never
+  # provisioned anyway. TokenRouter is already a working, funded free-tier
+  # provider used elsewhere in this project (opencode.json, engineering
+  # container) — reusing it here instead of leaving Hermes with no working
+  # default model.
+  - name: tokenrouter
+    base_url: https://api.tokenrouter.com/v1
+    key_env: TOKENROUTER_API_KEY
 
 terminal:
   backend: local

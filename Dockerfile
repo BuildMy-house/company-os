@@ -10,8 +10,14 @@ RUN apt-get update \
   && mkdir -p /root/.ssh \
   && ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null
 
-RUN npm install -g opencode-ai@latest infisical@latest \
+RUN npm install -g opencode-ai@latest \
   && mkdir -p /root/.config/opencode
+
+# Infisical CLI isn't published to npm as "infisical" — install the real
+# binary via the official apt repo instead.
+RUN curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | bash \
+  && apt-get update && apt-get install -y --no-install-recommends infisical \
+  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-browser --skip-computer-use --skip-setup || true \
   && mkdir -p /root/.hermes /opt/data \
@@ -21,8 +27,7 @@ COPY . /opt/company-ops/
 COPY hermes/config.yaml /opt/data/config.yaml
 COPY hermes/SOUL.md /root/.hermes/SOUL.md
 RUN python3 -m venv /opt/company-ops-venv \
-  && /opt/company-ops-venv/bin/pip install --no-cache-dir -e /opt/company-ops \
-  && /opt/company-ops-venv/bin/pip install --no-cache-dir graphifyy
+  && /opt/company-ops-venv/bin/pip install --no-cache-dir -e '/opt/company-ops[discord]'
 
 ENTRYPOINT ["bash", "/opt/company-ops/scripts/entrypoint.sh"]
 CMD ["hermes"]
