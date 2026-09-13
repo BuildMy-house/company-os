@@ -54,8 +54,21 @@ services:
       - HERMEES_REPO_URL=https://github.com/BuildMy-house/hermees.git
       - OBSERVER_WEBSITE_REPO_URL=https://github.com/BuildMy-house/observer-website.git
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
       - CODEX_API_KEY=${CODEX_API_KEY}
+      - CODEX_ACCESS_TOKEN=${CODEX_ACCESS_TOKEN}
       - OPENCODE_API_KEY=${OPENCODE_API_KEY}
+      - TOKENROUTER_API_KEY=${TOKENROUTER_API_KEY}
+      - AXIOM_TOKEN=${AXIOM_TOKEN}
+      - AXIOM_ORG_ID=${AXIOM_ORG_ID}
+      - AXIOM_ENDPOINT=${AXIOM_ENDPOINT}
+      - NEON_API_KEY=${NEON_API_KEY}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - INFISICAL_UNIVERSAL_AUTH_CLIENT_ID=${INFISICAL_UNIVERSAL_AUTH_CLIENT_ID}
+      - INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=${INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET}
+      - INFISICAL_HOST_URL=${INFISICAL_HOST_URL}
+      - STEWARD_TOKEN=${STEWARD_TOKEN}
+      - STEWARD_URL=${STEWARD_URL}
     env_file:
       - path: .env
         required: false
@@ -67,7 +80,10 @@ services:
       - company-os-checkout:/workspace/company-os-checkout
       - hermees-checkout:/workspace/hermees-checkout
       - observer-website-checkout:/workspace/observer-website-checkout
-      - ../certs/buildmyhouse-engineering-app.pem:/etc/github/buildmyhouse-engineering-app.pem:ro
+      # GitHub App .pem intentionally not mounted for this smoke test: the
+      # BuildMy-house repos are public, so unauthenticated clone is enough,
+      # and the key material lives in Infisical (GITHUB_APP_PRIVATE_KEY)
+      # rather than on disk here.
       # Optional: bind-mount host's ai-cli config for persistence
       - ~/.config/ai-cli:/root/.config/ai-cli
     expose:
