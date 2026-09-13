@@ -1,0 +1,5 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/mimo-v2.5-free",
+  "instructions": ["/workspace/house_designer/company-ops/opencode/telemetry/AGENTS.md"]
+}

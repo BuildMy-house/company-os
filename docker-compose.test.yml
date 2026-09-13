@@ -1,0 +1,14 @@
+services:
+  company-ops-test-postgres:
+    image: postgres:16-alpine
+    container_name: company-ops-test-postgres
+    ports:
+      - "5544:5432"
+    environment:
+      POSTGRES_PASSWORD: localtestpw
+      POSTGRES_DB: homely_company
+    volumes:
+      - company-ops-test-data:/var/lib/postgresql/data
+
+volumes:
+  company-ops-test-data:

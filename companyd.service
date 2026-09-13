@@ -1,0 +1,25 @@
+[Unit]
+Description=companyd - Multi-Generation Deployment Daemon
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/companyd
+ExecStart=/usr/bin/python3 /home/nahar/Documents/code/house_designer/company-ops/companyd.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment="COMPANYD_API_KEY=change-me-in-production"
+Environment="COMPANY_DIR=/company"
+
+# Security
+PrivateTmp=yes
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

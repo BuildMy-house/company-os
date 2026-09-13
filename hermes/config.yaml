@@ -1,0 +1,45 @@
+model:
+  default: tencent/hy3:free
+  provider: custom:nous
+
+custom_providers:
+  - name: nous
+    base_url: https://inference-api.nousresearch.com/v1
+    key_env: NOUS_API_KEY
+    extra_body:
+      tags:
+        - product=hermes-agent
+        - user=hermes-agent
+
+terminal:
+  backend: local
+
+display:
+  tool_progress: log
+  interim_assistant_messages: false
+
+mcp_servers:
+  # Connects as hermes_analytics: SELECT-only, no write access to either
+  # the company or observer schema. Production self-hosted Postgres.
+  postgres_analytics:
+    command: "npx"
+    args: ["-y", "@microsoft/postgres-mcp", "run"]
+    env:
+      POSTGRES_MCP_CONNECTION_STRING: "${ANALYTICS_DATABASE_URL}"
+    connect_timeout: 60
+    timeout: 900
+  opencode_manager:
+    command: "npx"
+    args: ["-y", "@kud/mcp-opencode"]
+    env:
+      OPENCODE_CONFIG_DIR: "/opt/homely-ceo/shared"
+      OPENCODE_DOMAINS_DIR: "/opt/homely-ceo/domains"
+      PATH: "/root/.hermes/tools/opencode/node_modules/.bin:/usr/local/bin:/usr/bin:/bin"
+    connect_timeout: 60
+    timeout: 900
+  # URL shape inferred; confirm against the installed hermes binary before production use.
+  engineering_manager:
+    url: "http://engineering:8000/mcp"
+  companyd_deployment:
+    url: "http://localhost:8001/mcp"
+    description: "Autonomous multi-generation deployment orchestration"

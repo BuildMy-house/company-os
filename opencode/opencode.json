@@ -1,0 +1,44 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/mimo-v2.5-free",
+  "mcp": {
+    "steward": {
+      "type": "remote",
+      "url": "https://homely.stewardacs.xyz/mcp/coding/sse",
+      "headers": {
+        "Authorization": "Bearer acs_dev_087c451c1bc53e1f816292e2416dabe516ab8b3a509091710fc95861ee2b1aa5"
+      }
+    },
+    "axiom": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "mcp-server-axiom"
+      ],
+      "environment": {
+        "AXIOM_TOKEN": "{env:AXIOM_TOKEN}",
+        "AXIOM_ORG_ID": "{env:AXIOM_ORG_ID}",
+        "AXIOM_URL": "{env:AXIOM_URL}"
+      }
+    },
+    "infisical": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "--legacy-peer-deps",
+        "@infisical/mcp"
+      ],
+      "environment": {
+        "INFISICAL_HOST_URL": "{env:INFISICAL_HOST_URL}",
+        "INFISICAL_AUTH_METHOD": "{env:INFISICAL_AUTH_METHOD}",
+        "INFISICAL_UNIVERSAL_AUTH_CLIENT_ID": "{env:INFISICAL_UNIVERSAL_AUTH_CLIENT_ID}",
+        "INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET": "{env:INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET}"
+      }
+    }
+  },
+  "plugin": [
+    ".opencode/plugins/graphify.js"
+  ]
+}
