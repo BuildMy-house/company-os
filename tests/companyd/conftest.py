@@ -1,6 +1,7 @@
 """Shared fixtures for companyd unit tests."""
 
 import datetime
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -8,7 +9,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from companyd.companyd import (
+# Ensure company-ops is in sys.path for companyd imports
+_company_ops = str(Path(__file__).resolve().parent.parent.parent)
+if _company_ops not in sys.path:
+    sys.path.insert(0, _company_ops)
+
+from companyd import (
     CheckpointStore,
     Component,
     CompanyDB,

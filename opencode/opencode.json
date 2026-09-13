@@ -21,6 +21,21 @@
         "AXIOM_ORG_ID": "{env:AXIOM_ORG_ID}",
         "AXIOM_URL": "{env:AXIOM_URL}"
       }
+    },
+    "infisical": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "--legacy-peer-deps",
+        "@infisical/mcp"
+      ],
+      "environment": {
+        "INFISICAL_HOST_URL": "{env:INFISICAL_HOST_URL}",
+        "INFISICAL_AUTH_METHOD": "{env:INFISICAL_AUTH_METHOD}",
+        "INFISICAL_UNIVERSAL_AUTH_CLIENT_ID": "{env:INFISICAL_UNIVERSAL_AUTH_CLIENT_ID}",
+        "INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET": "{env:INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET}"
+      }
     }
   },
   "plugin": [
