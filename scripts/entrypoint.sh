@@ -42,11 +42,16 @@ cat > /opt/data/.env << 'ENVEOF'
 # Auto-generated from container environment — do not edit manually
 ENVEOF
 
+# DISCORD_BOT_TOKEN/ALLOWED_USERS/ALLOWED_CHANNELS/ALLOW_ALL_USERS/HOME_CHANNEL
+# are read natively by hermes-agent's own gateway (no custom bridge script
+# needed — see gateway/config_env.py + plugins/platforms/discord/adapter.py
+# in the installed hermes-agent package for the full env var surface).
+# HIL_CHANNEL/FINANCE_CHANNEL are separate: company_ops/human_interface.py
+# posts to those directly via the Discord REST API, independent of the
+# gateway entirely.
 for key in DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS DISCORD_ALLOWED_CHANNELS \
-           DISCORD_ALLOW_ALL_USERS DISCORD_WORKER_CONFIG DISCORD_WORKER \
-           DISCORD_TASK_TYPE DISCORD_TIMEOUT DISCORD_ANNOUNCE_CHANNEL \
-           DISCORD_HIL_CHANNEL DISCORD_DM_USER DISCORD_DAILY_PROMPT DISCORD_INVESTOR_PROMPT \
-           DISCORD_QUESTIONS_PROMPT DISCORD_INTERVAL_DAILY DISCORD_INTERVAL_INVESTOR \
+           DISCORD_ALLOW_ALL_USERS DISCORD_HOME_CHANNEL \
+           DISCORD_HIL_CHANNEL DISCORD_FINANCE_CHANNEL \
            NOUS_API_KEY OPENCODE_GO_API_KEY ZAI_CODING_PLAN_API_KEY TOKENROUTER_API_KEY \
            POSTGRES_PASSWORD COMPANY_PASSWORD OBSERVER_PASSWORD ANALYTICS_PASSWORD \
            COMPANY_DATABASE_URL OBSERVER_DATABASE_URL ANALYTICS_DATABASE_URL; do

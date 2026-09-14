@@ -37,15 +37,11 @@ mcp_servers:
       POSTGRES_MCP_CONNECTION_STRING: "${ANALYTICS_DATABASE_URL}"
     connect_timeout: 60
     timeout: 900
-  opencode_manager:
-    command: "npx"
-    args: ["-y", "@kud/mcp-opencode"]
-    env:
-      OPENCODE_CONFIG_DIR: "/opt/homely-ceo/shared"
-      OPENCODE_DOMAINS_DIR: "/opt/homely-ceo/domains"
-      PATH: "/root/.hermes/tools/opencode/node_modules/.bin:/usr/local/bin:/usr/bin:/bin"
-    connect_timeout: 60
-    timeout: 900
+  # opencode_manager removed: it never worked (pointed at nonexistent
+  # /opt/homely-ceo/* config dirs) and per SOUL.md was only ever "the
+  # older" fallback for when engineering_manager is down — not something
+  # Hermes should reach for directly. opencode/claude/codex only run
+  # inside the engineering container, dispatched via engineering_manager.
   # URL shape inferred; confirm against the installed hermes binary before production use.
   engineering_manager:
     url: "http://engineering:8000/mcp"

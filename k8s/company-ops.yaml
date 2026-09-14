@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: company-ops
+  namespace: company-ops
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: company-ops
+  template:
+    metadata:
+      labels:
+        app: company-ops
+    spec:
+      containers:
+        - name: company-ops
+          image: docker.io/library/company-ops-company-ops:latest
+          imagePullPolicy: Never
+          command: ["bash", "/opt/company-ops/scripts/entrypoint.sh", "hermes", "gateway", "run"]
+          envFrom:
+            - secretRef:
+                name: company-ops-secrets
+          volumeMounts:
+            - name: hermes-data
+              mountPath: /opt/data
+          readinessProbe:
+            exec:
+              command: ["pgrep", "-f", "hermes"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "hermes"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+      volumes:
+        - name: hermes-data
+          emptyDir: {}
