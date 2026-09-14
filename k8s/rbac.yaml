@@ -1,0 +1,39 @@
+# RBAC for Hermes's kubernetes-mcp-server (hermes/config.yaml's
+# k8s_deployment MCP entry), replacing the never-reachable companyd_deployment.
+# Scoped to the company-ops namespace only. No delete verb anywhere, no
+# secrets resource at all — Hermes can see pod/deployment/event state and
+# trigger rollouts (a patch to a Deployment's pod template annotations),
+# nothing more. kubernetes-mcp-server also runs with --disable-destructive
+# as a second layer on top of this.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: company-ops
+  namespace: company-ops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: company-ops-k8s-mcp
+  namespace: company-ops
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: company-ops-k8s-mcp
+  namespace: company-ops
+subjects:
+  - kind: ServiceAccount
+    name: company-ops
+    namespace: company-ops
+roleRef:
+  kind: Role
+  name: company-ops-k8s-mcp
+  apiGroup: rbac.authorization.k8s.io

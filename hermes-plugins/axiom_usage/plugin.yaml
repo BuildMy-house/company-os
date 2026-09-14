@@ -1,0 +1,10 @@
+name: axiom_usage
+version: "1.0.0"
+description: "Ships compact token-usage and tool-call metrics to Axiom (dataset bmh-company) — the cross-tool usage dashboard alongside Claude Code and OpenCode. Content-light by design: model/provider/tokens/cost/duration and tool names only, no prompts, tool args, or results (that richer content belongs in Langfuse, not here)."
+author: 4SG/BuildMy-house
+requires_env:
+  - AXIOM_TOKEN
+hooks:
+  - post_api_request
+  - post_llm_call
+  - post_tool_call

@@ -1,0 +1,70 @@
+# Live sync from Infisical into the company-ops-secrets K8s Secret, via the
+# Infisical Secrets Operator (helm install operator-namespaced
+# infisical-helm-charts/secrets-operator -n company-ops --set
+# scopedNamespaces=company-ops --set scopedRBAC=true). Replaces manually
+# copy-pasting secret values into a static YAML file — that approach let a
+# stale/invalid R2 key sit undetected until a live backup test caught it.
+#
+# The bootstrap credential itself (Universal Auth client ID/secret for the
+# machine identity that's allowed to read Infisical) is applied separately —
+# see scratchpad secrets.yaml equivalent; not committed here, same as every
+# other secret this project handles.
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalConnection
+metadata:
+  name: infisical-connection
+  namespace: company-ops
+spec:
+  address: https://eu.infisical.com
+---
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalAuth
+metadata:
+  name: infisical-auth
+  namespace: company-ops
+spec:
+  infisicalConnectionRef:
+    name: infisical-connection
+    namespace: company-ops
+  method: universal
+  universal:
+    clientIdRef:
+      name: infisical-bootstrap-credentials
+      namespace: company-ops
+      key: clientId
+    clientSecretRef:
+      name: infisical-bootstrap-credentials
+      namespace: company-ops
+      key: clientSecret
+---
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: company-ops-sync
+  namespace: company-ops
+spec:
+  infisicalAuthRef:
+    name: infisical-auth
+    namespace: company-ops
+  syncOptions:
+    refreshInterval: 60s
+  # "Build My house" project — root has AXIOM_*, /infra has GitHub App,
+  # R2, Neon, Cloudflare, Steward, TokenRouter, Claude OAuth; /hermes has
+  # Postgres role passwords + all DISCORD_* config. Merged into one target
+  # Secret since every Deployment already references company-ops-secrets
+  # as a single envFrom source.
+  sources:
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /infra
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /hermes
+  targets:
+    - name: company-ops-secrets
+      namespace: company-ops
+      kind: Secret
+      creationPolicy: Owner

@@ -10,8 +10,12 @@ RUN apt-get update \
   && mkdir -p /root/.ssh \
   && ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null
 
-RUN npm install -g opencode-ai@latest \
-  && mkdir -p /root/.config/opencode
+# opencode intentionally NOT installed here — Hermes never invokes opencode
+# directly (721MB saved); coding work is dispatched to the `engineering`
+# container via the engineering_manager MCP, whose ai-cli-mcp router is the
+# only place opencode/claude/codex actually run. Browser automation (via
+# hermes-agent's bundled Playwright/Chromium below) stays — Hermes uses it
+# to interact with buildmyhouse directly.
 
 # Infisical CLI isn't published to npm as "infisical" — install the real
 # binary via the official apt repo instead.
@@ -26,8 +30,9 @@ RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --s
 COPY . /opt/company-ops/
 COPY hermes/config.yaml /opt/data/config.yaml
 COPY hermes/SOUL.md /root/.hermes/SOUL.md
+COPY hermes-plugins/axiom_usage /opt/hermes/plugins/observability/axiom_usage
 RUN python3 -m venv /opt/company-ops-venv \
-  && /opt/company-ops-venv/bin/pip install --no-cache-dir -e '/opt/company-ops[discord]'
+  && /opt/company-ops-venv/bin/pip install --no-cache-dir -e '/opt/company-ops[backup]'
 
 ENTRYPOINT ["bash", "/opt/company-ops/scripts/entrypoint.sh"]
 CMD ["hermes"]

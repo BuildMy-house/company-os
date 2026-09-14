@@ -133,6 +133,20 @@ function updateClaude(servers) {
   console.error(`[generate-agent-mcp-config] wrote ${Object.keys(servers).join(', ')} to ${filePath}`);
 }
 
+// Axiom token/tool-call usage metrics for OpenCode — see
+// scripts/opencode-plugins/axiom-usage.js (registered globally, all repos,
+// not per-project). The plugin itself no-ops without AXIOM_TOKEN, so this
+// just needs the path present in opencode.json's `plugin` array.
+const AXIOM_OPENCODE_PLUGIN_PATH = '/opt/company-ops/scripts/opencode-plugins/axiom-usage.js';
+
+function updateOpencodePlugins(config) {
+  if (!process.env.AXIOM_TOKEN) return;
+  config.plugin = config.plugin || [];
+  const already = config.plugin.some((entry) =>
+    (Array.isArray(entry) ? entry[0] : entry) === AXIOM_OPENCODE_PLUGIN_PATH);
+  if (!already) config.plugin.push(AXIOM_OPENCODE_PLUGIN_PATH);
+}
+
 function updateOpencode(servers) {
   const filePath = path.join(HOME, '.config', 'opencode', 'opencode.json');
   const config = readJson(filePath);
@@ -140,6 +154,7 @@ function updateOpencode(servers) {
   for (const [name, server] of Object.entries(servers)) {
     config.mcp[name] = toOpencodeServer(server);
   }
+  updateOpencodePlugins(config);
   writeJson(filePath, config);
   console.error(`[generate-agent-mcp-config] wrote ${Object.keys(servers).join(', ')} to ${filePath}`);
 }
