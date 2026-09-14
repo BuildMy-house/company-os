@@ -23,6 +23,13 @@ spec:
           image: docker.io/library/company-ops-company-ops:latest
           imagePullPolicy: Never
           command: ["bash", "/opt/company-ops/scripts/entrypoint.sh", "hermes", "gateway", "run"]
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
           envFrom:
             - secretRef:
                 name: company-ops-secrets

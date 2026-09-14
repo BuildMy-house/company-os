@@ -31,7 +31,7 @@ COPY . /opt/company-ops/
 COPY hermes/config.yaml /opt/data/config.yaml
 COPY hermes/SOUL.md /root/.hermes/SOUL.md
 RUN python3 -m venv /opt/company-ops-venv \
-  && /opt/company-ops-venv/bin/pip install --no-cache-dir -e /opt/company-ops
+  && /opt/company-ops-venv/bin/pip install --no-cache-dir -e '/opt/company-ops[backup]'
 
 ENTRYPOINT ["bash", "/opt/company-ops/scripts/entrypoint.sh"]
 CMD ["hermes"]

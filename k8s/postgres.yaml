@@ -31,6 +31,13 @@ spec:
           image: postgres:16-alpine
           ports:
             - containerPort: 5432
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           env:
             - name: POSTGRES_DB
               value: homely_company

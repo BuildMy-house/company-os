@@ -24,6 +24,13 @@ spec:
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 3Gi
           env:
             - name: GITHUB_APP_ID
               value: "4857525"
