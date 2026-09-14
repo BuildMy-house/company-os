@@ -29,12 +29,21 @@ fi
 chmod -R a+rwx /opt/data 2>/dev/null || true
 
 # Sync config.yaml + SOUL.md from package into mounted volume (first-volume-only fix)
+#
+# SOUL.md goes to $HERMES_HOME, NOT /root/.hermes — hermes-agent's own
+# get_default_hermes_root() docstring: "~/.hermes, or HERMES_HOME itself in
+# Docker/custom deployments (e.g. /opt/data)". This container sets
+# HERMES_HOME=/opt/data, so /root/.hermes/SOUL.md was never read by hermes
+# at all. Confirmed live: /opt/data/SOUL.md held hermes-agent's own
+# auto-seeded generic default persona (667 bytes, "You are Hermes Agent,
+# built by Nous Research" — no mention of buildmy.house, the Board, or any
+# engineering surface) the entire time this container has been running,
+# while our real SOUL.md sat unread at the old wrong path.
 if [ -f /opt/company-ops/hermes/config.yaml ]; then
   cp /opt/company-ops/hermes/config.yaml /opt/data/config.yaml
 fi
 if [ -f /opt/company-ops/hermes/SOUL.md ]; then
-  mkdir -p /root/.hermes
-  cp /opt/company-ops/hermes/SOUL.md /root/.hermes/SOUL.md
+  cp /opt/company-ops/hermes/SOUL.md "${HERMES_HOME:-/opt/data}/SOUL.md"
 fi
 
 # Write secrets from environment to /opt/data/.env (hermes reads this at startup)
