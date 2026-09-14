@@ -30,6 +30,7 @@ RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --s
 COPY . /opt/company-ops/
 COPY hermes/config.yaml /opt/data/config.yaml
 COPY hermes/SOUL.md /root/.hermes/SOUL.md
+COPY hermes-plugins/axiom_usage /opt/hermes/plugins/observability/axiom_usage
 RUN python3 -m venv /opt/company-ops-venv \
   && /opt/company-ops-venv/bin/pip install --no-cache-dir -e '/opt/company-ops[backup]'
 

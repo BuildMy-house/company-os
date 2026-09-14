@@ -26,6 +26,22 @@ else
   echo "[infisical] INFISICAL_UNIVERSAL_AUTH_CLIENT_ID not set; using .env or existing environment variables"
 fi
 
+# ── Claude Code telemetry -> Axiom ──────────────────────────────────────────
+# Native OTLP metrics+logs export (official Claude Code feature, no plugin
+# needed) — token/cost counters and tool accept/reject counts, not full
+# trace content. ai-cli-mcp spawns `claude` as a child of this shell, so
+# these env vars propagate to every dispatched Claude Code run automatically.
+if [ -n "${AXIOM_TOKEN:-}" ]; then
+  export CLAUDE_CODE_ENABLE_TELEMETRY=1
+  export OTEL_METRICS_EXPORTER=otlp
+  export OTEL_LOGS_EXPORTER=otlp
+  export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+  export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.axiom.co
+  export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${AXIOM_TOKEN},X-Axiom-Dataset=bmh-company"
+  export OTEL_RESOURCE_ATTRIBUTES="service.name=claude-code,deployment.environment.name=production"
+  echo "[otel] Claude Code telemetry -> Axiom (bmh-company)"
+fi
+
 # ── Agent MCP Configuration (Axiom, Infisical, Neon, Cloudflare, Steward, ai-cli) ──
 # Gives claude and opencode the same MCP server list, wired from whatever
 # credentials are present in the container's environment, so any repo the

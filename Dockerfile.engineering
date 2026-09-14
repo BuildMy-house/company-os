@@ -26,6 +26,7 @@ COPY scripts/fetch-infisical-secrets.js /opt/company-ops/scripts/fetch-infisical
 COPY scripts/generate-agent-mcp-config.js /opt/company-ops/scripts/generate-agent-mcp-config.js
 COPY scripts/sync-repo.sh /opt/company-ops/scripts/sync-repo.sh
 COPY scripts/engineering-entrypoint.sh /opt/company-ops/scripts/engineering-entrypoint.sh
+COPY scripts/opencode-plugins/axiom-usage.js /opt/company-ops/scripts/opencode-plugins/axiom-usage.js
 
 EXPOSE 8000
 ENTRYPOINT ["bash", "/opt/company-ops/scripts/engineering-entrypoint.sh"]

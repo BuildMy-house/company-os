@@ -25,6 +25,15 @@ custom_providers:
     base_url: https://api.tokenrouter.com/v1
     key_env: TOKENROUTER_API_KEY
 
+plugins:
+  # axiom_usage ships compact token-usage/tool-call metrics to Axiom
+  # (dataset bmh-company) — verified this doesn't touch anything else:
+  # `hermes plugins list` showed 0/55 bundled plugins in an "enabled" state
+  # before this change (Discord, the active model providers, etc. all
+  # activate through their own env-var detection, not this generic registry).
+  enabled:
+    - axiom_usage
+
 terminal:
   backend: local
 
