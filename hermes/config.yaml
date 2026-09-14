@@ -1,6 +1,15 @@
 model:
-  default: z-ai/glm-5.3-free
-  provider: custom:tokenrouter
+  # tencent/hy3:free (the original default) was discontinued by Nous
+  # entirely ("This model's free period has ended") — confirmed live
+  # against Nous's own /v1/models listing, not guessed. upstage/solar-pro4
+  # is Nous's current free-tier model explicitly built for "long-horizon
+  # tasks and agentic workflows" — the best match for what Hermes actually
+  # does — with the largest context window (524K) among the current free
+  # options; the alternatives are either domain-narrow (InclusionAI's
+  # health/finance Ling variants), coding-specific (Poolside's Laguna
+  # models), or lack explicit reasoning support (Meituan LongCat).
+  default: upstage/solar-pro4:free
+  provider: custom:nous
 
 custom_providers:
   - name: nous
@@ -10,12 +19,8 @@ custom_providers:
       tags:
         - product=hermes-agent
         - user=hermes-agent
-  # Default provider: Nous's free tencent/hy3:free model was discontinued
-  # ("This model's free period has ended") and NOUS_API_KEY was never
-  # provisioned anyway. TokenRouter is already a working, funded free-tier
-  # provider used elsewhere in this project (opencode.json, engineering
-  # container) — reusing it here instead of leaving Hermes with no working
-  # default model.
+  # Fallback: kept working (TokenRouter, already funded elsewhere in this
+  # project) in case the Nous free tier ever needs swapping again.
   - name: tokenrouter
     base_url: https://api.tokenrouter.com/v1
     key_env: TOKENROUTER_API_KEY
@@ -45,6 +50,24 @@ mcp_servers:
   # URL shape inferred; confirm against the installed hermes binary before production use.
   engineering_manager:
     url: "http://engineering:8000/mcp"
-  companyd_deployment:
-    url: "http://localhost:8001/mcp"
-    description: "Autonomous multi-generation deployment orchestration"
+  # Replaces companyd_deployment (a custom daemon that was never actually
+  # reachable — always failed to connect to localhost:8001 — and reimplemented
+  # deploy/status/rollback/list_generations/get_logs, every one of which maps
+  # directly onto a native K8s primitive). In-cluster auth via the pod's own
+  # ServiceAccount token (RBAC: company-ops/k8s/rbac.yaml — read-only on
+  # pods/events, patch-only on deployments/replicasets, no delete, no
+  # secrets). --disable-destructive is defense in depth on top of that RBAC.
+  k8s_deployment:
+    command: "npx"
+    args: ["-y", "kubernetes-mcp-server@latest", "--disable-destructive", "--log-file", "stderr", "--cluster-provider", "in-cluster"]
+    env:
+      # MCP command-subprocesses don't inherit the full pod environment —
+      # confirmed live: without these, in-cluster auto-detection fails with
+      # "in-cluster manager cannot be used outside of a cluster" even though
+      # the ServiceAccount token/CA files are present on disk as usual.
+      # These two are standard K8s-injected values, stable for the cluster's
+      # lifetime (the `kubernetes` Service is always first in the range).
+      KUBERNETES_SERVICE_HOST: "10.43.0.1"
+      KUBERNETES_SERVICE_PORT: "443"
+    connect_timeout: 60
+    timeout: 300

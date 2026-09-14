@@ -18,6 +18,7 @@ spec:
       labels:
         app: company-ops
     spec:
+      serviceAccountName: company-ops
       containers:
         - name: company-ops
           image: docker.io/library/company-ops-company-ops:latest
