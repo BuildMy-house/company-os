@@ -56,6 +56,20 @@ fi
 # its own copy early instead of waiting on/reusing that one.
 MEMORY_REPO_DIR="/opt/hermees-memory"
 MEMORY_TOKEN=""
+# github-app-token.js only reads the private key from a file (checked paths
+# include /etc/github/buildmyhouse-engineering-app.pem), never from the raw
+# GITHUB_APP_PRIVATE_KEY env var directly. The engineering container gets
+# this file written for it as a side effect of ai-cli-mcp's own setup; this
+# container runs `hermes gateway run` instead, which never does that step —
+# so without this, minting silently fails every time (caught live: the very
+# first deploy of this feature logged "could not mint GitHub App token" on
+# every boot). Write it ourselves from the env var if the file isn't already
+# there.
+if [ -n "${GITHUB_APP_PRIVATE_KEY:-}" ] && [ ! -f /etc/github/buildmyhouse-engineering-app.pem ]; then
+  mkdir -p /etc/github
+  printf '%s\n' "$GITHUB_APP_PRIVATE_KEY" > /etc/github/buildmyhouse-engineering-app.pem
+  chmod 600 /etc/github/buildmyhouse-engineering-app.pem
+fi
 if [ -f "$SCRIPT_DIR/github-app-token.js" ]; then
   MEMORY_TOKEN=$(node "$SCRIPT_DIR/github-app-token.js" 2>/dev/null || true)
 fi
