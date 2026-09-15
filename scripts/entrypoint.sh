@@ -42,7 +42,40 @@ chmod -R a+rwx /opt/data 2>/dev/null || true
 if [ -f /opt/company-ops/hermes/config.yaml ]; then
   cp /opt/company-ops/hermes/config.yaml /opt/data/config.yaml
 fi
-if [ -f /opt/company-ops/hermes/SOUL.md ]; then
+
+# SOUL.md: prefer a live override from the hermees-memory repo over the copy
+# baked into the image, so day-to-day operational guidance (which agent to
+# dispatch with, current known-broken tools, etc.) can be updated by pushing
+# to hermees-memory + restarting this pod — no image rebuild required. Only
+# rarer, structural changes to Hermes's actual identity/mandate still need a
+# real rebuild. Falls back to the baked-in copy if the memory repo isn't
+# reachable or has no override yet (e.g. first-ever boot). hermes-agent's own
+# memory plugin also clones hermees-memory, but only after `hermes` itself
+# starts (a few seconds into `exec hermes`, confirmed via /opt/hermees-memory's
+# birth time vs PID 1's start time) — too late to matter here, so this clones
+# its own copy early instead of waiting on/reusing that one.
+MEMORY_REPO_DIR="/opt/hermees-memory"
+MEMORY_TOKEN=""
+if [ -f "$SCRIPT_DIR/github-app-token.js" ]; then
+  MEMORY_TOKEN=$(node "$SCRIPT_DIR/github-app-token.js" 2>/dev/null || true)
+fi
+if [ -n "$MEMORY_TOKEN" ]; then
+  MEMORY_URL="https://x-access-token:${MEMORY_TOKEN}@github.com/BuildMy-house/hermees-memory.git"
+  if [ -d "$MEMORY_REPO_DIR/.git" ]; then
+    git -C "$MEMORY_REPO_DIR" remote set-url origin "$MEMORY_URL" 2>/dev/null || true
+    git -C "$MEMORY_REPO_DIR" pull --ff-only 2>/dev/null || true
+  else
+    git clone "$MEMORY_URL" "$MEMORY_REPO_DIR" 2>/dev/null || true
+  fi
+else
+  echo "[soul] WARN: could not mint GitHub App token; skipping hermees-memory pull, using baked-in SOUL.md" >&2
+fi
+
+if [ -f "$MEMORY_REPO_DIR/hermes/SOUL.md" ]; then
+  echo "[soul] Using SOUL.md override from hermees-memory (no rebuild needed to update this)"
+  cp "$MEMORY_REPO_DIR/hermes/SOUL.md" "${HERMES_HOME:-/opt/data}/SOUL.md"
+elif [ -f /opt/company-ops/hermes/SOUL.md ]; then
+  echo "[soul] No override in hermees-memory yet; using SOUL.md baked into the image"
   cp /opt/company-ops/hermes/SOUL.md "${HERMES_HOME:-/opt/data}/SOUL.md"
 fi
 
