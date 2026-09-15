@@ -1,0 +1,13 @@
+{
+  "model": "gpt-4-turbo",
+  "mcp": {
+    "steward": {
+      "type": "remote",
+      "url": "https://buildmyhouse.stewardacs.xyz/mcp/sse",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:STEWARD_TOKEN}"
+      }
+    }
+  }
+}

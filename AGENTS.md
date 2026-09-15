@@ -1,0 +1,1 @@
+../company-os/agent-config/AGENTS.md

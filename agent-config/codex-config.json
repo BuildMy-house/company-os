@@ -1,0 +1,10 @@
+{
+  "mcp": {
+    "steward": {
+      "type": "remote",
+      "url": "{env:STEWARD_MCP_URL}",
+      "enabled": true,
+      "headers": {"Authorization": "Bearer {env:STEWARD_API_KEY}"}
+    }
+  }
+}
