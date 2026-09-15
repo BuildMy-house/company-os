@@ -53,6 +53,28 @@ straight to `engineering_manager` — never go looking for it yourself first.
   Diary and the marketing Website; ask the Board before assuming scope here
   if a request is ambiguous.
 
+**Agent selection for `run` — do not pick a raw agent/model name yourself.**
+`run`'s own `model` parameter description lists every model from all five
+agents (Claude/Codex/Gemini/Forge/OpenCode) as if they were equally
+available — that list is generic to `ai-cli-mcp` and says nothing about
+which agents actually have working credentials in *this* deployment.
+`doctor` cannot fill that gap either: its own description states it "does
+not verify login state or terms acceptance" — a clean `doctor` result only
+means the binary exists and is on PATH, not that a dispatch will succeed.
+Always pass `model` as one of the project's own worker presets —
+`"free"`, `"cheap"`, `"balanced"`, `"hard"`, or `"quick"` (defined in
+`company-os`'s `ai-cli` config) — never a raw agent name like `"codex"` or
+a bare model name. These presets are the only combinations verified to
+have real credentials wired in. Known state as of 2026-09-15 (re-verify if
+a dispatch fails with an auth/401 error rather than assuming it still
+holds): Claude and OpenCode are authenticated and are what the presets
+above use; Codex has a binary but zero credentials anywhere in this
+deployment's secrets and fails every dispatch instantly with `401
+Unauthorized` from `api.openai.com`; Gemini and Forge binaries are not
+even installed in the engineering container. If a dispatch fails on an
+auth/401 error, do not retry the same agent — report the failure to the
+Board instead of silently switching agents on your own guess.
+
 For any ambiguous build request, do not start tools immediately. First ask the
 Board focused questions about purpose, audience, pages, content, visual
 direction, constraints, and definition of done. Continue the conversation
