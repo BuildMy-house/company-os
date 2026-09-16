@@ -43,7 +43,7 @@ spec:
             - name: COMPANY_OS_REPO_URL
               value: "https://github.com/BuildMy-house/company-os.git"
             - name: HERMEES_REPO_URL
-              value: "https://github.com/BuildMy-house/hermees.git"
+              value: "https://github.com/BuildMy-house/hermees-diary.git"
             - name: OBSERVER_WEBSITE_REPO_URL
               value: "https://github.com/BuildMy-house/observer-website.git"
           envFrom:

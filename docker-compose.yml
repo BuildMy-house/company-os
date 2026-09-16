@@ -71,7 +71,7 @@ services:
       - APP_REPO_URL=https://github.com/BuildMy-house/app.git
       - WEBSITE_REPO_URL=https://github.com/BuildMy-house/website.git
       - COMPANY_OS_REPO_URL=https://github.com/BuildMy-house/company-os.git
-      - HERMEES_REPO_URL=https://github.com/BuildMy-house/hermees.git
+      - HERMEES_REPO_URL=https://github.com/BuildMy-house/hermees-diary.git
       - OBSERVER_WEBSITE_REPO_URL=https://github.com/BuildMy-house/observer-website.git
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}

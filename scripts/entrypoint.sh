@@ -120,7 +120,7 @@ done
 chmod 644 /opt/data/.env
 
 REPO_DIR="/opt/hermees"
-REMOTE="git@github.com:BuildMy-house/hermees.git"
+REMOTE="git@github.com:BuildMy-house/hermees-diary.git"
 
 # Clone or pull on start
 if [[ -d "$REPO_DIR/.git" ]]; then
