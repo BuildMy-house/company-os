@@ -1,4 +1,4 @@
-Repo: house_designer
+Repo: company-os
 
 # AGENTS_STEWARD — Hermes Engineering Team
 
@@ -7,7 +7,7 @@ Every agent must read it before taking any action.
 
 ## Repo Identity
 
-- **Repository**: `house_designer`
+- **Repository**: `company-os`
 - **Branch**: `main` (shared checkout)
 - **Project**: Rebuilding Sweet Home 3D as "Homely" (Tauri + Three.js)
   with Python equivalence harness

@@ -29,21 +29,17 @@ From the repo root:
 
 ```bash
 docker buildx build \
-  -f company-ops/Dockerfile.engineering \
-  --build-context manager-def=.claude/agents \
-  --build-context skills-src=.agents/skills \
+  -f Dockerfile.engineering \
   -t engineering:candidate \
-  company-ops
+  .
 ```
 
-Or from `company-ops/`:
+Or from the repository root:
 
 ```bash
-cd company-ops
+cd company-os
 docker buildx build \
   -f Dockerfile.engineering \
-  --build-context manager-def=../.claude/agents \
-  --build-context skills-src=../.agents/skills \
   -t engineering:candidate \
   .
 ```

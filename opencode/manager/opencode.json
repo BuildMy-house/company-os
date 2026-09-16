@@ -1,14 +1,14 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "opencode/mimo-v2.5-free",
-  "instructions": ["/workspace/house_designer/company-ops/opencode/manager/AGENTS.md"],
+  "instructions": ["AGENTS.md"],
   "mcp": {
     "worker": {
       "type": "local",
       "command": ["npx", "-y", "@kud/mcp-opencode"],
-      "cwd": "/workspace/house_designer/site-homely",
+      "cwd": "/workspace/app-checkout",
       "environment": {
-        "OPENCODE_CONFIG_DIR": "/workspace/house_designer/company-ops/opencode/worker"
+        "OPENCODE_CONFIG_DIR": "/opt/company-ops/opencode/worker"
       },
       "timeout": 900000
     }

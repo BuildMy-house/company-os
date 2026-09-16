@@ -35,4 +35,4 @@ brand strategy, lead generation.
 
 ## Steward Scope
 
-Domain scope path: `house_designer/marketing`
+Domain scope path: `company-os/marketing`

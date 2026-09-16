@@ -4,7 +4,7 @@ Extends `shared/AGENTS.base.md` Steward section. Read that first.
 
 ## Repo Identity
 
-- **Repository**: `house_designer`
+- **Repository**: `company-os`
 - **Branch**: `main` (shared checkout)
 - **Project**: Rebuilding Sweet Home 3D as "Homely" (Tauri + Three.js)
   with Python equivalence harness
@@ -94,4 +94,4 @@ wait or mark blocked.
 
 ## Steward Scope
 
-Domain scope path: `house_designer/engineering`
+Domain scope path: `company-os/engineering`

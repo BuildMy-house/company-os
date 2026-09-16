@@ -14,9 +14,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV="$REPO_ROOT/.venv"
-COMPANY_OPS="$REPO_ROOT/company-ops"
+COMPANY_OPS="$REPO_ROOT"
 DRY_RUN=0
 
 for arg in "$@"; do

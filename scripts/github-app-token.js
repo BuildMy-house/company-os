@@ -27,7 +27,6 @@ const DEFAULT_KEY_PATHS = [
   '/etc/github/buildmyhouse-engineering-app.pem',
   '/etc/github/app-private-key.pem',
   '/root/.ssh/buildmyhouse-engineering-app.pem',
-  '/workspace/house_designer/certs/buildmyhouse-engineering-app.pem',
   'certs/buildmyhouse-engineering-app.pem',
   '../certs/buildmyhouse-engineering-app.pem',
 ].filter(Boolean);

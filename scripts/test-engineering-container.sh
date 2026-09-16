@@ -19,7 +19,7 @@ fail() { echo -e "${RED}FAIL${NC}: $1"; RESULTS+=("FAIL: $1"); }
 # ── paths ────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OPS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-REPO_ROOT="$(cd "$OPS_DIR/.." && pwd)"
+REPO_ROOT="$OPS_DIR"
 
 IMAGE_TAG="engineering:selftest"
 CONTAINER_NAME="engineering-selftest-$$"
@@ -51,8 +51,6 @@ echo ""
 echo "── Step 1: Build image ──"
 if docker buildx build \
   -f "$OPS_DIR/Dockerfile.engineering" \
-  --build-context manager-def="$REPO_ROOT/.claude/agents" \
-  --build-context skills-src="$REPO_ROOT/.agents/skills" \
   -t "$IMAGE_TAG" \
   "$OPS_DIR" 2>&1; then
   pass "Image built successfully as $IMAGE_TAG"

@@ -38,7 +38,7 @@ Then customize these files:
 - Layout and ownership rules (which files does this domain own?)
 - Frozen contracts (if any)
 - DoD checklists for domain-specific work
-- Steward scope path: `house_designer/<domain-name>`
+- Steward scope path: `company-os/<domain-name>`
 
 #### `domains/<domain-name>/PLAN.md`
 - Claim board template
@@ -56,7 +56,7 @@ Then customize these files:
 
 ### 4. Register in Steward
 
-The domain's Steward scope is `house_designer/<domain-name>`. This is
+The domain's Steward scope is `company-os/<domain-name>`. This is
 automatic — Steward scopes by path prefix.
 
 Save a memory with the domain's key facts:
@@ -64,8 +64,8 @@ Save a memory with the domain's key facts:
 ```bash
 steward save_memory \
   --title "<Domain> domain added to hermes-operations" \
-  --content "Domain: <domain-name>. Scope: house_designer/<domain-name>. ..." \
-  --scope_path "house_designer/<domain-name>" \
+  --content "Domain: <domain-name>. Scope: company-os/<domain-name>. ..." \
+  --scope_path "company-os/<domain-name>" \
   --kind "decision"
 ```
 
@@ -133,7 +133,7 @@ hermes-operations/
    domain's AGENTS.md. If it applies to all domains, put it in shared.
 3. **Knowledge accumulates**: Each domain has a `knowledge/` directory.
    Files added here are tracked on GitHub and pulled by containers.
-4. **Steward scope is automatic**: The scope path `house_designer/<domain>`
+4. **Steward scope is automatic**: The scope path `company-os/<domain>`
    handles access control. No manual Steward config needed.
 5. **Runtime clone, not build-time**: The Docker entrypoint clones the
    repo on first start, pulls on subsequent starts. No rebuild needed

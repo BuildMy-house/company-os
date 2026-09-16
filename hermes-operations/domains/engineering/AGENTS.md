@@ -71,4 +71,4 @@ Local verification script (mirrors CI):
 
 ## Steward Scoping
 
-Engineering domain uses Steward scope path: `house_designer/engineering`
+Engineering domain uses Steward scope path: `company-os/engineering`

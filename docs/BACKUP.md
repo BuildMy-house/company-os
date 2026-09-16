@@ -6,7 +6,7 @@ The `company` and `observer` schemas of the production Postgres database,
 dumped with `pg_dump --format=plain` via the **`hermes_analytics`** read-only
 role (`ANALYTICS_DATABASE_URL`). That role has SELECT across both schemas and
 can write nothing — the least-privilege choice for a backup read
-(see `company-ops/sql/roles.sql`).
+(see `sql/roles.sql`).
 
 Each run produces `homely-backup-YYYYMMDD-HHMMSS.sql.gz` under the
 `backups/` prefix in the configured R2 bucket, then deletes all but the

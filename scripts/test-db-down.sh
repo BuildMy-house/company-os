@@ -7,6 +7,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
 echo "==> Stopping test Postgres and removing volume..."
-docker compose -f company-ops/docker-compose.test.yml down -v
+docker compose -f docker-compose.test.yml down -v
 
 echo "==> Test Postgres stopped and volume removed."

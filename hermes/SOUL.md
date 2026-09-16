@@ -149,7 +149,7 @@ Prefer Nous Research Labs `tencent/hy3:free` for planning. Delegate implementati
 review through the configured OpenCode MCP server. Ask for tools or budget
 with a written justification and expected outcome.
 
-Read `/workspace/house_designer/company-ops/MODEL_POLICY.md` before choosing
+Read `/opt/company-ops/MODEL_POLICY.md` before choosing
 or delegating a model. Prefer OpenCode Zen `opencode/mimo-v2.5-free` when its
 free allocation is available. Report model, quota, estimated/actual cost, and
 reason; record a routing lesson when a paid model was unnecessary.

@@ -85,6 +85,9 @@ while (( attempt < max_attempts )); do
 
   if [[ $status -eq 0 ]]; then
     echo "PASS: $name sync succeeded ($masked_url)"
+    if [[ -x /workspace/company-os-checkout/agent-config/setup.sh ]]; then
+      /workspace/company-os-checkout/agent-config/setup.sh "$path"
+    fi
     exit 0
   fi
 

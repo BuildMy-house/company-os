@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    working_dir: /workspace/house_designer
+    working_dir: /opt/company-ops
     environment:
       - INFISICAL_UNIVERSAL_AUTH_CLIENT_ID=${INFISICAL_UNIVERSAL_AUTH_CLIENT_ID}
       - INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=${INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET}
@@ -34,9 +34,8 @@ services:
     stdin_open: true
     tty: true
     volumes:
-      - ..:/workspace/house_designer
+      - .:/opt/company-ops
       - hermes-data:/opt/data
-      - ../certs/homely-deploy:/root/.ssh/id_rsa:ro
     command: ["hermes", "gateway", "run"]
 
   postgres:
@@ -47,10 +46,10 @@ services:
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ../company-ops/sql/company_schema.sql:/docker-entrypoint-initdb.d/01-company_schema.sql:ro
-      - ../company-ops/sql/observer_schema.sql:/docker-entrypoint-initdb.d/02-observer_schema.sql:ro
-      - ../company-ops/sql/roles.sql:/docker-entrypoint-initdb.d/03-roles.sql:ro
-      - ../company-ops/scripts/04-set-role-passwords.sh:/docker-entrypoint-initdb.d/04-set-role-passwords.sh:ro
+      - ./sql/company_schema.sql:/docker-entrypoint-initdb.d/01-company_schema.sql:ro
+      - ./sql/observer_schema.sql:/docker-entrypoint-initdb.d/02-observer_schema.sql:ro
+      - ./sql/roles.sql:/docker-entrypoint-initdb.d/03-roles.sql:ro
+      - ./scripts/04-set-role-passwords.sh:/docker-entrypoint-initdb.d/04-set-role-passwords.sh:ro
     env_file:
       - path: .env
         required: false
@@ -64,9 +63,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.engineering
-      additional_contexts:
-        manager-def: ../.claude/agents
-        skills-src: ../.agents/skills
     working_dir: /workspace/app-checkout
     environment:
       - GITHUB_APP_ID=4857525
@@ -109,7 +105,7 @@ services:
       # and the key material lives in Infisical (GITHUB_APP_PRIVATE_KEY)
       # rather than on disk here.
       # Optional: bind-mount host's ai-cli config for persistence
-      - ~/.config/ai-cli:/root/.config/ai-cli
+      - ${HOME}/.config/ai-cli:/root/.config/ai-cli
     expose:
       - "8000"
     entrypoint: ["bash", "/opt/company-ops/scripts/engineering-entrypoint.sh"]

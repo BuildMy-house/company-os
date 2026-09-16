@@ -3,12 +3,12 @@ set -euo pipefail
 
 # Resolve to repo root regardless of where script is invoked from.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_ROOT"
 
 echo "==> Starting test Postgres via docker compose..."
-docker compose -f company-ops/docker-compose.test.yml up -d
+docker compose -f docker-compose.test.yml up -d
 
 echo "==> Waiting for Postgres to be ready..."
 MAX_RETRIES=30
@@ -25,7 +25,7 @@ for i in $(seq 1 "$MAX_RETRIES"); do
 done
 
 # Apply schema files if they exist.
-for sql_file in company-ops/sql/company_schema.sql company-ops/sql/observer_schema.sql; do
+for sql_file in sql/company_schema.sql sql/observer_schema.sql; do
     if [ -f "$sql_file" ]; then
         echo "==> Applying $sql_file ..."
         docker exec -i company-ops-test-postgres psql -U postgres -d homely_company -f - < "$sql_file"
@@ -35,9 +35,9 @@ for sql_file in company-ops/sql/company_schema.sql company-ops/sql/observer_sche
 done
 
 # Apply roles.sql and set local dev passwords.
-if [ -f company-ops/sql/roles.sql ]; then
-    echo "==> Applying company-ops/sql/roles.sql ..."
-    docker exec -i company-ops-test-postgres psql -U postgres -d homely_company -f - < company-ops/sql/roles.sql
+if [ -f sql/roles.sql ]; then
+    echo "==> Applying sql/roles.sql ..."
+    docker exec -i company-ops-test-postgres psql -U postgres -d homely_company -f - < sql/roles.sql
 
     echo "==> Setting local dev passwords for roles..."
     docker exec company-ops-test-postgres psql -U postgres -d homely_company -c \
@@ -47,7 +47,7 @@ if [ -f company-ops/sql/roles.sql ]; then
     docker exec company-ops-test-postgres psql -U postgres -d homely_company -c \
         "ALTER ROLE hermes_analytics WITH PASSWORD 'localtest_analytics';"
 else
-    echo "WARN: company-ops/sql/roles.sql not found — skipping role setup (parallel ticket may not have landed yet)" >&2
+    echo "WARN: sql/roles.sql not found — skipping role setup (parallel ticket may not have landed yet)" >&2
 fi
 
 echo ""

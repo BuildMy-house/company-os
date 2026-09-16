@@ -1,1 +1,1 @@
-../company-os/agent-config/CLAUDE.md
+./agent-config/CLAUDE.md

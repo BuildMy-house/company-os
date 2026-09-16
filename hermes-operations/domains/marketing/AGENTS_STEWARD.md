@@ -4,7 +4,7 @@ Extends `shared/AGENTS.base.md` Steward section. Read that first.
 
 ## Repo Identity
 
-- **Repository**: `house_designer`
+- **Repository**: `company-os`
 - **Branch**: `main` (shared checkout)
 - **Project**: Homely marketing — content, campaigns, SEO, brand
 
@@ -14,7 +14,7 @@ Extends `shared/AGENTS.base.md` Steward section. Read that first.
 |---|---|---|
 | `docs/marketing/` | marketing-dev | Campaign briefs, content calendar |
 | `docs/brand/` | marketing-dev | Brand guide, voice, visual identity |
-| `site-homely/src/content/` | marketing-dev | Blog posts, landing page copy |
+| `website/src/content/` | marketing-dev | Blog posts, landing page copy |
 | `PLAN.md` | marketing-manager | Live claim board |
 
 **Rule**: Never edit outside your owner directories.
@@ -77,4 +77,4 @@ claim_work(task_id)
 
 ## Steward Scope
 
-Domain scope path: `house_designer/marketing`
+Domain scope path: `company-os/marketing`

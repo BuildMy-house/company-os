@@ -4,7 +4,7 @@ Extends `shared/AGENTS.base.md` Steward section. Read that first.
 
 ## Repo Identity
 
-- **Repository**: `house_designer`
+- **Repository**: `company-os`
 - **Branch**: `main` (shared checkout)
 - **Project**: Homely design — UI/UX, design system, brand identity
 
@@ -12,8 +12,8 @@ Extends `shared/AGENTS.base.md` Steward section. Read that first.
 
 | Directory | Owner | Notes |
 |---|---|---|
-| `site-homely/src/components/` | design-dev | UI components, design system |
-| `site-homely/src/styles/` | design-dev | CSS, tokens, themes |
+| `website/src/components/` | design-dev | UI components, design system |
+| `website/src/styles/` | design-dev | CSS, tokens, themes |
 | `docs/design/` | design-dev | Mockups, prototypes, research |
 | `PLAN.md` | design-manager | Live claim board |
 
@@ -76,4 +76,4 @@ claim_work(task_id)
 
 ## Steward Scope
 
-Domain scope path: `house_designer/design`
+Domain scope path: `company-os/design`

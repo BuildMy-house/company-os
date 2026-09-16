@@ -17,8 +17,8 @@ accessibility, user research.
 
 ## Design System
 
-- Component library lives in `site-homely/src/components/`
-- Design tokens in `site-homely/src/styles/tokens.css`
+- Component library lives in `website/src/components/`
+- Design tokens in `website/src/styles/tokens.css`
 - Storybook for component documentation (if applicable)
 
 ## Content Types
@@ -42,4 +42,4 @@ accessibility, user research.
 
 ## Steward Scope
 
-Domain scope path: `house_designer/design`
+Domain scope path: `company-os/design`

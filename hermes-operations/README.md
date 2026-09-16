@@ -57,5 +57,5 @@ docker compose up
 
 ## Steward Integration
 
-Each domain uses Steward scope path: `house_designer/<domain-name>`
+Each domain uses Steward scope path: `company-os/<domain-name>`
 Scoping is automatic — no manual configuration needed.
