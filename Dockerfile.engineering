@@ -14,7 +14,14 @@ RUN npm install -g @anthropic-ai/claude-code@latest \
   && npm install -g ai-cli-mcp@latest \
   && mkdir -p /root/.config/ai-cli \
   && codex mcp add ai-cli-mcp -- npx -y ai-cli-mcp@latest \
-  && mkdir -p /opt/company-ops/.claude/agents /opt/company-ops/.claude/skills
+  && mkdir -p /opt/company-ops/.claude/agents /opt/company-ops/.claude/skills \
+  && mv "$(command -v claude)" /usr/local/bin/claude-real \
+  && printf '#!/bin/sh\nexec /usr/local/bin/claude-real --autocompact 200k "$@"\n' > /usr/local/bin/claude \
+  && chmod 755 /usr/local/bin/claude
+
+RUN useradd --create-home --uid 1001 --shell /bin/bash engineering \
+  && mkdir -p /workspace \
+  && chown -R engineering:engineering /opt/company-ops /workspace /home/engineering
 
 COPY hermes-engineering/.opencode/agents/engineering-manager.md /opt/company-ops/.claude/agents/agent-manager.md
 COPY hermes-operations/shared/.opencode/skills /opt/company-ops/.claude/skills/
@@ -23,8 +30,14 @@ COPY scripts/github-app-token.js /opt/company-ops/scripts/github-app-token.js
 COPY scripts/fetch-infisical-secrets.js /opt/company-ops/scripts/fetch-infisical-secrets.js
 COPY scripts/generate-agent-mcp-config.js /opt/company-ops/scripts/generate-agent-mcp-config.js
 COPY scripts/sync-repo.sh /opt/company-ops/scripts/sync-repo.sh
+COPY scripts/stall-watch.sh /opt/company-ops/scripts/stall-watch.sh
+COPY scripts/engineering-manager-mcp.js /opt/company-ops/scripts/engineering-manager-mcp.js
+COPY scripts/container-manager-mcp.js /opt/company-ops/scripts/container-manager-mcp.js
 COPY scripts/engineering-entrypoint.sh /opt/company-ops/scripts/engineering-entrypoint.sh
 COPY scripts/opencode-plugins/axiom-usage.js /opt/company-ops/scripts/opencode-plugins/axiom-usage.js
+
+ENV HOME=/home/engineering
+USER engineering
 
 EXPOSE 8000
 ENTRYPOINT ["bash", "/opt/company-ops/scripts/engineering-entrypoint.sh"]
