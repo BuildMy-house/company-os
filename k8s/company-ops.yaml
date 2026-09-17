@@ -21,7 +21,7 @@ spec:
       serviceAccountName: company-ops
       containers:
         - name: company-ops
-          image: docker.io/library/company-ops-company-ops:latest
+          image: docker.io/library/company-os:container-manager
           imagePullPolicy: Never
           command: ["bash", "/opt/company-ops/scripts/entrypoint.sh", "hermes", "gateway", "run"]
           resources:
@@ -34,6 +34,11 @@ spec:
           envFrom:
             - secretRef:
                 name: company-ops-secrets
+          env:
+            - name: AXIOM_SERVICE_NAME
+              value: hermes-gateway-k8s
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: local-k8s
           volumeMounts:
             - name: hermes-data
               mountPath: /opt/data
@@ -50,4 +55,16 @@ spec:
             failureThreshold: 3
       volumes:
         - name: hermes-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: hermes-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hermes-data
+  namespace: company-ops
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi

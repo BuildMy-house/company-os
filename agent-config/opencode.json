@@ -5,7 +5,7 @@
     "steward": {
       "type": "remote",
       "url": "{env:STEWARD_MCP_URL}",
-      "headers": {"Authorization": "Bearer {env:STEWARD_API_KEY}"}
+      "headers": {"Authorization": "Bearer {env:STEWARD_TOKEN}"}
     }
   },
   "instructions": ["AGENTS.md"]

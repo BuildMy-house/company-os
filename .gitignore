@@ -8,3 +8,6 @@ __pycache__/
 *.jsonl
 artifacts/
 reports/*.pdf
+
+# Real TLS/SSH private keys — never track cert material.
+certs/

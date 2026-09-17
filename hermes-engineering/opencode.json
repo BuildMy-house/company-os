@@ -18,7 +18,7 @@
   "mcp": {
     "steward": {
       "type": "remote",
-      "url": "https://buildmyhouse.stewardacs.xyz/mcp/sse",
+      "url": "{env:STEWARD_MCP_URL}",
       "headers": {
         "Authorization": "Bearer {env:STEWARD_TOKEN}"
       }

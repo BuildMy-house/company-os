@@ -41,7 +41,23 @@ display:
   tool_progress: log
   interim_assistant_messages: false
 
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  write_approval: false
+  memory_char_limit: 2200
+  user_char_limit: 1375
+  nudge_interval: 10
+  provider: ""
+
 mcp_servers:
+  steward:
+    url: "https://buildmyhouse.stewardacs.xyz/mcp/sse"
+    transport: sse
+    headers:
+      Authorization: "Bearer ${STEWARD_TOKEN}"
+    connect_timeout: 30
+    timeout: 300
   # Connects as hermes_analytics: SELECT-only, no write access to either
   # the company or observer schema. Production self-hosted Postgres.
   postgres_analytics:
@@ -79,4 +95,9 @@ mcp_servers:
       KUBERNETES_SERVICE_HOST: "10.43.0.1"
       KUBERNETES_SERVICE_PORT: "443"
     connect_timeout: 60
+    timeout: 300
+  container_manager:
+    command: "node"
+    args: ["/opt/company-ops/scripts/container-manager-mcp.js"]
+    connect_timeout: 30
     timeout: 300

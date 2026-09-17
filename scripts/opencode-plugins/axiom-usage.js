@@ -34,7 +34,12 @@ export const AxiomUsage = async () => {
 
   function push(event) {
     try {
-      queue.push({ _time: new Date().toISOString(), service: "opencode", ...event });
+      queue.push({
+        _time: new Date().toISOString(),
+        service: process.env.AXIOM_SERVICE_NAME || "opencode",
+        environment: process.env.DEPLOYMENT_ENVIRONMENT || "local",
+        ...event,
+      });
       if (queue.length >= 20) flush();
     } catch {
       // fail-open

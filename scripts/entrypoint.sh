@@ -28,6 +28,14 @@ fi
 
 chmod -R a+rwx /opt/data 2>/dev/null || true
 
+# Keep Hermes built-in memory private and on the persistent Hermes volume.
+mkdir -p /opt/data/memories
+for memory_file in MEMORY.md USER.md; do
+  if [[ ! -f "/opt/data/memories/$memory_file" && -f "/opt/company-ops/hermes/memories/$memory_file" ]]; then
+    cp "/opt/company-ops/hermes/memories/$memory_file" "/opt/data/memories/$memory_file"
+  fi
+done
+
 # Sync config.yaml + SOUL.md from package into mounted volume (first-volume-only fix)
 #
 # SOUL.md goes to $HERMES_HOME, NOT /root/.hermes — hermes-agent's own
@@ -109,6 +117,7 @@ for key in DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS DISCORD_ALLOWED_CHANNELS \
            DISCORD_ALLOW_ALL_USERS DISCORD_HOME_CHANNEL \
            DISCORD_HIL_CHANNEL DISCORD_FINANCE_CHANNEL \
            NOUS_API_KEY OPENCODE_GO_API_KEY ZAI_CODING_PLAN_API_KEY TOKENROUTER_API_KEY \
+           STEWARD_MCP_URL STEWARD_TOKEN STEWARD_URL \
            POSTGRES_PASSWORD COMPANY_PASSWORD OBSERVER_PASSWORD ANALYTICS_PASSWORD \
            COMPANY_DATABASE_URL OBSERVER_DATABASE_URL ANALYTICS_DATABASE_URL; do
   val="${!key:-}"

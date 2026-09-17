@@ -20,7 +20,7 @@
       "type": "remote",
       "url": "{env:STEWARD_MCP_URL}",
       "headers": {
-        "Authorization": "Bearer {env:STEWARD_API_KEY}"
+        "Authorization": "Bearer {env:STEWARD_TOKEN}"
       }
     }
   },

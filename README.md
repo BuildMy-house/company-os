@@ -19,6 +19,22 @@ Hermes as the user-facing agent.
 
 ## Quick start
 
+### Local k3s
+
+The Compose stack is the fast local development path. To run the same
+Company OS workloads in the installed local k3s cluster, first make the
+kubeconfig readable by your user, then run:
+
+```sh
+sudo systemctl enable --now k3s
+sudo install -D -o "$USER" -g "$USER" -m 600 \
+  /etc/rancher/k3s/k3s.yaml "$HOME/.kube/config"
+./scripts/k3s-local-up.sh
+```
+
+The script uses the ignored `.env`, imports the locally built images, creates
+the Postgres init ConfigMap, and deploys persistent Postgres and Hermes data.
+
 Spin up a local Postgres first (see `company-ops/scripts/test-db-up.sh` for
 the docker-compose setup and role creation):
 

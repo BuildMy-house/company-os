@@ -81,11 +81,14 @@ function buildServers() {
     };
   }
 
-  if (process.env.STEWARD_TOKEN) {
+  const stewardToken = process.env.STEWARD_TOKEN;
+  if (stewardToken) {
     servers.steward = {
       kind: 'http',
-      url: process.env.STEWARD_URL || 'https://buildmyhouse.stewardacs.xyz/mcp/sse',
-      headers: { Authorization: `Bearer ${process.env.STEWARD_TOKEN}` },
+      url: process.env.STEWARD_MCP_URL || process.env.STEWARD_URL || 'https://buildmyhouse.stewardacs.xyz/mcp/sse',
+      // Keep credentials out of the generated files; Claude/OpenCode resolve
+      // this environment placeholder when they launch the MCP.
+      headers: { Authorization: 'Bearer {env:STEWARD_TOKEN}' },
     };
   }
 
@@ -100,6 +103,16 @@ function buildServers() {
     command: ['npx', '-y', 'ai-cli-mcp@latest'],
     environment: null,
   };
+
+  // Claude's manager may request safe local deployment operations. OpenCode
+  // workers deliberately do not receive this capability.
+  if (fs.existsSync('/var/run/secrets/kubernetes.io/serviceaccount/token')) {
+    servers['container-manager'] = {
+      kind: 'stdio',
+      command: ['node', '/opt/company-ops/scripts/container-manager-mcp.js'],
+      environment: null,
+    };
+  }
 
   return servers;
 }
@@ -152,6 +165,7 @@ function updateOpencode(servers) {
   const config = readJson(filePath);
   config.mcp = config.mcp || {};
   for (const [name, server] of Object.entries(servers)) {
+    if (name === 'container-manager') continue;
     config.mcp[name] = toOpencodeServer(server);
   }
   updateOpencodePlugins(config);

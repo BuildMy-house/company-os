@@ -6,10 +6,7 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   selector:
     matchLabels:
       app: engineering
@@ -18,10 +15,17 @@ spec:
       labels:
         app: engineering
     spec:
+      serviceAccountName: company-ops
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1001
+        runAsNonRoot: true
       containers:
         - name: engineering
-          image: docker.io/library/company-ops-engineering:latest
+          image: docker.io/library/company-os-engineering:container-manager
           imagePullPolicy: Never
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 8000
           resources:
@@ -32,6 +36,20 @@ spec:
               cpu: 2000m
               memory: 3Gi
           env:
+            - name: HOME
+              value: /tmp/company-ops-home
+            - name: AXIOM_SERVICE_NAME
+              value: engineering-k8s
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: local-k8s
+            - name: CODEX_HOME
+              value: /tmp/company-ops-home/.codex
+            - name: KUBERNETES_SERVICE_HOST
+              value: "10.43.0.1"
+            - name: KUBERNETES_SERVICE_PORT
+              value: "443"
+            - name: XDG_CONFIG_HOME
+              value: /tmp/company-ops-home/.config
             - name: GITHUB_APP_ID
               value: "4857525"
             - name: GITHUB_APP_INSTALLATION_ID
@@ -60,6 +78,12 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 20
             failureThreshold: 3
+          volumeMounts:
+            - name: agent-home
+              mountPath: /tmp/company-ops-home
+      volumes:
+        - name: agent-home
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

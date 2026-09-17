@@ -44,7 +44,8 @@ def _token() -> str:
 def _push(event: dict[str, Any]) -> None:
     try:
         event.setdefault("_time", time.time())
-        event.setdefault("service", "hermes-gateway")
+        event.setdefault("service", os.environ.get("AXIOM_SERVICE_NAME", "hermes-gateway"))
+        event.setdefault("environment", os.environ.get("DEPLOYMENT_ENVIRONMENT", "local"))
         _queue.put_nowait(event)
     except Exception as exc:
         logger.debug("axiom_usage: enqueue failed: %s", exc)

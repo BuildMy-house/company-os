@@ -1,5 +1,6 @@
 services:
   company-ops:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile
@@ -28,6 +29,9 @@ services:
       - DISCORD_FINANCE_CHANNEL=${DISCORD_FINANCE_CHANNEL}
       - DISCORD_DM_USER=${DISCORD_DM_USER}
       - STEWARD_TOKEN=${STEWARD_TOKEN}
+      - STEWARD_MCP_URL=${STEWARD_MCP_URL}
+      - AXIOM_SERVICE_NAME=hermes-gateway-compose
+      - DEPLOYMENT_ENVIRONMENT=local-compose
     env_file:
       - path: .env
         required: false
@@ -60,6 +64,7 @@ services:
       retries: 5
 
   engineering:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.engineering
@@ -88,7 +93,10 @@ services:
       - INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET=${INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET}
       - INFISICAL_HOST_URL=${INFISICAL_HOST_URL}
       - STEWARD_TOKEN=${STEWARD_TOKEN}
+      - STEWARD_MCP_URL=${STEWARD_MCP_URL}
       - STEWARD_URL=${STEWARD_URL}
+      - AXIOM_SERVICE_NAME=engineering-compose
+      - DEPLOYMENT_ENVIRONMENT=local-compose
     env_file:
       - path: .env
         required: false
@@ -112,6 +120,7 @@ services:
 
 volumes:
   hermes-data:
+    name: company-os_hermes-data
   engineering-checkout:
   website-checkout:
   company-os-checkout:
