@@ -24,6 +24,8 @@ RUN useradd --create-home --uid 1001 --shell /bin/bash engineering \
   && chown -R engineering:engineering /opt/company-ops /workspace /home/engineering
 
 COPY hermes-engineering/.opencode/agents/engineering-manager.md /opt/company-ops/.claude/agents/agent-manager.md
+COPY hermes-engineering/container-workspace/AGENTS.md /opt/company-ops/workspace-root/AGENTS.md
+COPY hermes-engineering/container-workspace/AGENTS_STEWARD.md /opt/company-ops/workspace-root/AGENTS_STEWARD.md
 COPY hermes-operations/shared/.opencode/skills /opt/company-ops/.claude/skills/
 COPY agent-config /opt/company-ops/agent-config
 COPY scripts/github-app-token.js /opt/company-ops/scripts/github-app-token.js

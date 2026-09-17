@@ -38,7 +38,7 @@ if [ -n "${AXIOM_TOKEN:-}" ]; then
   export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
   export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.axiom.co
   export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${AXIOM_TOKEN},X-Axiom-Dataset=bmh-company"
-  export OTEL_RESOURCE_ATTRIBUTES="service.name=claude-code,deployment.environment.name=production"
+  export OTEL_RESOURCE_ATTRIBUTES="service.name=${AXIOM_SERVICE_NAME:-claude-code},deployment.environment.name=${DEPLOYMENT_ENVIRONMENT:-production}"
   echo "[otel] Claude Code telemetry -> Axiom (bmh-company)"
 fi
 
@@ -73,11 +73,29 @@ fi
 
 # ── AI-CLI-MCP Configuration ────────────────────────────────────────
 echo "[ai-cli] Setting up ai-cli-mcp configuration..."
-mkdir -p /root/.config/ai-cli
+mkdir -p "$HOME/.config/ai-cli"
+
+# ai-cli-mcp reads JSON model aliases; the TOML below is kept for the
+# ai-cli wrapper, but is not used by the MCP server.
+cat > "$HOME/.config/ai-cli/config.json" <<'AI_CLI_JSON_EOF'
+{
+  "model_aliases": {
+    "manager": {"model": "sonnet", "reasoning_effort": "medium"},
+    "free": {"model": "oc-opencode/mimo-v2.5-free"},
+    "cheap": {"model": "oc-opencode/big-pickle"},
+    "balanced": {"model": "oc-opencode/mimo-v2.5-free"},
+    "quick": {"model": "oc-opencode/nemotron-3-ultra-free"},
+    "flash": {"model": "oc-tokenrouter/z-ai/glm-5.3-flash"},
+    "hard": {"model": "sonnet", "reasoning_effort": "medium"}
+  }
+}
+AI_CLI_JSON_EOF
+mkdir -p "$HOME/.claude"
+cp /opt/company-ops/.claude/agents/agent-manager.md "$HOME/.claude/CLAUDE.md"
 
 # Create config if not already present
-if [[ ! -f /root/.config/ai-cli/config.toml ]]; then
-  cat > /root/.config/ai-cli/config.toml <<'AICLI_EOF'
+if [[ ! -f "$HOME/.config/ai-cli/config.toml" ]]; then
+  cat > "$HOME/.config/ai-cli/config.toml" <<'AICLI_EOF'
 [worker.free]
 agent = "opencode"
 model = "tokenrouter/z-ai/glm-5.3-free"
@@ -96,11 +114,17 @@ model = "oc-opencode/mimo-v2.5-free"
 timeout_seconds = 300
 description = "Free tier, can stall on 30-50+ tool calls"
 
+[worker.flash]
+agent = "opencode"
+model = "tokenrouter/z-ai/glm-5.3-flash"
+timeout_seconds = 300
+description = "TokenRouter GLM 5.3 Flash"
+
 [worker.hard]
-agent = "claude"
-model = "opus"
+agent = "opencode"
+model = "tokenrouter/z-ai/glm-5.3-flash"
 timeout_seconds = 900
-description = "Claude Opus, highest capability"
+description = "GLM 5.3 Flash, paid stronger route"
 
 [worker.quick]
 agent = "opencode"
@@ -113,7 +137,7 @@ worker = "free"
 mcp_server_port = 3001
 logging_level = "info"
 AICLI_EOF
-  echo "[ai-cli] Created default config at /root/.config/ai-cli/config.toml"
+  echo "[ai-cli] Created default config at $HOME/.config/ai-cli/config.toml"
 fi
 
 # Export environment variables for ai-cli
@@ -132,7 +156,9 @@ if [[ -n "${CODEX_API_KEY:-}" ]]; then
   export CODEX_API_KEY
   echo "[ai-cli] CODEX_API_KEY set"
 elif [[ -n "${CODEX_ACCESS_TOKEN:-}" ]]; then
-  if printf '%s' "$CODEX_ACCESS_TOKEN" | codex login --with-access-token >/dev/null 2>&1; then
+  if [[ "$(id -u)" != "0" ]]; then
+    echo "[ai-cli] Skipping Codex OAuth file login for non-root worker; use CODEX_API_KEY or a writable Codex home"
+  elif printf '%s' "$CODEX_ACCESS_TOKEN" | codex login --with-access-token >/dev/null 2>&1; then
     echo "[ai-cli] Codex OAuth session established via CODEX_ACCESS_TOKEN"
   else
     echo "WARN: codex login --with-access-token failed" >&2
@@ -166,8 +192,16 @@ echo "[ai-cli] ai-cli-mcp configured and ready"
 # does the actual clone/fetch on demand instead — surface the convention
 # where whichever agent starts up will see it.
 mkdir -p /workspace
+mkdir -p /workspace/{app,website,company-os,hermees,observer-website}-checkout
+cp /opt/company-ops/workspace-root/AGENTS.md /workspace/AGENTS.md
+cp /opt/company-ops/workspace-root/AGENTS_STEWARD.md /workspace/AGENTS_STEWARD.md
 cat > /workspace/README.md <<'EOF'
 # Repo checkouts are on-demand
+
+Read `/workspace/AGENTS.md` first — it covers concerns that span every
+checkout (Steward identity resolution, credentials, concurrent-session
+safety, the manager pattern, model selection). `/workspace/AGENTS_STEWARD.md`
+explains why this level has no `Repo:` identity of its own.
 
 The BuildMy-house repos are not pre-cloned at container startup. Before
 working in one you haven't synced yet this session, run:
@@ -181,4 +215,4 @@ fetches + hard-resets (later runs) into /workspace/<name>-checkout. Safe to
 re-run any time you want the latest remote state.
 EOF
 
-exec npx -y mcp-proxy --host 0.0.0.0 --port 8000 -- npx -y ai-cli-mcp@latest
+exec npx -y mcp-proxy --host 0.0.0.0 --port 8000 -- node /opt/company-ops/scripts/engineering-manager-mcp.js
