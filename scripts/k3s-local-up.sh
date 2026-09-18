@@ -31,6 +31,6 @@ docker save company-os-engineering:latest | sudo k3s ctr images import -
 
 kubectl apply -k k8s
 
-kubectl rollout restart deployment/company-ops deployment/engineering -n company-ops
-kubectl rollout status deployment/company-ops -n company-ops --timeout=180s
-kubectl rollout status deployment/engineering -n company-ops --timeout=180s
+kubectl rollout restart deployment/hermes-gateway deployment/engineering-agent -n company-ops
+kubectl rollout status deployment/hermes-gateway -n company-ops --timeout=180s
+kubectl rollout status deployment/engineering-agent -n company-ops --timeout=180s

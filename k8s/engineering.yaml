@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: engineering
+  name: engineering-agent
   namespace: company-ops
 spec:
   replicas: 1
@@ -9,11 +9,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: engineering
+      app: engineering-agent
   template:
     metadata:
       labels:
-        app: engineering
+        app: engineering-agent
     spec:
       serviceAccountName: company-ops
       securityContext:
@@ -21,7 +21,7 @@ spec:
         runAsGroup: 1001
         runAsNonRoot: true
       containers:
-        - name: engineering
+        - name: engineering-agent
           image: docker.io/library/company-os-engineering:container-manager
           imagePullPolicy: Never
           securityContext:
@@ -88,11 +88,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: engineering
+  name: engineering-agent
   namespace: company-ops
 spec:
   selector:
-    app: engineering
+    app: engineering-agent
   ports:
     - port: 8000
       targetPort: 8000

@@ -13,7 +13,7 @@ rm -f "$ARCHIVE"
 sudo kubectl apply -f "$ROOT_DIR/k8s/rbac.yaml"
 sudo kubectl apply -f "$ROOT_DIR/k8s/company-ops.yaml"
 sudo kubectl apply -f "$ROOT_DIR/k8s/engineering.yaml"
-sudo kubectl rollout status deployment/company-ops -n company-ops --timeout=180s
-sudo kubectl rollout status deployment/engineering -n company-ops --timeout=180s
+sudo kubectl rollout status deployment/hermes-gateway -n company-ops --timeout=180s
+sudo kubectl rollout status deployment/engineering-agent -n company-ops --timeout=180s
 
 echo "Local Company OS and engineering deployments are healthy."

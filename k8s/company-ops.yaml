@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: company-ops
+  name: hermes-gateway
   namespace: company-ops
 spec:
   replicas: 1
@@ -12,15 +12,15 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app: company-ops
+      app: hermes-gateway
   template:
     metadata:
       labels:
-        app: company-ops
+        app: hermes-gateway
     spec:
       serviceAccountName: company-ops
       containers:
-        - name: company-ops
+        - name: hermes-gateway
           image: docker.io/library/company-os:container-manager
           imagePullPolicy: Never
           command: ["bash", "/opt/company-ops/scripts/entrypoint.sh", "hermes", "gateway", "run"]
