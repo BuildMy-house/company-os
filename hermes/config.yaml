@@ -11,6 +11,10 @@ model:
   default: upstage/solar-pro4:free
   provider: custom:nous
 
+fallback_providers:
+  - provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+
 custom_providers:
   - name: nous
     base_url: https://inference-api.nousresearch.com/v1
