@@ -35,6 +35,15 @@ if [ -n "${AXIOM_TOKEN:-}" ]; then
   export CLAUDE_CODE_ENABLE_TELEMETRY=1
   export OTEL_METRICS_EXPORTER=otlp
   export OTEL_LOGS_EXPORTER=otlp
+  # Unset OTEL_TRACES_EXPORTER defaults to "otlp" per spec whenever an
+  # endpoint is configured. ai-cli-mcp spawns opencode as a child of this
+  # shell, so opencode inherits these vars and — via its own
+  # @effect/opentelemetry instrumentation — was exporting full internal
+  # trace spans (e.g. "SQLiteDrizzle.make", nearly all fields null) to
+  # bmh-company. That dataset is content-light by design (model/tokens/
+  # tool-names only, via axiom-usage.js and hermes' axiom_usage plugin);
+  # disable traces explicitly so neither Claude Code nor opencode leaks them.
+  export OTEL_TRACES_EXPORTER=none
   export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
   export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.axiom.co
   export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${AXIOM_TOKEN},X-Axiom-Dataset=bmh-company"
