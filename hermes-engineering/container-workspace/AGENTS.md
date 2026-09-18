@@ -74,7 +74,13 @@ re-check a dispatch by hand and burn tokens doing it.
 There are no named worker-tier aliases (`free`/`cheap`/`balanced`/etc.) —
 `~/.config/ai-cli/config.toml` no longer defines any; dispatch every
 worker with an explicit `ai-cli run --model <provider/model>`, the same
-raw-string resolution local dev already uses. A preset tier table was a
+raw-string resolution local dev already uses. **For opencode, that string
+needs an `oc-` prefix — `ai-cli run --model oc-opencode/mimo-v2.5-free`,
+not `opencode/mimo-v2.5-free`.** Without the prefix `ai-cli` doesn't
+error, it silently dispatches Claude instead — see the canonical file's
+"Environment-neutral model selection" warning for why (third-party
+package, can't be patched to fix this since both this container and local
+dev always pull its `@latest`). A preset tier table was a
 second source of truth that drifted from what workers actually needed
 (model ids renamed, new free models never added to it) and added nothing
 a direct model choice couldn't do — you (Claude, the manager) are the
