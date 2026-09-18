@@ -71,11 +71,16 @@ re-check a dispatch by hand and burn tokens doing it.
 
 ## Model selection
 
-Dispatch through the `ai-cli` aliases already configured at
-`~/.config/ai-cli/config.toml` (`free`, `cheap`, `balanced`, `quick`,
-`flash`, `hard`) rather than raw provider/model strings — see the
-engineering-manager definition's "Choosing a worker CLI/model per ticket"
-section for the rung ladder and the GLM-5.3-Flash campaign-window check.
-Default to `free`/`balanced` for mechanical edits and standard features;
-only escalate to `hard` once a cheaper rung has demonstrably failed on the
-ticket.
+The `ai-cli` aliases at `~/.config/ai-cli/config.toml` (`free`, `cheap`,
+`balanced`, `quick`, `flash`, `hard`) are a convenience default, not a
+restriction — you (Claude, the manager) are the only thing Hermes talks
+to and the only one deciding which model a ticket goes to, so there's no
+reason to confine yourself to a preset tier when you have a specific
+reason to pick a named model instead. Query the workspace-wide
+`agent-manager/model-routing` Steward memory and a fresh model listing
+(`ai-cli models` or equivalent) before defaulting to an alias — see the
+canonical file's "Environment-neutral model selection" and "Model-routing
+memory" sections for the full mechanism, including how to try and record
+a new free model that isn't in that memory yet. Fall back to `free`/
+`balanced` when you have no specific signal either way; only escalate to
+`hard` once a cheaper option has demonstrably failed on the ticket.
