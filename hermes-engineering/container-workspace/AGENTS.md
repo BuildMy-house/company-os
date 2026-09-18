@@ -50,14 +50,17 @@ manager/worker session active in the same checkout at once. This is normal:
 ## Manager pattern
 
 The engineering-manager agent definition lives at
-`/opt/company-ops/.claude/agents/agent-manager.md` inside this image
-(sourced from `company-os`'s own
-`hermes-engineering/.opencode/agents/engineering-manager.md`), and is copied
-to `$HOME/.claude/CLAUDE.md` at container startup — that's Claude Code's
-live instruction set here. It carries the Steward `claim_work` concurrency
-gate, the Steward-memory dispatch ledger, the ticket-writing checklist, wave
-planning, and gatekeeper verification steps — see that file for the full
-operating loop.
+`/opt/company-ops/.claude/agents/agent-manager.md` inside this image, and is
+copied to `$HOME/.claude/CLAUDE.md` at container startup — that's Claude
+Code's live instruction set here. It's built at image-build time by
+concatenating the **canonical** `.agents/agent-manager.md` from
+`buildmy.house/workspace` (pulled live via a Docker additional build
+context, not a hand-maintained copy — see `Dockerfile.engineering`) with
+this repo's own `manager-supplement.md` (container-only concerns:
+self-upgrade/rollback, reporting to Hermes). It carries the Steward
+`claim_work` concurrency gate, the Steward-memory dispatch ledger, the
+ticket-writing checklist, wave planning, and gatekeeper verification steps
+— see that file for the full operating loop.
 
 Every backgrounded worker dispatch should be paired with
 `/opt/company-ops/scripts/stall-watch.sh <logfile> <pid> [stall_secs]

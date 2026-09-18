@@ -1,5 +1,9 @@
-# Build from the company-os root:
-# docker build -f Dockerfile.engineering -t hermes-engineering .
+# Build from the company-os root, with the canonical agent-manager prompt
+# pulled directly from the buildmy.house/workspace repo as an additional
+# build context (Docker 23+/buildx required):
+# docker build -f Dockerfile.engineering \
+#   --build-context shared=https://github.com/BuildMy-house/workspace.git \
+#   -t hermes-engineering .
 FROM node:22-bookworm-slim
 
 WORKDIR /opt/company-ops
@@ -23,7 +27,16 @@ RUN useradd --create-home --uid 1001 --shell /bin/bash engineering \
   && mkdir -p /workspace \
   && chown -R engineering:engineering /opt/company-ops /workspace /home/engineering
 
-COPY hermes-engineering/.opencode/agents/engineering-manager.md /opt/company-ops/.claude/agents/agent-manager.md
+# Canonical agent-manager body lives once in buildmy.house/workspace's
+# .agents/agent-manager.md — pulled live from the remote at build time so
+# there is no hand-maintained copy of it inside company-os. Concatenated
+# with a small container-only supplement (self-upgrade, reporting to
+# Hermes) that has no equivalent outside the container.
+COPY --from=shared .agents/agent-manager.md /opt/company-ops/agent-config/canonical-agent-manager.md
+COPY hermes-engineering/container-workspace/manager-supplement.md /opt/company-ops/agent-config/manager-supplement.md
+RUN cat /opt/company-ops/agent-config/canonical-agent-manager.md \
+        /opt/company-ops/agent-config/manager-supplement.md \
+        > /opt/company-ops/.claude/agents/agent-manager.md
 COPY hermes-engineering/container-workspace/AGENTS.md /opt/company-ops/workspace-root/AGENTS.md
 COPY hermes-engineering/container-workspace/AGENTS_STEWARD.md /opt/company-ops/workspace-root/AGENTS_STEWARD.md
 COPY hermes-operations/shared/.opencode/skills /opt/company-ops/.claude/skills/

@@ -68,6 +68,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.engineering
+      additional_contexts:
+        shared: https://github.com/BuildMy-house/workspace.git
+      secrets:
+        - GIT_AUTH_TOKEN
     working_dir: /workspace/app-checkout
     environment:
       - GITHUB_APP_ID=4857525
@@ -127,3 +131,7 @@ volumes:
   hermees-checkout:
   observer-website-checkout:
   postgres-data:
+
+secrets:
+  GIT_AUTH_TOKEN:
+    environment: GIT_AUTH_TOKEN
