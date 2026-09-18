@@ -271,11 +271,13 @@ else
   AICLI_OK=0
 fi
 
-# Test 3: Config is readable and contains expected sections
-if docker exec "$CONTAINER_NAME" bash -c 'grep -q "worker.cheap\|worker.balanced\|worker.hard" /root/.config/ai-cli/config.toml'; then
-  pass "ai-cli config contains worker tier definitions"
+# Test 3: Config is readable and has the expected default section (no
+# named worker-tier aliases anymore — the manager always passes an
+# explicit --model, see engineering-entrypoint.sh)
+if docker exec "$CONTAINER_NAME" bash -c 'grep -q "\[default\]" /root/.config/ai-cli/config.toml'; then
+  pass "ai-cli config has [default] section"
 else
-  fail "ai-cli config missing worker tier definitions"
+  fail "ai-cli config missing [default] section"
   AICLI_OK=0
 fi
 

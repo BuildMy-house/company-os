@@ -71,16 +71,20 @@ re-check a dispatch by hand and burn tokens doing it.
 
 ## Model selection
 
-The `ai-cli` aliases at `~/.config/ai-cli/config.toml` (`free`, `cheap`,
-`balanced`, `quick`, `flash`, `hard`) are a convenience default, not a
-restriction — you (Claude, the manager) are the only thing Hermes talks
-to and the only one deciding which model a ticket goes to, so there's no
-reason to confine yourself to a preset tier when you have a specific
-reason to pick a named model instead. Query the workspace-wide
-`agent-manager/model-routing` Steward memory and a fresh model listing
-(`ai-cli models` or equivalent) before defaulting to an alias — see the
-canonical file's "Environment-neutral model selection" and "Model-routing
-memory" sections for the full mechanism, including how to try and record
-a new free model that isn't in that memory yet. Fall back to `free`/
-`balanced` when you have no specific signal either way; only escalate to
-`hard` once a cheaper option has demonstrably failed on the ticket.
+There are no named worker-tier aliases (`free`/`cheap`/`balanced`/etc.) —
+`~/.config/ai-cli/config.toml` no longer defines any; dispatch every
+worker with an explicit `ai-cli run --model <provider/model>`, the same
+raw-string resolution local dev already uses. A preset tier table was a
+second source of truth that drifted from what workers actually needed
+(model ids renamed, new free models never added to it) and added nothing
+a direct model choice couldn't do — you (Claude, the manager) are the
+only thing Hermes talks to and the only one deciding where a ticket goes,
+so there was never a safety reason to route through a fixed tier instead
+of choosing a model directly.
+
+Pick the model per ticket from: the workspace-wide `agent-manager/
+model-routing` Steward memory (known good/bad fits by task type) and a
+fresh `ai-cli models` listing (catches models added since the memory was
+last updated) — see the canonical file's "Environment-neutral model
+selection" and "Model-routing memory" sections for the full mechanism,
+including how to try and record a model with no routing memory yet.

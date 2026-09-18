@@ -72,70 +72,27 @@ if [ -n "${INFISICAL_UNIVERSAL_AUTH_CLIENT_ID:-}" ]; then
 fi
 
 # ── AI-CLI-MCP Configuration ────────────────────────────────────────
+# No named worker aliases (free/cheap/balanced/quick/flash/hard) — the
+# engineering-manager dispatches with an explicit `--model <provider/model>`
+# on every call (informed by the model-routing Steward memory and a live
+# `ai-cli models` listing, see .agents/agent-manager.md), so a preset tier
+# table only added a second, drifting source of truth to keep in sync.
 echo "[ai-cli] Setting up ai-cli-mcp configuration..."
 mkdir -p "$HOME/.config/ai-cli"
-
-# ai-cli-mcp reads JSON model aliases; the TOML below is kept for the
-# ai-cli wrapper, but is not used by the MCP server.
-cat > "$HOME/.config/ai-cli/config.json" <<'AI_CLI_JSON_EOF'
-{
-  "model_aliases": {
-    "manager": {"model": "sonnet", "reasoning_effort": "medium"},
-    "free": {"model": "oc-opencode/mimo-v2.5-free"},
-    "cheap": {"model": "oc-opencode/big-pickle"},
-    "balanced": {"model": "oc-opencode/mimo-v2.5-free"},
-    "quick": {"model": "oc-opencode/nemotron-3-ultra-free"},
-    "flash": {"model": "oc-tokenrouter/z-ai/glm-5.3-flash"},
-    "hard": {"model": "sonnet", "reasoning_effort": "medium"}
-  }
-}
-AI_CLI_JSON_EOF
 mkdir -p "$HOME/.claude"
 cp /opt/company-ops/.claude/agents/agent-manager.md "$HOME/.claude/CLAUDE.md"
 
 # Create config if not already present
 if [[ ! -f "$HOME/.config/ai-cli/config.toml" ]]; then
   cat > "$HOME/.config/ai-cli/config.toml" <<'AICLI_EOF'
-[worker.free]
-agent = "opencode"
-model = "tokenrouter/z-ai/glm-5.3-free"
-timeout_seconds = 300
-description = "TokenRouter — FREE, no cost. Default worker; exploit as heavily as it can handle before escalating to a paid/quota-limited tier."
-
-[worker.cheap]
-agent = "opencode"
-model = "oc-opencode/big-pickle"
-timeout_seconds = 300
-description = "Free tier, default for mechanical tasks"
-
-[worker.balanced]
-agent = "opencode"
-model = "oc-opencode/mimo-v2.5-free"
-timeout_seconds = 300
-description = "Free tier, can stall on 30-50+ tool calls"
-
-[worker.flash]
-agent = "opencode"
-model = "tokenrouter/z-ai/glm-5.3-flash"
-timeout_seconds = 300
-description = "TokenRouter GLM 5.3 Flash"
-
-[worker.hard]
-agent = "opencode"
-model = "tokenrouter/z-ai/glm-5.3-flash"
-timeout_seconds = 900
-description = "GLM 5.3 Flash, paid stronger route"
-
-[worker.quick]
-agent = "opencode"
-model = "oc-opencode/nemotron-3-ultra-free"
-timeout_seconds = 180
-description = "Free tier, fast alternative"
-
 [default]
-worker = "free"
 mcp_server_port = 3001
 logging_level = "info"
+
+[dispatch]
+stall_detector_enabled = true
+stall_watch_timeout_sec = 600
+hard_cap_sec = 1800
 AICLI_EOF
   echo "[ai-cli] Created default config at $HOME/.config/ai-cli/config.toml"
 fi
