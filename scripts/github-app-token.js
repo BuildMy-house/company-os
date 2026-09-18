@@ -32,6 +32,10 @@ const DEFAULT_KEY_PATHS = [
 ].filter(Boolean);
 
 function findPrivateKey() {
+  const inlineKey = process.env.GITHUB_APP_PRIVATE_KEY;
+  if (inlineKey && inlineKey.includes('BEGIN') && inlineKey.includes('PRIVATE KEY')) {
+    return { path: '$GITHUB_APP_PRIVATE_KEY', pem: inlineKey };
+  }
   for (const p of DEFAULT_KEY_PATHS) {
     if (fs.existsSync(p)) {
       try {
