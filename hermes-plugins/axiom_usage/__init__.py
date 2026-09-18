@@ -1,14 +1,20 @@
-"""axiom_usage — ships lightweight token-usage and tool-call metrics to Axiom.
+"""axiom_usage — ships token-usage metrics AND full message/tool-call content
+to Axiom.
 
 Sibling to plugins/observability/langfuse: same register(ctx)/hook-name
-contract, but ships compact usage records instead of full trace content.
-Axiom is the cross-tool (Hermes + Claude Code + OpenCode) usage dashboard;
-Langfuse, if ever enabled, remains the place for full trace/tool-call content.
+contract. Axiom is the cross-tool (Hermes + Claude Code + OpenCode) activity
+dashboard. Content-visible by explicit decision (2026-09-18) — previously
+compact/metadata-only; the user asked to see full conversation content
+across all three agent planes in Axiom. This ships real prompt/response text
+and tool args/results to a third-party SaaS — if that scope ever needs to be
+narrowed again, drop the `text`/`args`/`result` fields from the pushed
+events below and keep only the usage/timing metadata.
 Every hook body is failsafe — a broken network call must never interrupt an
 actual Hermes turn.
 """
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
@@ -21,7 +27,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _DATASET = "bmh-company"
-_ENDPOINT = f"https://api.axiom.co/v1/datasets/{_DATASET}/ingest"
+_ENDPOINT = f"https://eu-central-1.aws.edge.axiom.co/v1/ingest/{_DATASET}"
 _FLUSH_INTERVAL = 5.0
 _BATCH_MAX = 50
 
@@ -80,6 +86,14 @@ def _flush_loop() -> None:
         _flush_once()
 
 
+def _flush_all_atexit() -> None:
+    # Short-lived processes (e.g. `hermes chat --oneshot`) can exit well
+    # before the 5s daemon timer ever fires, silently dropping queued
+    # events. Guarantee at least one synchronous flush on interpreter exit.
+    while not _queue.empty():
+        _flush_once()
+
+
 def _ensure_started() -> None:
     global _started
     if _started:
@@ -88,6 +102,7 @@ def _ensure_started() -> None:
         if _started:
             return
         threading.Thread(target=_flush_loop, name="axiom-usage-flush", daemon=True).start()
+        atexit.register(_flush_all_atexit)
         _started = True
 
 
@@ -112,39 +127,86 @@ def _usage_from(usage: Any) -> dict[str, Any]:
     return out
 
 
-def on_post_llm_call(*, task_id: str = "", session_id: str = "", turn_id: str = "", provider: str = "",
-                     model: str = "", response: Any = None, api_duration: float = 0.0, usage: Any = None,
-                     response_model: Any = None, **_: Any) -> None:
+def _text_of(value: Any) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    content = getattr(value, "content", None)
+    if isinstance(content, str) and content:
+        return content
+    return None
+
+
+def on_pre_api_request(*, task_id: str = "", session_id: str = "", turn_id: str = "",
+                       user_message: Any = None, request_messages: Any = None, **_: Any) -> None:
+    try:
+        _ensure_started()
+        text = _text_of(user_message)
+        if not text and isinstance(request_messages, list) and request_messages:
+            text = _text_of(request_messages[-1])
+        if not text:
+            return
+        _push({
+            "event": "message", "role": "user", "task_id": task_id, "session_id": session_id,
+            "turn_id": turn_id, "text": text,
+        })
+    except Exception as exc:
+        logger.debug("axiom_usage: on_pre_api_request failed: %s", exc)
+
+
+def on_post_api_request(*, task_id: str = "", session_id: str = "", turn_id: str = "", provider: str = "",
+                        model: str = "", api_duration: float = 0.0, usage: Any = None,
+                        response_model: Any = None, assistant_message: Any = None, **_: Any) -> None:
     try:
         _ensure_started()
         resolved_model = response_model if isinstance(response_model, str) and response_model else model
-        resolved_usage = usage if isinstance(usage, dict) and usage else getattr(response, "usage", None)
         _push({
             "event": "llm_call", "task_id": task_id, "session_id": session_id, "turn_id": turn_id,
             "provider": provider, "model": resolved_model, "duration_ms": round((api_duration or 0.0) * 1000),
-            **_usage_from(resolved_usage),
+            **_usage_from(usage),
+        })
+        text = _text_of(assistant_message)
+        if text:
+            _push({
+                "event": "message", "role": "assistant", "task_id": task_id, "session_id": session_id,
+                "turn_id": turn_id, "text": text,
+            })
+    except Exception as exc:
+        logger.debug("axiom_usage: on_post_api_request failed: %s", exc)
+
+
+def on_post_llm_call(*, task_id: str = "", session_id: str = "", turn_id: str = "",
+                     user_message: Any = None, assistant_response: Any = None, model: str = "",
+                     **_: Any) -> None:
+    try:
+        _ensure_started()
+        _push({
+            "event": "turn", "task_id": task_id, "session_id": session_id, "turn_id": turn_id,
+            "model": model, "user_text": _text_of(user_message), "assistant_text": _text_of(assistant_response),
         })
     except Exception as exc:
         logger.debug("axiom_usage: on_post_llm_call failed: %s", exc)
 
 
 def on_post_tool_call(*, tool_name: str = "", task_id: str = "", session_id: str = "",
-                      tool_call_id: str = "", turn_id: str = "", **_: Any) -> None:
+                      tool_call_id: str = "", turn_id: str = "", args: Any = None,
+                      result: Any = None, **_: Any) -> None:
     try:
         _ensure_started()
+        result_text = result if isinstance(result, str) else json.dumps(result, default=str) if result is not None else None
         _push({
             "event": "tool_call", "task_id": task_id, "session_id": session_id, "turn_id": turn_id,
             "tool_name": tool_name, "tool_call_id": tool_call_id,
+            "args": args if isinstance(args, (dict, list, str, int, float, bool)) else json.dumps(args, default=str) if args is not None else None,
+            "result": result_text[:8000] if result_text else None,
         })
     except Exception as exc:
         logger.debug("axiom_usage: on_post_tool_call failed: %s", exc)
 
 
 def register(ctx) -> None:
-    # Both hook-name variants, same reasoning as the langfuse plugin: *_api_request
-    # fires per API call (preferred); *_llm_call fires once per turn on older Hermes versions.
     hooks = (
-        ("post_api_request", on_post_llm_call),
+        ("pre_api_request", on_pre_api_request),
+        ("post_api_request", on_post_api_request),
         ("post_llm_call", on_post_llm_call),
         ("post_tool_call", on_post_tool_call),
     )

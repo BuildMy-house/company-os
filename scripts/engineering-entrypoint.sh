@@ -45,9 +45,18 @@ if [ -n "${AXIOM_TOKEN:-}" ]; then
   # disable traces explicitly so neither Claude Code nor opencode leaks them.
   export OTEL_TRACES_EXPORTER=none
   export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-  export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.axiom.co
+  # bmh-company lives on the eu-central-1 edge deployment, not the default
+  # api.axiom.co domain — ingest/OTLP against the wrong domain 400s (or is
+  # silently dropped by exporters that swallow errors), confirmed 2026-09-18
+  # while debugging the axiom_usage Hermes plugin's own identical bug.
+  export OTEL_EXPORTER_OTLP_ENDPOINT=https://eu-central-1.aws.edge.axiom.co
   export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${AXIOM_TOKEN},X-Axiom-Dataset=bmh-company"
   export OTEL_RESOURCE_ATTRIBUTES="service.name=${AXIOM_SERVICE_NAME:-claude-code},deployment.environment.name=${DEPLOYMENT_ENVIRONMENT:-production}"
+  # Ship full prompt/response text, not just usage counters — same
+  # content-visible decision (2026-09-18) applied to the Hermes/OpenCode
+  # plugins above, extended to Claude Code's own native OTel export.
+  export OTEL_LOG_USER_PROMPTS=1
+  export OTEL_LOG_ASSISTANT_RESPONSES=1
   echo "[otel] Claude Code telemetry -> Axiom (bmh-company)"
 fi
 
