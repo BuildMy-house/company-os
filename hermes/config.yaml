@@ -29,6 +29,59 @@ custom_providers:
     base_url: https://api.tokenrouter.com/v1
     key_env: TOKENROUTER_API_KEY
 
+auxiliary:
+  # Background aux tasks default to provider "auto", which probes native
+  # nous/openrouter providers that are unconfigured/unfunded in this
+  # deployment — repeated unhealthy-provider churn in gateway logs plus at
+  # least one real failure ("Auxiliary title generation failed: HTTP 400...
+  # missing tags"). Pin every aux slot (except vision, which needs
+  # vision-capable models) to the same funded TokenRouter free model the
+  # fallback lane already uses, and set free_only so the OpenRouter fallback
+  # can never pick a paid SKU ("PAID lane engaged... may incur real spend").
+  free_only: true
+  compression:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  skills_hub:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  approval:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  mcp:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  title_generation:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  review:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  triage_specifier:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  kanban_decomposer:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  profile_describer:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  curator:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  monitor:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  memory_query_rewrite:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  tts_audio_tags:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  goal_judge:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+
 plugins:
   # axiom_usage ships compact token-usage/tool-call metrics to Axiom
   # (dataset bmh-company) — verified this doesn't touch anything else:
