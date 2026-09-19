@@ -15,6 +15,25 @@ Treat these the same as any other risky, hard-to-reverse action: verify
 current state first, and prefer `container_rollback` over guesswork if an
 upgrade misbehaves.
 
+## Steward `repo:` names — by checkout, not by convention
+
+`sync-repo.sh` materializes checkouts as `/workspace/<name>-checkout/`.
+Pass the matching Steward `repo:` value (with `repo_confirmed: true`) on
+your first `lock_file`/`create_work` call for that checkout — don't guess
+from the checkout's directory name, since it doesn't always match:
+
+| Checkout                          | Steward `repo:` name  |
+|------------------------------------|------------------------|
+| `app-checkout/`                    | `buildmy-house-app`   |
+| `company-os-checkout/`             | `company-os`          |
+
+`website-checkout/`, `hermees-checkout/`, and `observer-website-checkout/`
+have no `AGENTS_STEWARD.md`/`Repo:` identity yet on their source repos —
+don't invent a `repo:` name for them; check that checkout's own
+`AGENTS_STEWARD.md` first (it may have been added since this was written),
+and ask Hermes/the human before locking files there under Steward if it's
+still missing.
+
 ## Reporting to Hermes
 
 When closing out a wave or a board, report back to Hermes with: tickets
