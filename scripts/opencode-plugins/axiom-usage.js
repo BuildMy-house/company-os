@@ -10,7 +10,10 @@ export const AxiomUsage = async () => {
   if (!token) return {};
 
   const dataset = process.env.AXIOM_DATASET || "bmh-company";
-  const endpoint = `https://api.axiom.co/v1/datasets/${dataset}/ingest`;
+  // bmh-company lives on Axiom's eu-central-1 edge deployment, not the default
+  // api.axiom.co domain (HTTP 400 there) — same fix as hermes-plugins/axiom_usage
+  // (commit be94cc6), applied here so opencode-side events actually reach it.
+  const endpoint = `https://eu-central-1.aws.edge.axiom.co/v1/ingest/${dataset}`;
   const queue = [];
   let flushing = false;
 
