@@ -1,0 +1,9 @@
+FROM mcr.microsoft.com/playwright:v1.62.1-noble
+WORKDIR /app
+COPY browser-adversary/package.json ./
+RUN npm install
+COPY browser-adversary/tsconfig.json ./
+COPY browser-adversary/src ./src
+ENV NODE_ENV=production
+EXPOSE 8000
+ENTRYPOINT ["npx", "-y", "mcp-proxy", "--host", "0.0.0.0", "--port", "8000", "--", "npx", "tsx", "src/mcp.ts"]

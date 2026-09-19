@@ -1,0 +1,17 @@
+{
+  "name": "buildmy-house-browser-adversary",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "run": "tsx src/runner.ts"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.62.1",
+    "tsx": "^4"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5"
+  }
+}

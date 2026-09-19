@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browser-adversary
+  namespace: company-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: browser-adversary }
+  template:
+    metadata: { labels: { app: browser-adversary } }
+    spec:
+      serviceAccountName: company-ops
+      containers:
+        - name: browser-adversary
+          image: localhost:30500/company-os-browser-adversary:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8000 }]
+          env:
+            - name: ADVERSARY_ALLOWED_ORIGINS
+              value: "https://buildmy.house"
+            - name: ADVERSARY_MODEL
+              value: "z-ai/glm-5.3-free"
+          envFrom:
+            - secretRef: { name: company-ops-secrets }
+          volumeMounts:
+            - name: auth
+              mountPath: /auth
+              readOnly: true
+            - name: reports
+              mountPath: /reports
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: 1500m, memory: 2Gi }
+      volumes:
+        - name: auth
+          secret:
+            secretName: browser-adversary-auth
+            optional: true
+        - name: reports
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: browser-adversary
+  namespace: company-ops
+spec:
+  selector: { app: browser-adversary }
+  ports: [{ port: 8000, targetPort: 8000 }]

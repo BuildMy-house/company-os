@@ -159,6 +159,10 @@ mcp_servers:
   # renamed to match live reality; this URL now points at the real Service.
   engineering_manager:
     url: "http://engineering-agent:8000/mcp"
+  browser_adversary:
+    url: "http://browser-adversary:8000/mcp"
+    connect_timeout: 30
+    timeout: 900
   # Replaces companyd_deployment (a custom daemon that was never actually
   # reachable — always failed to connect to localhost:8001 — and reimplemented
   # deploy/status/rollback/list_generations/get_logs, every one of which maps

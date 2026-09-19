@@ -1,0 +1,7 @@
+{
+  "url": "https://buildmy.house",
+  "mode": "task",
+  "task": "Open the main product flow and try to create a small project. Report anything confusing, impossible, silently failing, or different from what a normal user would expect.",
+  "max_steps": 12,
+  "viewport": { "width": 1440, "height": 900 }
+}

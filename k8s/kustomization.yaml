@@ -6,6 +6,7 @@ resources:
   - rbac.yaml
   - postgres.yaml
   - registry.yaml
+  - browser-adversary.yaml
   - company-ops.yaml
   - engineering.yaml
   - postgres-backup.yaml
