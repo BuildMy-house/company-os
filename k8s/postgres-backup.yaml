@@ -17,7 +17,7 @@ spec:
           containers:
             - name: backup
               image: docker.io/library/company-ops-company-ops:latest
-              imagePullPolicy: Never
+              imagePullPolicy: IfNotPresent
               command: ["/opt/company-ops-venv/bin/python", "-m", "company_ops.backup"]
               envFrom:
                 - secretRef:

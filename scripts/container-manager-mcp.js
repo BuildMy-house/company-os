@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 
 // Kubernetes-backed local container manager. It deliberately manages only the
-// company-ops namespace; image building/importing stays outside the pod.
+// company-ops namespace; building images stays outside the pod. Pulling does
+// not: images pushed to the in-cluster registry (k8s/registry.yaml, reachable
+// in-cluster as registry.company-ops.svc.cluster.local:5000) are pulled
+// normally by kubelet — pass a full "registry.company-ops.svc.cluster.local:
+// 5000/<repo>:<tag>" reference to container_upgrade/container_test.
 import { existsSync, readFileSync } from "node:fs";
 import https from "node:https";
 import readline from "node:readline";
@@ -57,10 +61,10 @@ const tools = [
   { name: "container_status", description: "List local company-ops deployments, images, and replica status.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "container_health", description: "Check readiness and pod health for one local deployment.", inputSchema: { type: "object", required: ["deployment"], properties: { deployment: { type: "string" } }, additionalProperties: false } },
   { name: "container_logs", description: "Read logs from the current pod for one local deployment.", inputSchema: { type: "object", required: ["deployment"], properties: { deployment: { type: "string" }, tail_lines: { type: "integer", minimum: 1, maximum: 500, default: 100 } }, additionalProperties: false } },
-  { name: "container_upgrade", description: "Change a local deployment to an already-imported image and wait for Kubernetes rollout.", inputSchema: { type: "object", required: ["deployment", "image"], properties: { deployment: { type: "string" }, image: { type: "string" }, container: { type: "string", default: "" } }, additionalProperties: false } },
+  { name: "container_upgrade", description: "Change a local deployment to a pullable image (e.g. registry.company-ops.svc.cluster.local:5000/<repo>:<tag>) and wait for Kubernetes rollout.", inputSchema: { type: "object", required: ["deployment", "image"], properties: { deployment: { type: "string" }, image: { type: "string" }, container: { type: "string", default: "" } }, additionalProperties: false } },
   { name: "container_restart", description: "Restart one local deployment without changing its image.", inputSchema: { type: "object", required: ["deployment"], properties: { deployment: { type: "string" } }, additionalProperties: false } },
   { name: "container_rollback", description: "Roll one local deployment back to the image saved by its last container_upgrade.", inputSchema: { type: "object", required: ["deployment"], properties: { deployment: { type: "string" } }, additionalProperties: false } },
-  { name: "container_test", description: "Start an isolated temporary test deployment from an already-imported image and wait for its pod to start.", inputSchema: { type: "object", required: ["image"], properties: { image: { type: "string" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 300, default: 90 } }, additionalProperties: false } },
+  { name: "container_test", description: "Start an isolated temporary test deployment from a pullable image (e.g. registry.company-ops.svc.cluster.local:5000/<repo>:<tag>) and wait for its pod to start.", inputSchema: { type: "object", required: ["image"], properties: { image: { type: "string" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 300, default: 90 } }, additionalProperties: false } },
   { name: "container_remove_test", description: "Remove an isolated test deployment created by container_test.", inputSchema: { type: "object", required: ["deployment"], properties: { deployment: { type: "string", pattern: "^test-[a-z0-9-]+$" } }, additionalProperties: false } },
 ];
 
@@ -96,7 +100,7 @@ async function testDeployment(image, timeoutSeconds) {
   const name = `test-${suffix}`;
   await k8s(`/apis/apps/v1/namespaces/${namespace}/deployments`, { method: "POST", body: JSON.stringify({
     apiVersion: "apps/v1", kind: "Deployment", metadata: { name, labels: { "container-manager/test": "true" } },
-    spec: { replicas: 1, revisionHistoryLimit: 0, selector: { matchLabels: { app: name } }, template: { metadata: { labels: { app: name, "container-manager/test": "true" } }, spec: { containers: [{ name: "test", image, imagePullPolicy: "Never" }] } } },
+    spec: { replicas: 1, revisionHistoryLimit: 0, selector: { matchLabels: { app: name } }, template: { metadata: { labels: { app: name, "container-manager/test": "true" } }, spec: { containers: [{ name: "test", image, imagePullPolicy: "IfNotPresent" }] } } },
   }) });
   const deadline = Date.now() + Math.min(300, Math.max(5, Number(timeoutSeconds || 90))) * 1000;
   while (Date.now() < deadline) {

@@ -22,7 +22,7 @@ spec:
       containers:
         - name: hermes-gateway
           image: docker.io/library/company-os:container-manager
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           command: ["bash", "/opt/company-ops/scripts/entrypoint.sh", "hermes", "gateway", "run"]
           resources:
             requests:

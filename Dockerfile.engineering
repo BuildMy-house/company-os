@@ -48,6 +48,7 @@ COPY scripts/sync-repo.sh /opt/company-ops/scripts/sync-repo.sh
 COPY scripts/stall-watch.sh /opt/company-ops/scripts/stall-watch.sh
 COPY scripts/engineering-manager-mcp.js /opt/company-ops/scripts/engineering-manager-mcp.js
 COPY scripts/container-manager-mcp.js /opt/company-ops/scripts/container-manager-mcp.js
+COPY scripts/registry-manager-mcp.js /opt/company-ops/scripts/registry-manager-mcp.js
 COPY scripts/engineering-entrypoint.sh /opt/company-ops/scripts/engineering-entrypoint.sh
 COPY scripts/opencode-plugins/axiom-usage.js /opt/company-ops/scripts/opencode-plugins/axiom-usage.js
 
