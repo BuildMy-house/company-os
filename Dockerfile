@@ -23,7 +23,7 @@ RUN curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | bash \
   && apt-get update && apt-get install -y --no-install-recommends infisical \
   && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-browser --skip-computer-use --skip-setup || true \
+RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-computer-use --skip-setup || true \
   && mkdir -p /root/.hermes /opt/data \
   && command -v hermes
 
