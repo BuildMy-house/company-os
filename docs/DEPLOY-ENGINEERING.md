@@ -2,26 +2,30 @@
 
 ## What the engineering container is
 
-The `engineering` service in `docker-compose.yml` runs the Claude
+The `engineering-agent` Deployment (`k8s/engineering.yaml`, local k3s —
+the old `docker-compose.yml` `engineering` service was retired once k3s
+became the sole authoritative deployment) runs the Claude
 engineering-manager persona plus opencode/codex CLI workers for
 Hermees's own dispatch path. It is defined by
 `Dockerfile.engineering` and started by
 `scripts/engineering-entrypoint.sh`, which syncs five BuildMy-house
-repos then execs `supergateway` serving `ai-cli-mcp`.
+repos then execs `mcp-proxy` serving `ai-cli-mcp`.
 
 ## Image tag convention
 
 | Tag | Purpose |
 |---|---|
 | `engineering:candidate` | Fresh build, not yet verified |
-| `engineering:latest` | The live image running in compose |
+| `engineering:latest` / `company-os-engineering:container-manager` | The live image running in the k3s `engineering-agent` Deployment |
 | `engineering:previous` | Last-known-good, kept for rollback |
 | `engineering:selftest` | Used by the self-test script only |
 
-The `engineering` service in `docker-compose.yml` currently uses an
-inline `build:` block with no explicit `image:` tag. To introduce a
-tagged promotion flow, build with an explicit tag and update the compose
-service to reference it (or use `docker tag` after build and restart).
+`k8s/engineering.yaml` references the image by tag
+(`docker.io/library/company-os-engineering:container-manager`) with
+`imagePullPolicy: Never` — a new build must be imported into k3s's
+containerd (`docker save ... | sudo k3s ctr images import -`, or
+`scripts/deploy-local.sh`) and the Deployment rolled before a tag change
+takes effect; retagging alone does not repull.
 
 ## Build (manual)
 
@@ -61,12 +65,13 @@ Only after the self-test passes:
 # Preserve current live as previous for rollback
 docker tag engineering:latest engineering:previous 2>/dev/null || true
 
-# Promote candidate to live
-docker tag engineering:candidate engineering:latest
+# Promote candidate to live, tagged as the k3s manifest expects
+docker tag engineering:candidate docker.io/library/company-os-engineering:container-manager
 
-# Restart the compose service
-cd company-ops
-docker compose up -d engineering
+# Import into k3s and roll the deployment
+docker save docker.io/library/company-os-engineering:container-manager | sudo k3s ctr images import -
+kubectl -n company-ops rollout restart deploy/engineering-agent
+kubectl -n company-ops rollout status deploy/engineering-agent --timeout=180s
 ```
 
 If no prior `:latest` exists (first deployment), skip the
@@ -77,10 +82,10 @@ If no prior `:latest` exists (first deployment), skip the
 If the promoted image has problems:
 
 ```bash
-docker tag engineering:previous engineering:latest
-
-cd company-ops
-docker compose up -d engineering
+docker tag engineering:previous docker.io/library/company-os-engineering:container-manager
+docker save docker.io/library/company-os-engineering:container-manager | sudo k3s ctr images import -
+kubectl -n company-ops rollout restart deploy/engineering-agent
+kubectl -n company-ops rollout status deploy/engineering-agent --timeout=180s
 ```
 
 ## Notes

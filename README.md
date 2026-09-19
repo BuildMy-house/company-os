@@ -21,7 +21,8 @@ Hermes as the user-facing agent.
 
 ### Local k3s
 
-The Compose stack is the fast local development path. To run the same
+k3s is the sole authoritative deployment path for Company OS (the old
+`docker-compose.yml` production stack has been retired). To run the
 Company OS workloads in the installed local k3s cluster, first make the
 kubeconfig readable by your user, then run:
 
@@ -130,33 +131,35 @@ CLI output when available; otherwise `policy.model_cost()` estimates it for
 known models. Resource pool updates are best-effort and never prevent the
 underlying `provider_usage` record from being written.
 
-## Portable container
+## Container image / local k3s deployment
+
+The `Dockerfile` builds the `hermes-gateway` image (`docker.io/library/
+company-os:container-manager`) run by `k8s/company-ops.yaml` in the local
+k3s cluster (see "Local k3s" above; `docker-compose.yml` — the old
+portable-container/production path — was retired once k3s became the sole
+authoritative deployment):
 
 ```sh
-docker compose build
-docker compose run --rm company-ops status
+docker build -t docker.io/library/company-os:container-manager -f Dockerfile .
+./scripts/deploy-local.sh
 ```
 
+`scripts/deploy-local.sh` imports the freshly built image into k3s's
+containerd and rolls `deploy/hermes-gateway` and `deploy/engineering-agent`.
 The image installs Hermes and includes a credential-free provider config;
 provide `OPENCODE_GO_API_KEY`, `ZAI_CODING_PLAN_API_KEY`, and
-`TOKENROUTER_API_KEY` (free tier — prefer it) through `.env` at runtime. The
-MCP package is
-downloaded by `npx` only when a worker is actually executed. Mount the
-repository and provide secrets at runtime. Do not bake credentials into the
-image. `scripts/git-backup.sh` commits and pushes a backup branch when
-the checkout has a configured GitHub remote.
+`TOKENROUTER_API_KEY` (free tier — prefer it) via the cluster's
+`company-ops-secrets` Secret (synced from Infisical, see
+`k8s/infisical-sync.yaml`). The MCP package is downloaded by `npx` only
+when a worker is actually executed. Do not bake credentials into the
+image.
 
-Configure the Discord bot account in `.env` using `.env.example`, then
-start the user-facing Hermes CEO gateway with:
-
-```sh
-docker compose up
-```
-
-For the first setup, run `docker compose run --rm company-ops hermes gateway
-setup` and choose Discord. The gateway responds to DMs and, by default, only
-mentioned messages in guild channels. Keep `DISCORD_ALLOWED_USERS` restricted
-to you.
+Configure the Discord bot account via the same secret source, then the
+`hermes-gateway` pod runs `hermes gateway run` automatically as its
+container command — no separate first-time `gateway setup` invocation is
+needed for the k3s path. The gateway responds to DMs and, by default,
+only mentioned messages in guild channels. Keep `DISCORD_ALLOWED_USERS`
+restricted to you.
 
 The default CEO identity is in `hermes/SOUL.md`; it is planning-only until
 execution policies and credentials are deliberately enabled.

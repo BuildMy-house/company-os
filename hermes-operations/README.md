@@ -30,15 +30,14 @@ cd domains/engineering
 
 See `HOW-TO-ADD-A-DOMAIN.md` for step-by-step instructions.
 
-## Docker
+## Deployment
 
-The Docker container clones this repo and loads all domains. The entrypoint
-pulls the latest on every restart.
-
-```bash
-docker compose build
-docker compose up
-```
+The engineering container (`Dockerfile.engineering` at the `company-os`
+repo root, deployed via `k8s/engineering.yaml` in the local k3s cluster —
+see `docs/DEPLOY-ENGINEERING.md`) clones this repo and loads all domains.
+The entrypoint pulls the latest on every restart. There is no standalone
+Docker Compose setup for `hermes-operations`; it ships as part of the
+engineering-agent image built and deployed per that doc.
 
 ## Key Files
 
