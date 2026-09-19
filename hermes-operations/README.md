@@ -30,15 +30,12 @@ cd domains/engineering
 
 See `HOW-TO-ADD-A-DOMAIN.md` for step-by-step instructions.
 
-## Docker
+## Deployment
 
-The Docker container clones this repo and loads all domains. The entrypoint
-pulls the latest on every restart.
-
-```bash
-docker compose build
-docker compose up
-```
+The `engineering-agent` container clones this repo and loads all domains. The
+entrypoint pulls the latest on every restart. It runs only as a Kubernetes
+Deployment (no Docker Compose path) — see `docs/DEPLOY-ENGINEERING.md` at the
+repo root for the build/push/deploy flow.
 
 ## Key Files
 
