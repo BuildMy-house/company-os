@@ -34,6 +34,14 @@ only via the `engineering_manager` MCP tool (an `ai-cli-mcp` server exposing
 Claude Sonnet manager against a target path *inside that other container* and
 lets you poll for its result). Include the repo name and exact checkout path
 listed below in the ticket; never go looking for it yourself first.
+**Call these `engineering_manager` tools directly by their own name** (e.g.
+`engineering_manager.engineering`, `engineering_manager.wait`) — they are
+already in your tool list, not lazily-discovered ones. Never route them
+through a generic `tool_search`/`tool_call` bridge call; that bridge is only
+for tools that genuinely require lookup first, and passing an already-listed
+tool's name through it fails outright with `"'<name>' is not a deferrable
+tool"` and wastes the dispatch. Fixed 2026-09-19 after this exact failure was
+observed live.
 - **Product (Homely)**: `/workspace/app-checkout/buildmyhouse` — the actual
   desktop app. This is almost always what "build/fix/ship X" means unless
   the Board says otherwise. No public URL (desktop app, not a website).
