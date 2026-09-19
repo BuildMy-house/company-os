@@ -23,6 +23,17 @@ RUN npm install -g @anthropic-ai/claude-code@latest \
   && printf '#!/bin/sh\nexec /usr/local/bin/claude-real --autocompact 200k "$@"\n' > /usr/local/bin/claude \
   && chmod 755 /usr/local/bin/claude
 
+# Headless Chromium for screenshot capability: installed as root at build
+# time into a shared path so the unprivileged engineering user can launch it
+# at runtime without sudo. Chromium only to keep image size down.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN npm install -g playwright \
+  && npx playwright install --with-deps chromium \
+  && chown -R 1001:1001 /opt/ms-playwright
+# Global npm modules aren't requirable by default; NODE_PATH makes
+# require('playwright') work for agent scripts without local installs.
+ENV NODE_PATH=/usr/local/lib/node_modules
+
 RUN useradd --create-home --uid 1001 --shell /bin/bash engineering \
   && mkdir -p /workspace \
   && chown -R engineering:engineering /opt/company-ops /workspace /home/engineering
