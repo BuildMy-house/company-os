@@ -21,10 +21,8 @@ Hermes as the user-facing agent.
 
 ### Local k3s
 
-k3s is the sole authoritative deployment path for Company OS (the old
-`docker-compose.yml` production stack has been retired). To run the
-Company OS workloads in the installed local k3s cluster, first make the
-kubeconfig readable by your user, then run:
+Company OS runs only on k3s — there is no Docker Compose deployment path.
+First make the kubeconfig readable by your user, then run:
 
 ```sh
 sudo systemctl enable --now k3s
@@ -33,11 +31,14 @@ sudo install -D -o "$USER" -g "$USER" -m 600 \
 ./scripts/k3s-local-up.sh
 ```
 
-The script uses the ignored `.env`, imports the locally built images, creates
-the Postgres init ConfigMap, and deploys persistent Postgres and Hermes data.
+The script uses the ignored `.env`, builds and pushes images to the
+in-cluster registry (`k8s/registry.yaml`), creates the Postgres init
+ConfigMap, and deploys persistent Postgres and Hermes data. See
+`docs/DEPLOY-ENGINEERING.md` for the full build/push/deploy/rollback flow.
 
-Spin up a local Postgres first (see `company-ops/scripts/test-db-up.sh` for
-the docker-compose setup and role creation):
+Spin up a local Postgres first (see `company-ops/scripts/test-db-up.sh`,
+which uses `docker-compose.test.yml` — a throwaway test-only Postgres
+container, not a Company OS deployment):
 
 ```sh
 python3 -m venv .venv
@@ -131,35 +132,22 @@ CLI output when available; otherwise `policy.model_cost()` estimates it for
 known models. Resource pool updates are best-effort and never prevent the
 underlying `provider_usage` record from being written.
 
-## Container image / local k3s deployment
+## Running Hermes
 
-The `Dockerfile` builds the `hermes-gateway` image (`docker.io/library/
-company-os:container-manager`) run by `k8s/company-ops.yaml` in the local
-k3s cluster (see "Local k3s" above; `docker-compose.yml` — the old
-portable-container/production path — was retired once k3s became the sole
-authoritative deployment):
-
-```sh
-docker build -t docker.io/library/company-os:container-manager -f Dockerfile .
-./scripts/deploy-local.sh
-```
-
-`scripts/deploy-local.sh` imports the freshly built image into k3s's
-containerd and rolls `deploy/hermes-gateway` and `deploy/engineering-agent`.
 The image installs Hermes and includes a credential-free provider config;
 provide `OPENCODE_GO_API_KEY`, `ZAI_CODING_PLAN_API_KEY`, and
-`TOKENROUTER_API_KEY` (free tier — prefer it) via the cluster's
-`company-ops-secrets` Secret (synced from Infisical, see
-`k8s/infisical-sync.yaml`). The MCP package is downloaded by `npx` only
-when a worker is actually executed. Do not bake credentials into the
-image.
+`TOKENROUTER_API_KEY` (free tier — prefer it) through the `company-ops`
+Kubernetes Secret. The MCP package is downloaded by `npx` only when a
+worker is actually executed. Do not bake credentials into the image.
+`scripts/git-backup.sh` commits and pushes a backup branch when the
+checkout has a configured GitHub remote.
 
-Configure the Discord bot account via the same secret source, then the
-`hermes-gateway` pod runs `hermes gateway run` automatically as its
-container command — no separate first-time `gateway setup` invocation is
-needed for the k3s path. The gateway responds to DMs and, by default,
-only mentioned messages in guild channels. Keep `DISCORD_ALLOWED_USERS`
-restricted to you.
+Configure the Discord bot account via the `company-ops` Secret (see
+`.env.example` for the variable names), then deploy the `hermes-gateway`
+Deployment per `docs/DEPLOY-ENGINEERING.md`. For first-time setup, exec
+into the running pod and run `hermes gateway setup`, choosing Discord. The
+gateway responds to DMs and, by default, only mentioned messages in guild
+channels. Keep `DISCORD_ALLOWED_USERS` restricted to you.
 
 The default CEO identity is in `hermes/SOUL.md`; it is planning-only until
 execution policies and credentials are deliberately enabled.

@@ -26,11 +26,18 @@ kubectl create secret generic company-ops-secrets \
 
 docker image inspect company-os-company-ops:latest >/dev/null
 docker image inspect company-os-engineering:latest >/dev/null
-docker save company-os-company-ops:latest | sudo k3s ctr images import -
-docker save company-os-engineering:latest | sudo k3s ctr images import -
 
 kubectl apply -k k8s
+kubectl rollout status deployment/registry -n company-ops --timeout=120s
 
-kubectl rollout restart deployment/company-ops deployment/engineering -n company-ops
-kubectl rollout status deployment/company-ops -n company-ops --timeout=180s
-kubectl rollout status deployment/engineering -n company-ops --timeout=180s
+docker tag company-os-company-ops:latest localhost:30500/company-os-company-ops:latest
+docker tag company-os-engineering:latest localhost:30500/company-os-engineering:latest
+docker push localhost:30500/company-os-company-ops:latest
+docker push localhost:30500/company-os-engineering:latest
+
+kubectl set image deployment/hermes-gateway hermes-gateway=localhost:30500/company-os-company-ops:latest -n company-ops
+kubectl set image deployment/engineering-agent engineering-agent=localhost:30500/company-os-engineering:latest -n company-ops
+
+kubectl rollout restart deployment/hermes-gateway deployment/engineering-agent -n company-ops
+kubectl rollout status deployment/hermes-gateway -n company-ops --timeout=180s
+kubectl rollout status deployment/engineering-agent -n company-ops --timeout=180s

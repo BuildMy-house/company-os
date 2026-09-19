@@ -1,10 +1,11 @@
 name: axiom_usage
-version: "1.0.0"
-description: "Ships compact token-usage and tool-call metrics to Axiom (dataset bmh-company) — the cross-tool usage dashboard alongside Claude Code and OpenCode. Content-light by design: model/provider/tokens/cost/duration and tool names only, no prompts, tool args, or results (that richer content belongs in Langfuse, not here)."
+version: "1.1.2"
+description: "Ships token-usage metrics AND full message/tool-call content to Axiom (dataset bmh-company) — the cross-tool activity dashboard alongside Claude Code and OpenCode. Content-visible by explicit decision (2026-09-18): full prompt/response text, tool args, and tool results are shipped, not just model/tokens/tool-names. Fixed 2026-09-18: bmh-company lives on the eu-central-1 edge deployment — api.axiom.co silently 400'd every ingest; now targets eu-central-1.aws.edge.axiom.co. Also added an atexit flush so short-lived CLI invocations (e.g. --oneshot) don't drop events by exiting before the 5s background flush timer fires."
 author: 4SG/BuildMy-house
 requires_env:
   - AXIOM_TOKEN
 hooks:
+  - pre_api_request
   - post_api_request
   - post_llm_call
   - post_tool_call

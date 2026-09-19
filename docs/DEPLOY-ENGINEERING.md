@@ -1,96 +1,122 @@
-# Engineering container build / promote / rollback
+# Engineering container build / deploy / rollback
 
 ## What the engineering container is
 
-The `engineering-agent` Deployment (`k8s/engineering.yaml`, local k3s —
-the old `docker-compose.yml` `engineering` service was retired once k3s
-became the sole authoritative deployment) runs the Claude
-engineering-manager persona plus opencode/codex CLI workers for
-Hermees's own dispatch path. It is defined by
-`Dockerfile.engineering` and started by
-`scripts/engineering-entrypoint.sh`, which syncs five BuildMy-house
-repos then execs `mcp-proxy` serving `ai-cli-mcp`.
+The `engineering-agent` runs the Claude engineering-manager persona plus
+opencode/codex CLI workers for Hermees's own dispatch path. It is defined by
+`Dockerfile.engineering` at the repo root and started by
+`scripts/engineering-entrypoint.sh`, which syncs BuildMy-house repos then
+execs `supergateway` serving `ai-cli-mcp`.
 
-## Image tag convention
+## How it actually runs in production
 
-| Tag | Purpose |
-|---|---|
-| `engineering:candidate` | Fresh build, not yet verified |
-| `engineering:latest` / `company-os-engineering:container-manager` | The live image running in the k3s `engineering-agent` Deployment |
-| `engineering:previous` | Last-known-good, kept for rollback |
-| `engineering:selftest` | Used by the self-test script only |
-
-`k8s/engineering.yaml` references the image by tag
-(`docker.io/library/company-os-engineering:container-manager`) with
-`imagePullPolicy: Never` — a new build must be imported into k3s's
-containerd (`docker save ... | sudo k3s ctr images import -`, or
-`scripts/deploy-local.sh`) and the Deployment rolled before a tag change
-takes effect; retagging alone does not repull.
-
-## Build (manual)
-
-From the repo root:
+The container runs as a **Kubernetes Deployment** named `engineering-agent`
+in namespace `company-ops`, on a local **k3s** cluster. The kubeconfig is
+`~/.kube/config`. Set `KUBECONFIG=/home/nahar/.kube/config` explicitly before
+running `kubectl` — do not let it fall back to merging
+`/etc/rancher/k3s/k3s.yaml`, which requires root to read and produces
+permission warnings.
 
 ```bash
-docker buildx build \
-  -f Dockerfile.engineering \
-  -t engineering:candidate \
-  .
+export KUBECONFIG=/home/nahar/.kube/config
 ```
 
-Or from the repository root:
+Images are pulled from an **in-cluster registry** (`registry:2`), deployed
+via `k8s/registry.yaml` as a Deployment+PVC+NodePort Service in
+`company-ops`, exposed at `localhost:30500` on the node. `kubectl set image`
+triggers a normal kubelet pull from it — there is no host-level `k3s ctr`
+step and no `sudo` involved anywhere in this flow. k3s's containerd trusts
+`localhost` as insecure/loopback by default, so pushing/pulling
+`localhost:30500/...` needs no registries.yaml or containerd config either.
+
+There is **no fixed tag convention** (no `:candidate`/`:latest`/`:previous`
+alias enforced anywhere). A redeploy means building a new, uniquely-named
+tag and pointing the Deployment at it — not overwriting a shared tag. Check
+what tag is currently live at any time with:
 
 ```bash
-cd company-os
-docker buildx build \
-  -f Dockerfile.engineering \
-  -t engineering:candidate \
-  .
+kubectl get deployment engineering-agent -n company-ops \
+  -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
-## Verify
+## Build context: `Dockerfile.engineering` pulls from the private `workspace` repo
+
+`Dockerfile.engineering` uses a `docker buildx` **git-URL build context**
+(requires Docker 23+/buildx) named `shared` to pull the canonical
+`agent-manager.md` and related files from the separate private
+`BuildMy-house/workspace` GitHub repo at build time. This replaced an older
+approach that used local-directory build contexts
+(`--build-context manager-def=../.claude/agents --build-context
+skills-src=../.agents/skills`) assuming a now-removed monorepo layout — that
+layout no longer exists.
+
+Because `workspace` is private, the git URL must carry an authenticated
+token, e.g. a GitHub token from `gh auth token`:
 
 ```bash
-company-ops/scripts/test-engineering-container.sh
+docker build -f Dockerfile.engineering \
+  --build-context "shared=https://x-access-token:$(gh auth token)@github.com/BuildMy-house/workspace.git" \
+  -t localhost:30500/company-os-engineering:<tag> .
 ```
 
-This builds `engineering:selftest` and runs the full checklist. All
-checks must PASS (WARN for known access gaps is acceptable).
+Pick `<tag>` as something unique and traceable (e.g. a date or short git
+SHA) — it does not need to follow any reserved name.
 
-## Promote
-
-Only after the self-test passes:
+## Push to the registry
 
 ```bash
-# Preserve current live as previous for rollback
-docker tag engineering:latest engineering:previous 2>/dev/null || true
-
-# Promote candidate to live, tagged as the k3s manifest expects
-docker tag engineering:candidate docker.io/library/company-os-engineering:container-manager
-
-# Import into k3s and roll the deployment
-docker save docker.io/library/company-os-engineering:container-manager | sudo k3s ctr images import -
-kubectl -n company-ops rollout restart deploy/engineering-agent
-kubectl -n company-ops rollout status deploy/engineering-agent --timeout=180s
+docker push localhost:30500/company-os-engineering:<tag>
 ```
 
-If no prior `:latest` exists (first deployment), skip the
-`:previous` tagging step.
+## Deploy
+
+Point the running Deployment at the newly-pushed tag:
+
+```bash
+kubectl set image deployment/engineering-agent \
+  engineering-agent=localhost:30500/company-os-engineering:<tag> \
+  -n company-ops
+kubectl rollout status deployment/engineering-agent -n company-ops
+```
+
+`kubectl rollout status` blocks until the new pod is healthy and ready, or
+reports the rollout failure.
 
 ## Rollback
 
-If the promoted image has problems:
+Two options:
+
+1. Undo the most recent rollout (uses Kubernetes' own rollout history):
+
+   ```bash
+   kubectl rollout undo deployment/engineering-agent -n company-ops
+   ```
+
+2. Point explicitly at a known-good older tag, if it's still present in the
+   registry:
+
+   ```bash
+   curl -s http://localhost:30500/v2/company-os-engineering/tags/list
+   kubectl set image deployment/engineering-agent \
+     engineering-agent=localhost:30500/company-os-engineering:<older-tag> \
+     -n company-ops
+   kubectl rollout status deployment/engineering-agent -n company-ops
+   ```
+
+## Image cleanup
+
+Old/unused image tags accumulate in the registry over time since builds are
+never automatically pruned. Operators should periodically check for tags no
+longer referenced by any Deployment and remove them via the registry API
+(the `registry:2` image needs `REGISTRY_STORAGE_DELETE_ENABLED=true`, already
+set in `k8s/registry.yaml`, and a garbage-collect pass to actually reclaim
+disk):
 
 ```bash
-docker tag engineering:previous docker.io/library/company-os-engineering:container-manager
-docker save docker.io/library/company-os-engineering:container-manager | sudo k3s ctr images import -
-kubectl -n company-ops rollout restart deploy/engineering-agent
-kubectl -n company-ops rollout status deploy/engineering-agent --timeout=180s
+curl -s http://localhost:30500/v2/company-os-engineering/tags/list
+digest=$(curl -sI http://localhost:30500/v2/company-os-engineering/manifests/<unused-tag> \
+  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+  | grep -i docker-content-digest | awk '{print $2}' | tr -d '\r')
+curl -X DELETE http://localhost:30500/v2/company-os-engineering/manifests/$digest
+kubectl exec -n company-ops deployment/registry -- registry garbage-collect /etc/docker/registry/config.yml
 ```
-
-## Notes
-
-This is a **manual procedure** for now. Full automation into a single
-promote/rollback script would be reasonable future work but is
-deliberately not built until the container has shipped more than a
-handful of changes.

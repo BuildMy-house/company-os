@@ -12,6 +12,8 @@ const upstream = spawn("npx", ["-y", "ai-cli-mcp@latest"], {
   env: process.env,
 });
 
+const MANAGER = { agent: "claude", model: "sonnet", reasoning_effort: "medium", auto_compact: "200k" };
+
 const pending = new Map();
 let nextId = 1_000_000;
 
@@ -36,7 +38,7 @@ function health() {
   const workspace = "/workspace";
   return {
     status: binaries.every(existsSync) && existsSync(workspace) ? "healthy" : "degraded",
-    manager: { agent: "claude", model: "sonnet", reasoning_effort: "medium", auto_compact: "200k" },
+    manager: MANAGER,
     binaries: Object.fromEntries(binaries.map((path) => [path.split("/").pop(), existsSync(path)])),
     workspace: { path: workspace, exists: existsSync(workspace) },
     user: { uid: process.getuid?.() ?? null, gid: process.getgid?.() ?? null },
@@ -100,7 +102,7 @@ requests.on("line", async (line) => {
     if (name === "team_health" || name === "container_telemetry") return localCall(message.id, name);
     if (name === "engineering") {
       const id = nextId++;
-      const args = { ...(message.params.arguments ?? {}), model: "manager" };
+      const args = { ...(message.params.arguments ?? {}), agent: MANAGER.agent, model: MANAGER.model };
       pending.set(id, { original: message.id, method: "tools/call" });
       upstream.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "run", arguments: args } })}\n`);
       return;

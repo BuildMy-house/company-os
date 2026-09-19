@@ -112,6 +112,11 @@ function buildServers() {
       command: ['node', '/opt/company-ops/scripts/container-manager-mcp.js'],
       environment: null,
     };
+    servers['registry-manager'] = {
+      kind: 'stdio',
+      command: ['node', '/opt/company-ops/scripts/registry-manager-mcp.js'],
+      environment: null,
+    };
   }
 
   return servers;
@@ -165,7 +170,7 @@ function updateOpencode(servers) {
   const config = readJson(filePath);
   config.mcp = config.mcp || {};
   for (const [name, server] of Object.entries(servers)) {
-    if (name === 'container-manager') continue;
+    if (name === 'container-manager' || name === 'registry-manager') continue;
     config.mcp[name] = toOpencodeServer(server);
   }
   updateOpencodePlugins(config);

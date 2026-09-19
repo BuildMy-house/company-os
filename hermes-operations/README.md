@@ -32,12 +32,10 @@ See `HOW-TO-ADD-A-DOMAIN.md` for step-by-step instructions.
 
 ## Deployment
 
-The engineering container (`Dockerfile.engineering` at the `company-os`
-repo root, deployed via `k8s/engineering.yaml` in the local k3s cluster —
-see `docs/DEPLOY-ENGINEERING.md`) clones this repo and loads all domains.
-The entrypoint pulls the latest on every restart. There is no standalone
-Docker Compose setup for `hermes-operations`; it ships as part of the
-engineering-agent image built and deployed per that doc.
+The `engineering-agent` container clones this repo and loads all domains. The
+entrypoint pulls the latest on every restart. It runs only as a Kubernetes
+Deployment (no Docker Compose path) — see `docs/DEPLOY-ENGINEERING.md` at the
+repo root for the build/push/deploy flow.
 
 ## Key Files
 
