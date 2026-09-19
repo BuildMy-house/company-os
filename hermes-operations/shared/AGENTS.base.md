@@ -16,6 +16,15 @@ Hermes owns product direction. Each Domain Manager turns direction into
 execution. Workers execute and self-report. The Manager independently
 verifies before marking anything done.
 
+**Hermes never touches code or repos directly.** For any software/website/
+repo task, Hermes must call the `engineering_manager` MCP tool (`engineering`)
+immediately and let the Domain Manager dispatch real workers — never explore,
+read, or edit a checkout with Hermes's own local `terminal`/`read_file`/
+`search_files`/`write_file` tools. Those local tools are for non-code work
+(research, planning, writing) only. Observed failure mode: Hermes burned 36
+local tool calls exploring a checkout instead of dispatching, before a human
+had to redirect it mid-session.
+
 ## Cardinal Rules
 
 1. **Read before write.** Open every file you plan to edit. Never assume
