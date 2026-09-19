@@ -81,6 +81,27 @@ auxiliary:
   goal_judge:
     provider: custom:tokenrouter
     model: z-ai/glm-5.3-free
+  # Live-verification follow-up (2026-09-20): the 14 slots above were an
+  # incomplete inventory of real auxiliary task names — grepping
+  # call_llm(task=...)/get_*_auxiliary_client(...) call sites across the
+  # deployed image found 5 more real aux tasks that were still silently
+  # falling through to provider="auto" (nous churn continued live after
+  # the first fix landed, confirmed via kubectl logs). Pin these too.
+  kanban_estimator:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  moa_reference:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  moa_aggregator:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  background_review:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  call:
+    provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
 
 plugins:
   # axiom_usage ships compact token-usage/tool-call metrics to Axiom
