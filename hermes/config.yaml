@@ -76,9 +76,15 @@ mcp_servers:
   # older" fallback for when engineering_manager is down — not something
   # Hermes should reach for directly. opencode/claude/codex only run
   # inside the engineering container, dispatched via engineering_manager.
-  # URL shape inferred; confirm against the installed hermes binary before production use.
+  # Fixed 2026-09-19: repo manifests (k8s/company-ops.yaml, k8s/engineering.yaml)
+  # were out of sync with the live k3s cluster's actual resource names
+  # (Deployment/Service really named `hermes-gateway`/`engineering-agent`,
+  # not `company-ops`/`engineering`) — hostname "engineering" never
+  # resolved in-cluster (only in docker-compose's network, where the
+  # compose service alias happens to be literally "engineering"). Manifests
+  # renamed to match live reality; this URL now points at the real Service.
   engineering_manager:
-    url: "http://engineering:8000/mcp"
+    url: "http://engineering-agent:8000/mcp"
   # Replaces companyd_deployment (a custom daemon that was never actually
   # reachable — always failed to connect to localhost:8001 — and reimplemented
   # deploy/status/rollback/list_generations/get_logs, every one of which maps
