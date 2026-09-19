@@ -157,6 +157,29 @@ def on_post_tool_call(*, tool_name: str = "", task_id: str = "", session_id: str
         logger.debug("axiom_usage: on_post_tool_call failed: %s", exc)
 
 
+def on_session_end(**_: Any) -> None:
+    """Force a synchronous flush when a session/turn ends.
+
+    The background `_flush_loop` thread only drains the queue every
+    `_FLUSH_INTERVAL` (5s). Short-lived invocations — `hermes -z`/--oneshot
+    in particular — hard-exit via `os._exit()` right after the turn
+    completes (deliberately skipping the atexit chain, see
+    hermes_cli/main.py's `_exit_after_oneshot`), so a turn that finishes in
+    under 5s drops its queued event silently: confirmed live (2026-09-20)
+    via a monkeypatched `urllib.request.urlopen` trace showing
+    `post_api_request` firing with full usage data but zero Axiom pushes
+    for a real oneshot turn. `on_session_end` already fires synchronously
+    before that hard exit (traced live), so draining the queue here
+    closes the gap without touching the batching behavior long-running
+    gateway/interactive sessions already rely on.
+    """
+    try:
+        _ensure_started()
+        _flush_once()
+    except Exception as exc:
+        logger.debug("axiom_usage: on_session_end flush failed: %s", exc)
+
+
 def register(ctx) -> None:
     # Both hook-name variants, same reasoning as the langfuse plugin: *_api_request
     # fires per API call (preferred); *_llm_call fires once per turn on older Hermes versions.
@@ -164,6 +187,7 @@ def register(ctx) -> None:
         ("post_api_request", on_post_llm_call),
         ("post_llm_call", on_post_llm_call),
         ("post_tool_call", on_post_tool_call),
+        ("on_session_end", on_session_end),
     )
     for name, fn in hooks:
         try:
