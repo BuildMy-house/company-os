@@ -21,7 +21,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _DATASET = "bmh-company"
-_ENDPOINT = f"https://api.axiom.co/v1/datasets/{_DATASET}/ingest"
+# bmh-company lives on Axiom's eu-central-1 edge deployment, not the default
+# api.axiom.co domain — that domain rejects ingest for this dataset with
+# HTTP 400 ("must use the eu-central-1 edge deployment domain"). Edge
+# ingest also uses a different path shape (/v1/ingest/<dataset>, not
+# /v1/datasets/<dataset>/ingest). Confirmed live against the real token.
+_ENDPOINT = f"https://eu-central-1.aws.edge.axiom.co/v1/ingest/{_DATASET}"
 _FLUSH_INTERVAL = 5.0
 _BATCH_MAX = 50
 
