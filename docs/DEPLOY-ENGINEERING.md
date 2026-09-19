@@ -39,6 +39,27 @@ kubectl get deployment engineering-agent -n company-ops \
   -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
+## Branch discipline: build from `prod`, not `main`
+
+`main` is the integration branch — agents push verified work there directly,
+no approval needed. `prod` is the branch that represents what is actually
+allowed to run live; merging into it, and any action that deploys a new
+image from it, requires explicit user approval first. A real deploy
+therefore always builds from `prod`, never from whatever happens to be
+checked out on `main` at the moment:
+
+```bash
+git checkout prod
+# or, if staying on another branch, confirm it matches prod's tip first:
+git rev-parse HEAD
+git rev-parse origin/prod
+```
+
+Only proceed with the build below once the checkout you're building from is
+`prod`'s current tip (or bail and ask for the `main`→`prod` merge to be
+approved first). Building from `main` directly skips the approval gate this
+branch split exists to enforce.
+
 ## Build context: `Dockerfile.engineering` pulls from the private `workspace` repo
 
 `Dockerfile.engineering` uses a `docker buildx` **git-URL build context**
