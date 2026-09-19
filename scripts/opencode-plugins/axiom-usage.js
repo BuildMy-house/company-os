@@ -38,6 +38,7 @@ export const AxiomUsage = async () => {
         _time: new Date().toISOString(),
         service: process.env.AXIOM_SERVICE_NAME || "opencode",
         environment: process.env.DEPLOYMENT_ENVIRONMENT || "local",
+        role: "worker",
         ...event,
       });
       if (queue.length >= 20) flush();

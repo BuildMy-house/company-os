@@ -47,7 +47,7 @@ if [ -n "${AXIOM_TOKEN:-}" ]; then
   export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
   export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.axiom.co
   export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${AXIOM_TOKEN},X-Axiom-Dataset=bmh-company"
-  export OTEL_RESOURCE_ATTRIBUTES="service.name=${AXIOM_SERVICE_NAME:-claude-code},deployment.environment.name=${DEPLOYMENT_ENVIRONMENT:-production}"
+  export OTEL_RESOURCE_ATTRIBUTES="service.name=${AXIOM_SERVICE_NAME:-claude-code},deployment.environment.name=${DEPLOYMENT_ENVIRONMENT:-production},role=manager"
   echo "[otel] Claude Code telemetry -> Axiom (bmh-company)"
 fi
 

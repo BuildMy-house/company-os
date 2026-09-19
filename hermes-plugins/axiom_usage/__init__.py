@@ -51,6 +51,7 @@ def _push(event: dict[str, Any]) -> None:
         event.setdefault("_time", time.time())
         event.setdefault("service", os.environ.get("AXIOM_SERVICE_NAME", "hermes-gateway"))
         event.setdefault("environment", os.environ.get("DEPLOYMENT_ENVIRONMENT", "local"))
+        event.setdefault("role", "hermes")
         _queue.put_nowait(event)
     except Exception as exc:
         logger.debug("axiom_usage: enqueue failed: %s", exc)
@@ -96,12 +97,15 @@ def _ensure_started() -> None:
         _started = True
 
 
+# src key candidates per output field, tried in order. OpenAI-chat-completions
+# shaped usage (this deployment's live provider) uses prompt_tokens/
+# completion_tokens; Anthropic-shaped usage uses input/output (+ cache_* variants).
 _USAGE_ATTRS = (
-    ("input_tokens", "input"),
-    ("output_tokens", "output"),
-    ("cache_read_tokens", "cache_read_input_tokens"),
-    ("cache_write_tokens", "cache_creation_input_tokens"),
-    ("reasoning_tokens", "reasoning_tokens"),
+    ("input_tokens", ("prompt_tokens", "input_tokens")),
+    ("output_tokens", ("completion_tokens", "output_tokens")),
+    ("cache_read_tokens", ("cache_read_input_tokens",)),
+    ("cache_write_tokens", ("cache_creation_input_tokens",)),
+    ("reasoning_tokens", ("reasoning_tokens",)),
 )
 
 
@@ -110,10 +114,18 @@ def _usage_from(usage: Any) -> dict[str, Any]:
         return {}
     get = usage.get if isinstance(usage, dict) else lambda key, default=None: getattr(usage, key, default)
     out: dict[str, Any] = {}
-    for out_key, src_key in _USAGE_ATTRS:
-        val = get(src_key)
-        if val:
-            out[out_key] = val
+    for out_key, src_keys in _USAGE_ATTRS:
+        for src_key in src_keys:
+            val = get(src_key)
+            if val:
+                out[out_key] = val
+                break
+    if "cache_read_tokens" not in out:
+        # OpenAI chat shape nests cache reads at prompt_tokens_details.cached_tokens
+        details = get("prompt_tokens_details")
+        cached = details.get("cached_tokens") if isinstance(details, dict) else None
+        if cached:
+            out["cache_read_tokens"] = cached
     return out
 
 
