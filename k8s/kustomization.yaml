@@ -5,6 +5,7 @@ resources:
   - namespace.yaml
   - rbac.yaml
   - postgres.yaml
+  - registry.yaml
   - company-ops.yaml
   - engineering.yaml
   - postgres-backup.yaml
