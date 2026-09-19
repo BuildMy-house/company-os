@@ -21,9 +21,13 @@ permission warnings.
 export KUBECONFIG=/home/nahar/.kube/config
 ```
 
-The Deployment's container image is `docker.io/library/company-os-engineering`,
-built locally (not pulled from a registry) and imported directly into the
-k3s node's containerd image store.
+Images are pulled from an **in-cluster registry** (`registry:2`), deployed
+via `k8s/registry.yaml` as a Deployment+PVC+NodePort Service in
+`company-ops`, exposed at `localhost:30500` on the node. `kubectl set image`
+triggers a normal kubelet pull from it — there is no host-level `k3s ctr`
+step and no `sudo` involved anywhere in this flow. k3s's containerd trusts
+`localhost` as insecure/loopback by default, so pushing/pulling
+`localhost:30500/...` needs no registries.yaml or containerd config either.
 
 There is **no fixed tag convention** (no `:candidate`/`:latest`/`:previous`
 alias enforced anywhere). A redeploy means building a new, uniquely-named
@@ -52,29 +56,25 @@ token, e.g. a GitHub token from `gh auth token`:
 ```bash
 docker build -f Dockerfile.engineering \
   --build-context "shared=https://x-access-token:$(gh auth token)@github.com/BuildMy-house/workspace.git" \
-  -t company-os-engineering:<tag> .
+  -t localhost:30500/company-os-engineering:<tag> .
 ```
 
 Pick `<tag>` as something unique and traceable (e.g. a date or short git
 SHA) — it does not need to follow any reserved name.
 
-## Import the image into k3s
-
-k3s's containerd store is separate from the normal Docker daemon's image
-store, so the built image has to be explicitly imported. `k3s ctr` requires
-`sudo` since it operates outside the user's normal docker permissions:
+## Push to the registry
 
 ```bash
-docker save company-os-engineering:<tag> | sudo k3s ctr images import -
+docker push localhost:30500/company-os-engineering:<tag>
 ```
 
 ## Deploy
 
-Point the running Deployment at the newly-imported tag:
+Point the running Deployment at the newly-pushed tag:
 
 ```bash
 kubectl set image deployment/engineering-agent \
-  engineering-agent=docker.io/library/company-os-engineering:<tag> \
+  engineering-agent=localhost:30500/company-os-engineering:<tag> \
   -n company-ops
 kubectl rollout status deployment/engineering-agent -n company-ops
 ```
@@ -93,24 +93,30 @@ Two options:
    ```
 
 2. Point explicitly at a known-good older tag, if it's still present in the
-   node's local containerd image store:
+   registry:
 
    ```bash
-   sudo k3s ctr images list | grep company-os-engineering
+   curl -s http://localhost:30500/v2/company-os-engineering/tags/list
    kubectl set image deployment/engineering-agent \
-     engineering-agent=docker.io/library/company-os-engineering:<older-tag> \
+     engineering-agent=localhost:30500/company-os-engineering:<older-tag> \
      -n company-ops
    kubectl rollout status deployment/engineering-agent -n company-ops
    ```
 
 ## Image cleanup
 
-Old/unused image tags accumulate in the k3s node's containerd store over
-time since builds are never automatically pruned. Operators should
-periodically check for tags no longer referenced by any Deployment and
-remove them:
+Old/unused image tags accumulate in the registry over time since builds are
+never automatically pruned. Operators should periodically check for tags no
+longer referenced by any Deployment and remove them via the registry API
+(the `registry:2` image needs `REGISTRY_STORAGE_DELETE_ENABLED=true`, already
+set in `k8s/registry.yaml`, and a garbage-collect pass to actually reclaim
+disk):
 
 ```bash
-sudo k3s ctr images list | grep company-os-engineering
-sudo k3s ctr images rm <unused-tag>
+curl -s http://localhost:30500/v2/company-os-engineering/tags/list
+digest=$(curl -sI http://localhost:30500/v2/company-os-engineering/manifests/<unused-tag> \
+  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+  | grep -i docker-content-digest | awk '{print $2}' | tr -d '\r')
+curl -X DELETE http://localhost:30500/v2/company-os-engineering/manifests/$digest
+kubectl exec -n company-ops deployment/registry -- registry garbage-collect /etc/docker/registry/config.yml
 ```
