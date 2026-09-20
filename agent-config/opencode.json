@@ -8,5 +8,6 @@
       "headers": {"Authorization": "Bearer {env:STEWARD_TOKEN}"}
     }
   },
-  "instructions": ["AGENTS.md"]
+  "instructions": ["AGENTS.md"],
+  "plugin": ["/opt/company-ops/scripts/opencode-plugins/axiom-usage.js"]
 }
