@@ -80,6 +80,27 @@ wait or mark blocked.
 - Commit message: `<ticket-id>: <description>`
 - Verify `git status --short` after staging to prove separation
 
+## File Sharing — `manage_files`
+
+Agents share files (screenshots, logs, build artifacts) through Steward
+instead of relying on shared filesystem mounts between containers/sessions.
+One tool, dispatched by `action`. Live and verified working on production
+Steward as of 2026-09-20.
+
+- **`upload`** — `manage_files(action: "upload", task_id: "<id>", filename: "...", base64: "..." )` (or `file_path` instead of `base64`, not both). Optional `content_type`. Returns `id`, `filename`, `size_bytes`, `expires_at`.
+- **`download`** — `manage_files(action: "download", file_id: "<id>")` → returns base64 `data` + metadata.
+- **`list`** — `manage_files(action: "list", task_id: "<id>")` (task_id optional) → metadata only, no bytes.
+
+Rules:
+- Every file is **org-scoped** and must reference a `task_id` you can see (upload enforces `file.org == task.org`); an expired, wrong-org, or wrong-task file reads back as a generic "not found" — no existence leak.
+- **50MB per-file cap**, enforced before any bytes are written.
+- **Files expire 24h after upload** and are physically deleted by a background reaper — don't rely on this for anything that needs to outlive a task.
+- No versioning/dedup: re-uploading creates a new `file_id`.
+
+Implementation: `steward_acs` repo, `lib/acs/mcp/tools/file_handlers.ex` +
+`lib/acs/acs/file.ex` (local-disk storage under `priv/uploads`, not R2/S3 —
+fine for internal artifacts at current volume; revisit if that changes).
+
 ## Key Facts (from architecture research)
 
 - SH3D 7.5 source at `sweethome3d-7.5-wayland-patch/`; pre-built jar in
