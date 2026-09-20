@@ -18,9 +18,11 @@ spec:
           ports: [{ containerPort: 8000 }]
           env:
             - name: ADVERSARY_ALLOWED_ORIGINS
-              value: "https://buildmy.house"
+              value: "https://app.buildmy.house"
             - name: ADVERSARY_MODEL
-              value: "z-ai/glm-5.3-free"
+              value: "glm-5.3-flash"
+            - name: OPENAI_BASE_URL
+              value: "https://api.z.ai/api/paas/v4"
           envFrom:
             - secretRef: { name: company-ops-secrets }
           volumeMounts:

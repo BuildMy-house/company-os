@@ -7,7 +7,7 @@
     "run": "tsx src/runner.ts"
   },
   "dependencies": {
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "1.62.1",
     "tsx": "^4"
   },
   "devDependencies": {

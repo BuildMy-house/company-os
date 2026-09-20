@@ -28,12 +28,12 @@ type Action =
   | { action: "goto"; value: string; reason?: string }
   | { action: "done"; reason?: string };
 
-const apiBase = process.env.OPENAI_BASE_URL || (process.env.TOKENROUTER_API_KEY ? "https://api.tokenrouter.com/v1" : "https://api.openai.com/v1");
-const model = process.env.ADVERSARY_MODEL || (process.env.TOKENROUTER_API_KEY ? "z-ai/glm-5.3-free" : "gpt-5-mini");
+const apiBase = process.env.OPENAI_BASE_URL || "https://api.z.ai/api/paas/v4";
+const model = process.env.ADVERSARY_MODEL || "glm-5.3-flash";
 
 async function ask(system: string, user: string): Promise<string> {
-  const key = process.env.OPENAI_API_KEY || process.env.TOKENROUTER_API_KEY;
-  if (!key) throw new Error("OPENAI_API_KEY or TOKENROUTER_API_KEY is required");
+  const key = process.env.OPENAI_API_KEY || process.env.ZAI_CODING_PLAN_API_KEY;
+  if (!key) throw new Error("OPENAI_API_KEY or ZAI_CODING_PLAN_API_KEY is required");
   const response = await fetch(`${apiBase}/chat/completions`, {
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },

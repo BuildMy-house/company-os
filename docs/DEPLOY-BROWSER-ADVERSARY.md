@@ -30,6 +30,5 @@ storage-state filenames, for example `staging.json`. Mount it as
 `browser-adversary-auth`; Hermes passes `auth_profile: "staging"`. Passwords
 are never sent in an MCP call or stored in reports.
 
-The deployment defaults to the existing `TOKENROUTER_API_KEY` and the free
-`z-ai/glm-5.3-free` model. Override `ADVERSARY_MODEL` only when a stronger
-model is justified.
+The deployment uses the existing `ZAI_CODING_PLAN_API_KEY` with Z.AI's
+`glm-5.3-flash` endpoint. Hermes does not run the adversary model.
