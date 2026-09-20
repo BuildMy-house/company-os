@@ -23,7 +23,7 @@ spec:
       containers:
         - name: engineering-agent
           image: docker.io/library/company-os-engineering:container-manager
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
           ports:
