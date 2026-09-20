@@ -41,7 +41,18 @@ export const AxiomUsage = async () => {
   }
   setInterval(flush, 5000);
 
-  function push(event) {
+  // Every push MUST await flush() synchronously (not just rely on the 5s
+  // interval below) — a one-shot `opencode run` CLI dispatch exits the
+  // process immediately after the turn completes, killing any pending
+  // setInterval before its next tick. Without this, the final (and often
+  // only) llm_call/message events of a real dispatch were queued then
+  // silently lost on exit, even though the plugin loaded and fired
+  // correctly — this was the actual reason `role: "worker"` events never
+  // reached Axiom for real dispatches despite exhaustive parity checks
+  // finding nothing wrong with the plugin, config, or environment.
+  // Verified live 2026-09-20: same class of flush-timing bug as the
+  // Hermes-side fix (see hermes-plugins/axiom_usage's on_session_end hook).
+  async function push(event) {
     try {
       queue.push({
         _time: new Date().toISOString(),
@@ -50,7 +61,7 @@ export const AxiomUsage = async () => {
         role: "worker",
         ...event,
       });
-      if (queue.length >= 20) flush();
+      await flush();
     } catch {
       // fail-open
     }
@@ -64,7 +75,7 @@ export const AxiomUsage = async () => {
           if (!info) return;
           roleByMessageID.set(info.id, info.role);
           if (info.role !== "assistant" || !info.time?.completed) return;
-          push({
+          await push({
             event: "llm_call",
             sessionID: info.sessionID,
             messageID: info.id,
@@ -79,7 +90,7 @@ export const AxiomUsage = async () => {
         if (event.type === "message.part.updated") {
           const part = event.properties?.part;
           if (!part || part.type !== "text" || !part.time?.end) return;
-          push({
+          await push({
             event: "message",
             sessionID: part.sessionID,
             messageID: part.messageID,
@@ -93,7 +104,7 @@ export const AxiomUsage = async () => {
     },
     "tool.execute.after": async (input, output) => {
       try {
-        push({
+        await push({
           event: "tool_call",
           sessionID: input.sessionID,
           callID: input.callID,
