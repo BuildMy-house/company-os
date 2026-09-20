@@ -10,5 +10,15 @@ instructions take precedence where they are more specific.
 5. Commit only files owned by the current task.
 6. Never put credentials or tokens in tracked configuration.
 
+## buildmy.house MCP test account
+
+For buildmy.house MCP testing, use `https://app.buildmy.house/mcp`. The
+local account file is `certs/buildmyhouse-test-account.env` (mode `600`,
+git-ignored). In company-ops runtime containers, the same values are
+available through Infisical as `BUILDMYHOUSE_APP_URL`,
+`BUILDMYHOUSE_MCP_URL`, `BUILDMYHOUSE_TEST_EMAIL`,
+`BUILDMYHOUSE_TEST_PASSWORD`, and `BUILDMYHOUSE_MCP_BEARER_TOKEN`.
+Never copy the values into instructions, commits, prompts, logs, or memory.
+
 Hermes sets direction. A domain manager plans, delegates, and verifies.
 Workers implement, test, and report their own commits.
