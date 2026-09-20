@@ -15,11 +15,31 @@ const host = process.env.KUBERNETES_SERVICE_HOST;
 const port = process.env.KUBERNETES_SERVICE_PORT || "443";
 const tokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token";
 const caPath = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
-const token = existsSync(tokenPath) ? readFileSync(tokenPath, "utf8").trim() : null;
-const ca = existsSync(caPath) ? readFileSync(caPath) : null;
 const base = `https://${host}:${port}`;
 
+// Read the ServiceAccount token/CA fresh on every request rather than once at
+// module load. This process is spawned once by Hermes and kept as a
+// long-lived stdio subprocess for the life of the pod; Kubernetes rotates
+// projected SA tokens on its own schedule (roughly hourly), and there is also
+// a startup race where kubelet may not have finished mounting the projected
+// volume at the exact moment this module is first imported. Caching the
+// token/ca as top-level consts meant either failure mode permanently poisons
+// every future tool call for the rest of the pod's lifetime with a
+// misleading "unavailable outside a k3s pod" error, even though the files on
+// disk are actually fine — confirmed by a fresh process reading the same
+// path succeeding immediately. builder-manager-mcp.js already reads its
+// token per-call; this brings container-manager-mcp.js in line with that.
+function readToken() {
+  return existsSync(tokenPath) ? readFileSync(tokenPath, "utf8").trim() : null;
+}
+
+function readCa() {
+  return existsSync(caPath) ? readFileSync(caPath) : null;
+}
+
 async function api(path, options = {}) {
+  const token = readToken();
+  const ca = readCa();
   if (!token || !ca || !host) throw new Error("Kubernetes API unavailable outside a k3s pod");
   return new Promise((resolve, reject) => {
     const request = https.request(`${base}${path}`, { method: options.method || "GET", ca, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(options.headers || {}) } }, (response) => {
