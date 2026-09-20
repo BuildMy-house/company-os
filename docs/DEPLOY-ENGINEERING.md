@@ -141,3 +141,77 @@ digest=$(curl -sI http://localhost:30500/v2/company-os-engineering/manifests/<un
 curl -X DELETE http://localhost:30500/v2/company-os-engineering/manifests/$digest
 kubectl exec -n company-ops deployment/registry -- registry garbage-collect /etc/docker/registry/config.yml
 ```
+
+## Agent-triggered build+push: `builder-manager` (Kaniko Job), no docker socket anywhere
+
+Everything above this section describes a human/CI running `docker build`/
+`docker push` from a workstation. `scripts/builder-manager-mcp.js` gives
+Hermes/the engineering-agent a way to trigger the same kind of build+push
+**from inside a k3s pod**, without ever handing that pod a docker socket or
+persistent registry credentials — the actual boundary this whole build
+pipeline exists to keep:
+
+- The engineering-agent pod and the hermes-gateway pod never hold a docker
+  socket, `k3s ctr` access, `sudo`, or long-lived push credentials. All they
+  can do is ask the Kubernetes API to create a **Job**.
+- `builder_build_and_push(context_ref, dockerfile_path, image_repo,
+  image_tag)` creates a short-lived Job running
+  `gcr.io/kaniko-project/executor` in `company-ops`. Kaniko builds directly
+  from a **git context** (`context_ref`, e.g.
+  `https://github.com/BuildMy-house/company-os.git#main`) and pushes
+  straight to `registry.company-ops.svc.cluster.local:5000` — no docker
+  daemon involved on either end.
+- The Job pod itself runs with `automountServiceAccountToken: false` — it
+  has zero Kubernetes API access; it only ever talks to the git remote and
+  the registry over plain HTTP/HTTPS.
+- The MCP tool (not the Job) authenticates to the Kubernetes API as a
+  **dedicated `builder-manager` ServiceAccount** (`k8s/builder-rbac.yaml`),
+  deliberately separate from the shared `company-ops` SA that
+  `container_manager`/`k8s_deployment` use. Its Role can only
+  `create`/`get`/`list`/`watch`/`delete` **Jobs** and read their pods' logs
+  — it cannot touch Deployments, Secrets, or anything else. This SA's
+  bound token is mounted at a distinct path
+  (`/var/run/secrets/builder-manager/token`, via a Secret + volume added to
+  both the `hermes-gateway` and `engineering-agent` Deployments), separate
+  from the pod's default in-cluster SA token path.
+- The tool polls the Job to completion, fetches the Kaniko pod's logs on
+  either outcome, deletes the Job (best-effort; `ttlSecondsAfterFinished:
+  600` on the Job spec is the backstop if the delete call itself fails),
+  and independently confirms the pushed tag actually exists in the
+  registry (`GET /v2/<repo>/tags/list`) before reporting success — it does
+  not just trust Kaniko's own exit status.
+- Wired into `scripts/generate-agent-mcp-config.js` for both Hermes and
+  Claude's engineering-manager (same `fs.existsSync(serviceaccount token)`
+  gate as `container-manager`/`registry-manager`), and registered directly
+  in `hermes/config.yaml` as `builder_manager`. Unlike
+  `container-manager`/`registry-manager`/`hermes-messenger`, it is **not**
+  added to the OpenCode skip-list in `generate-agent-mcp-config.js` — its
+  own RBAC is already narrow enough that OpenCode workers dispatched from
+  engineering-manager can safely trigger builds too.
+
+### Required live setup before this can actually build anything
+
+`k8s/builder-rbac.yaml` (the ServiceAccount/Role/RoleBinding/token Secret)
+and the two Deployment volume-mount changes must be applied to the live
+cluster, and the affected Deployments restarted to pick up the new volume
+mounts, before `builder_build_and_push` can authenticate at all:
+
+```bash
+kubectl apply -f k8s/builder-rbac.yaml
+kubectl apply -f k8s/company-ops.yaml
+kubectl apply -f k8s/engineering.yaml
+kubectl -n company-ops rollout restart deployment hermes-gateway
+kubectl -n company-ops rollout restart deployment engineering-agent
+kubectl -n company-ops rollout status deployment hermes-gateway
+kubectl -n company-ops rollout status deployment engineering-agent
+```
+
+This has not been applied or live-tested as of this doc's last edit — see
+the repo's Steward task history / the agent-manager session report for the
+current status. Verify before trusting `builder_build_and_push` to work:
+
+```bash
+kubectl -n company-ops auth can-i create jobs.batch \
+  --as=system:serviceaccount:company-ops:builder-manager   # expect yes
+kubectl -n company-ops get secret builder-manager-token     # expect a populated token key
+```

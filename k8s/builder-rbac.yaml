@@ -1,0 +1,70 @@
+# Dedicated, narrowly-scoped ServiceAccount + RBAC for the Kaniko-based
+# ephemeral builder Job (scripts/builder-manager-mcp.js). Deliberately
+# separate from the "company-ops" ServiceAccount in k8s/rbac.yaml (which
+# hermes-gateway/engineering-agent use for container_manager/k8s_deployment,
+# and which can patch/delete Deployments) — this SA can only
+# create/get/list/watch/delete Jobs and read their pods' logs. It cannot
+# touch Deployments, Secrets, or any resource outside what its own Jobs own.
+#
+# The Kaniko build itself runs unauthenticated as a plain Job pod with no
+# ServiceAccount permissions of its own (see builder-manager-mcp.js, which
+# sets automountServiceAccountToken: false on the Job template) — Kaniko
+# only needs network access to the git remote and the in-cluster registry,
+# never the Kubernetes API.
+#
+# builder-manager-mcp.js (running as a subprocess inside hermes-gateway or
+# engineering-agent, both of which are already assigned the "company-ops"
+# SA at the pod level) authenticates as THIS SA instead via a separately
+# mounted bound token — see the "builder-manager-token" volume added to
+# those Deployments in company-ops.yaml/engineering.yaml, mounted at
+# /var/run/secrets/builder-manager/token (distinct from the pod's default
+# /var/run/secrets/kubernetes.io/serviceaccount/token path, which stays
+# the "company-ops" SA's token for every other MCP tool in the same pod).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: builder-manager
+  namespace: company-ops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: builder-manager-jobs
+  namespace: company-ops
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: builder-manager-jobs
+  namespace: company-ops
+subjects:
+  - kind: ServiceAccount
+    name: builder-manager
+    namespace: company-ops
+roleRef:
+  kind: Role
+  name: builder-manager-jobs
+  apiGroup: rbac.authorization.k8s.io
+---
+# Legacy-style bound Secret token for the builder-manager SA — annotating a
+# Secret with kubernetes.io/service-account.name makes the token controller
+# populate .data.token/.data.ca.crt automatically once this is applied.
+# Mounted into hermes-gateway/engineering-agent as an extra volume so
+# builder-manager-mcp.js can read a token scoped to THIS Role, without
+# changing either Deployment's primary serviceAccountName (which stays
+# "company-ops" for every other MCP tool already running in those pods).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: builder-manager-token
+  namespace: company-ops
+  annotations:
+    kubernetes.io/service-account.name: builder-manager
+type: kubernetes.io/service-account-token

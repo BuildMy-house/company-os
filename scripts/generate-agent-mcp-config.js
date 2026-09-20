@@ -128,6 +128,17 @@ function buildServers() {
       command: ['node', '/opt/company-ops/scripts/hermes-messenger-mcp.js'],
       environment: null,
     };
+    // Kaniko-based ephemeral build+push (k8s/builder-rbac.yaml). Unlike
+    // container-manager/registry-manager/hermes-messenger above, this one
+    // is deliberately NOT added to the OpenCode skip-list below — the
+    // Kaniko Job's own RBAC is already narrowly scoped (create/watch/delete
+    // Jobs it owns only, no Deployment/Secret access), so OpenCode workers
+    // dispatched from engineering-manager can trigger builds directly too.
+    servers['builder-manager'] = {
+      kind: 'stdio',
+      command: ['node', '/opt/company-ops/scripts/builder-manager-mcp.js'],
+      environment: null,
+    };
   }
 
   return servers;

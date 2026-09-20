@@ -81,9 +81,15 @@ spec:
           volumeMounts:
             - name: agent-home
               mountPath: /tmp/company-ops-home
+            - name: builder-manager-token
+              mountPath: /var/run/secrets/builder-manager
+              readOnly: true
       volumes:
         - name: agent-home
           emptyDir: {}
+        - name: builder-manager-token
+          secret:
+            secretName: builder-manager-token
 ---
 apiVersion: v1
 kind: Service

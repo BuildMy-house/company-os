@@ -42,6 +42,9 @@ spec:
           volumeMounts:
             - name: hermes-data
               mountPath: /opt/data
+            - name: builder-manager-token
+              mountPath: /var/run/secrets/builder-manager
+              readOnly: true
           readinessProbe:
             exec:
               command: ["pgrep", "-f", "hermes"]
@@ -57,6 +60,9 @@ spec:
         - name: hermes-data
           persistentVolumeClaim:
             claimName: hermes-data
+        - name: builder-manager-token
+          secret:
+            secretName: builder-manager-token
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
