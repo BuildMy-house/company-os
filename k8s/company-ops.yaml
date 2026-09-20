@@ -68,3 +68,21 @@ spec:
   resources:
     requests:
       storage: 5Gi
+---
+# ClusterIP only — the api_server platform (hermes/config.yaml) binds an
+# OpenAI-compatible HTTP surface (/v1/chat/completions etc, port 8642)
+# authenticated by API_SERVER_KEY; this Service makes it reachable from
+# other in-namespace pods (engineering-agent) without exposing it outside
+# the cluster. No NodePort — unlike registry.yaml's deliberately-external
+# NodePort, there is no reason for this to leave company-ops.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-gateway
+  namespace: company-ops
+spec:
+  selector:
+    app: hermes-gateway
+  ports:
+    - port: 8642
+      targetPort: 8642

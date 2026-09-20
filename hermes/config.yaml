@@ -189,3 +189,21 @@ mcp_servers:
     args: ["/opt/company-ops/scripts/container-manager-mcp.js"]
     connect_timeout: 30
     timeout: 300
+
+# OpenAI-compatible HTTP API surface (gateway/platforms/api_server.py),
+# used by scripts/hermes-messenger-mcp.js so Claude/agent-manager can talk
+# to this Hermes instance directly (POST /v1/chat/completions) instead of
+# via Discord — Discord was rejected for this because Hermes's own adapter
+# ignores messages authored by its own bot identity (self-message filter),
+# so a same-token round trip would never surface a reply. host must be
+# 0.0.0.0 (not the library default 127.0.0.1) for the new hermes-gateway
+# Service (k8s/company-ops.yaml) to reach it from other pods in-namespace;
+# it is still not exposed outside the cluster (ClusterIP only, no Ingress).
+# API_SERVER_KEY is a new secret — add it to company-ops-secrets before
+# applying this config (see .env.example).
+platforms:
+  api_server:
+    enabled: true
+    extra:
+      key: "${API_SERVER_KEY}"
+      host: "0.0.0.0"

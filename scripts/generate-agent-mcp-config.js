@@ -117,6 +117,17 @@ function buildServers() {
       command: ['node', '/opt/company-ops/scripts/registry-manager-mcp.js'],
       environment: null,
     };
+    // Bridges Claude/agent-manager to this Hermes instance's own
+    // OpenAI-compatible api_server endpoint (hermes/config.yaml
+    // platforms.api_server, k8s/company-ops.yaml's hermes-gateway Service).
+    // Same OpenCode skip-list treatment as container-manager/registry-manager
+    // above: talking to Hermes can indirectly cause Hermes to act (e.g. call
+    // its own container_manager tools), so it stays Claude-manager only.
+    servers['hermes-messenger'] = {
+      kind: 'stdio',
+      command: ['node', '/opt/company-ops/scripts/hermes-messenger-mcp.js'],
+      environment: null,
+    };
   }
 
   return servers;
@@ -170,7 +181,7 @@ function updateOpencode(servers) {
   const config = readJson(filePath);
   config.mcp = config.mcp || {};
   for (const [name, server] of Object.entries(servers)) {
-    if (name === 'container-manager' || name === 'registry-manager') continue;
+    if (name === 'container-manager' || name === 'registry-manager' || name === 'hermes-messenger') continue;
     config.mcp[name] = toOpencodeServer(server);
   }
   updateOpencodePlugins(config);
