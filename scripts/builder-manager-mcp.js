@@ -250,6 +250,10 @@ for await (const line of input) {
   try { request = JSON.parse(line); } catch { continue; }
   if (request.method === "initialize") { send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: request.params?.protocolVersion || "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "builder-manager", version: "0.1.0" } } }); continue; }
   if (request.method === "notifications/initialized") continue;
+  // See container-manager-mcp.js for the full explanation: MCP's optional "ping"
+  // utility must get an immediate empty result or Hermes's keepalive probe hangs for
+  // its 30s RPC timeout and this connection flaps connected/degraded/parked forever.
+  if (request.method === "ping") { send({ jsonrpc: "2.0", id: request.id, result: {} }); continue; }
   if (request.method === "tools/list") { send({ jsonrpc: "2.0", id: request.id, result: { tools } }); continue; }
   if (request.method === "tools/call") {
     try { send(text(request.id, await call(request.params.name, request.params.arguments || {}))); }

@@ -183,6 +183,17 @@ for await (const line of input) {
   try { request = JSON.parse(line); } catch { continue; }
   if (request.method === "initialize") { send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: request.params?.protocolVersion || "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "container-manager", version: "0.1.0" } } }); continue; }
   if (request.method === "notifications/initialized") continue;
+  // MCP's optional "ping" utility: Hermes's keepalive probe (tools/mcp_tool_health.py
+  // _keepalive_probe) sends this on every fresh transport connection and expects an
+  // immediate empty result. Leaving it unhandled meant it fell through with zero
+  // response (not even a JSON-RPC error) instead of Hermes's own client cleanly
+  // detecting "method not found" and falling back to list_tools for keepalives --
+  // the keepalive hung for the full 30s RPC timeout, logged as a TimeoutError, and
+  // forced a reconnect; because the "ping unsupported" fallback is latched per
+  // transport connection, each reconnect wiped that learned state and the next
+  // connection's first keepalive hit the same 30s timeout again -- a permanent
+  // connected/degraded/parked flap instead of one-time self-correction.
+  if (request.method === "ping") { send({ jsonrpc: "2.0", id: request.id, result: {} }); continue; }
   if (request.method === "tools/list") { send({ jsonrpc: "2.0", id: request.id, result: { tools } }); continue; }
   if (request.method === "tools/call") {
     try { send(text(request.id, await call(request.params.name, request.params.arguments || {}))); }
