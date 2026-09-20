@@ -28,7 +28,7 @@ type Action =
   | { action: "goto"; value: string; reason?: string }
   | { action: "done"; reason?: string };
 
-const apiBase = process.env.OPENAI_BASE_URL || "https://api.z.ai/api/paas/v4";
+const apiBase = process.env.OPENAI_BASE_URL || "https://api.z.ai/api/coding/paas/v4";
 const model = process.env.ADVERSARY_MODEL || "glm-5.3-flash";
 
 async function ask(system: string, user: string): Promise<string> {

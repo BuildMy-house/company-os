@@ -22,7 +22,7 @@ spec:
             - name: ADVERSARY_MODEL
               value: "glm-5.3-flash"
             - name: OPENAI_BASE_URL
-              value: "https://api.z.ai/api/paas/v4"
+              value: "https://api.z.ai/api/coding/paas/v4"
           envFrom:
             - secretRef: { name: company-ops-secrets }
           volumeMounts:
