@@ -219,3 +219,22 @@ platforms:
     extra:
       key: "${API_SERVER_KEY}"
       host: "0.0.0.0"
+
+# The api_server platform does NOT include user-configured mcp_servers by
+# default (hermes_cli.tools_config._get_platform_tools is called with
+# include_default_mcp_servers=False for this platform, confirmed by direct
+# inspection of the installed package + live evaluation against this exact
+# config on 2026-09-20) — a request through /v1/chat/completions otherwise
+# resolves to ONLY the static composite toolsets (browser, file, terminal,
+# memory, etc.), with none of container_manager/builder_manager/
+# k8s_deployment/browser_adversary reachable at all, regardless of RBAC or
+# MCP server health. This must be an explicit allowlist entry per platform;
+# "hermes-api-server" is the platform's own default composite and must stay
+# listed first so opting in these two MCP servers doesn't silently drop it.
+# Required for hermes-messenger-mcp.js's hermes_ask to be able to trigger
+# container_upgrade/builder_build_and_push at all.
+platform_toolsets:
+  api_server:
+    - hermes-api-server
+    - container_manager
+    - builder_manager
