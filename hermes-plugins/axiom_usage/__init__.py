@@ -11,6 +11,18 @@ narrowed again, drop the `text`/`args`/`result` fields from the pushed
 events below and keep only the usage/timing metadata.
 Every hook body is failsafe — a broken network call must never interrupt an
 actual Hermes turn.
+
+Caller identity (human vs. agent, e.g. hermes_ask MCP calls vs. interactive
+chat) is NOT available at these hook sites today: the HTTP layer for
+/v1/chat/completions and the Discord adapter both live in the third-party
+nousresearch/hermes-agent base image (not this repo) and discard any
+caller-identity signal before invoking hooks. `pod_name` (below) identifies
+the emitting container/pod; `caller_channel` (from the `platform` kwarg,
+where the two hooks that receive it forward it) is the closest available
+proxy for "which surface initiated this", not who initiated it. Do not
+invent caller_type/caller_id values — if this needs closing, it requires
+upstream changes to the hermes-agent base image or a caller-side header
+added at the hermes_ask/CLI/Discord ingress, both out of this repo's scope.
 """
 from __future__ import annotations
 
@@ -19,6 +31,7 @@ import json
 import logging
 import os
 import queue
+import socket
 import threading
 import time
 import urllib.request
@@ -41,6 +54,28 @@ _started = False
 _start_lock = threading.Lock()
 
 
+_failure_counts: dict[str, int] = {}
+_failure_lock = threading.Lock()
+
+
+def _record_failure(where: str) -> None:
+    try:
+        with _failure_lock:
+            _failure_counts[where] = _failure_counts.get(where, 0) + 1
+    except Exception:
+        pass
+
+
+def _pod_name() -> str:
+    try:
+        return socket.gethostname() or "unknown"
+    except Exception:
+        return os.environ.get("HOSTNAME", "unknown")
+
+
+_POD_NAME = _pod_name()
+
+
 def _token() -> str:
     try:
         from agent.secret_scope import get_secret
@@ -58,9 +93,11 @@ def _push(event: dict[str, Any]) -> None:
         event.setdefault("service", os.environ.get("AXIOM_SERVICE_NAME", "hermes-gateway"))
         event.setdefault("environment", os.environ.get("DEPLOYMENT_ENVIRONMENT", "local"))
         event.setdefault("role", "hermes")
+        event.setdefault("pod_name", _POD_NAME)
         _queue.put_nowait(event)
     except Exception as exc:
-        logger.debug("axiom_usage: enqueue failed: %s", exc)
+        _record_failure("enqueue")
+        logger.warning("axiom_usage: enqueue failed: %s", exc)
 
 
 def _flush_once() -> None:
@@ -82,8 +119,17 @@ def _flush_once() -> None:
             "Content-Type": "application/json",
         })
         urllib.request.urlopen(req, timeout=10).read()
+        try:
+            if _failure_counts:
+                with _failure_lock:
+                    summary = dict(_failure_counts)
+                    _failure_counts.clear()
+                logger.warning("axiom_usage: %d event(s) failed across %s since last successful flush", sum(summary.values()), summary)
+        except Exception:
+            pass
     except Exception as exc:
-        logger.debug("axiom_usage: flush of %d events failed: %s", len(batch), exc)
+        _record_failure("flush")
+        logger.warning("axiom_usage: flush of %d events failed: %s", len(batch), exc)
 
 
 def _flush_loop() -> None:
@@ -167,7 +213,8 @@ def on_pre_api_request(*, task_id: str = "", session_id: str = "", turn_id: str 
             "turn_id": turn_id, "text": text,
         })
     except Exception as exc:
-        logger.debug("axiom_usage: on_pre_api_request failed: %s", exc)
+        _record_failure("on_pre_api_request")
+        logger.warning("axiom_usage: on_pre_api_request failed: %s", exc)
 
 
 def on_post_api_request(*, task_id: str = "", session_id: str = "", turn_id: str = "", provider: str = "",
@@ -188,20 +235,23 @@ def on_post_api_request(*, task_id: str = "", session_id: str = "", turn_id: str
                 "turn_id": turn_id, "text": text,
             })
     except Exception as exc:
-        logger.debug("axiom_usage: on_post_api_request failed: %s", exc)
+        _record_failure("on_post_api_request")
+        logger.warning("axiom_usage: on_post_api_request failed: %s", exc)
 
 
 def on_post_llm_call(*, task_id: str = "", session_id: str = "", turn_id: str = "",
                      user_message: Any = None, assistant_response: Any = None, model: str = "",
-                     **_: Any) -> None:
+                     platform: str = "", **_: Any) -> None:
     try:
         _ensure_started()
         _push({
             "event": "turn", "task_id": task_id, "session_id": session_id, "turn_id": turn_id,
-            "model": model, "user_text": _text_of(user_message), "assistant_text": _text_of(assistant_response),
+            "model": model, "caller_channel": platform or None,
+            "user_text": _text_of(user_message), "assistant_text": _text_of(assistant_response),
         })
     except Exception as exc:
-        logger.debug("axiom_usage: on_post_llm_call failed: %s", exc)
+        _record_failure("on_post_llm_call")
+        logger.warning("axiom_usage: on_post_llm_call failed: %s", exc)
 
 
 def on_post_tool_call(*, tool_name: str = "", task_id: str = "", session_id: str = "",
@@ -217,10 +267,11 @@ def on_post_tool_call(*, tool_name: str = "", task_id: str = "", session_id: str
             "result": result_text[:8000] if result_text else None,
         })
     except Exception as exc:
-        logger.debug("axiom_usage: on_post_tool_call failed: %s", exc)
+        _record_failure("on_post_tool_call")
+        logger.warning("axiom_usage: on_post_tool_call failed: %s", exc)
 
 
-def on_session_end(**_: Any) -> None:
+def on_session_end(*, platform: str = "", **_: Any) -> None:
     """Force a synchronous flush when a session/turn ends.
 
     The background `_flush_loop` thread only drains the queue every
@@ -240,7 +291,8 @@ def on_session_end(**_: Any) -> None:
         _ensure_started()
         _flush_once()
     except Exception as exc:
-        logger.debug("axiom_usage: on_session_end flush failed: %s", exc)
+        _record_failure("on_session_end")
+        logger.warning("axiom_usage: on_session_end flush failed: %s", exc)
 
 
 def register(ctx) -> None:
@@ -255,4 +307,5 @@ def register(ctx) -> None:
         try:
             ctx.register_hook(name, fn)
         except Exception as exc:
-            logger.debug("axiom_usage: failed to register hook %s: %s", name, exc)
+            _record_failure("register")
+            logger.warning("axiom_usage: failed to register hook %s: %s", name, exc)
