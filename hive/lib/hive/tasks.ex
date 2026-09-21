@@ -16,7 +16,10 @@ defmodule Hive.Tasks do
 
   def attach_remote(task_id, remote) do
     Agent.update(__MODULE__, fn tasks ->
-      Map.update!(tasks, task_id, &Map.put(&1, :remote, remote))
+      Map.update!(tasks, task_id, fn task ->
+        state = get_in(remote, ["status", "state"]) || task.state
+        %{task | remote: remote, state: state}
+      end)
     end)
 
     get(task_id)

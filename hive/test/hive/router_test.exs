@@ -51,7 +51,7 @@ defmodule Hive.RouterTest do
       |> Jason.decode!()
 
     assert conn.status == 200
-    assert task["status"]["state"] == "submitted"
+    assert task["status"]["state"] == "completed"
     assert task["metadata"]["remote"]["status"]["state"] == "completed"
   end
 end
