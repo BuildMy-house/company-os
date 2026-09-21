@@ -29,6 +29,12 @@ function emitTelemetry(event) {
   }).catch(() => {});
 }
 
+function toolPayload(message) {
+  const text = message?.result?.content?.find((part) => part.type === "text")?.text;
+  if (!text) return message?.result;
+  try { return JSON.parse(text); } catch { return { output: text }; }
+}
+
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
@@ -149,6 +155,26 @@ function a2aResponse(task) {
   };
 }
 
+function trackProcess(task, pid) {
+  const poll = () => upstreamCall("get_result", { pid, verbose: true }).then((reply) => {
+    const payload = toolPayload(reply);
+    if (["completed", "failed", "killed"].includes(payload?.status)) {
+      task.state = payload.status === "completed" ? "completed" : "failed";
+      task.result = payload;
+      if (task.state === "failed") task.error = payload.error || `agent process ${payload.status}`;
+      emitTelemetry({ event: "a2a_task", task_id: task.id, state: task.state, duration_ms: Date.now() - task.startedAt, pid, error: task.error });
+      return;
+    }
+    setTimeout(poll, 2000);
+  }).catch((error) => {
+    task.state = "failed";
+    task.error = error.message;
+    emitTelemetry({ event: "a2a_task", task_id: task.id, state: "failed", duration_ms: Date.now() - task.startedAt, pid, error: task.error });
+  });
+
+  setTimeout(poll, 1000);
+}
+
 function sendHttp(response, status, body) {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
@@ -192,10 +218,21 @@ async function handleA2A(request, response) {
   a2aTasks.set(taskId, task);
   emitTelemetry({ event: "a2a_task", task_id: taskId, state: "working" });
   upstreamCall("run", { ...arguments_, agent: MANAGER.agent, model: MANAGER.model }).then((result) => {
-    task.state = result.error ? "failed" : "completed";
-    if (result.error) task.error = result.error.message || "engineering request failed";
-    else task.result = result.result;
-    emitTelemetry({ event: "a2a_task", task_id: taskId, state: task.state, duration_ms: Date.now() - task.startedAt, error: task.error });
+    if (result.error) {
+      task.state = "failed";
+      task.error = result.error.message || "engineering request failed";
+      emitTelemetry({ event: "a2a_task", task_id: taskId, state: "failed", duration_ms: Date.now() - task.startedAt, error: task.error });
+      return;
+    }
+    const started = toolPayload(result);
+    if (started?.status === "started" && Number.isInteger(started.pid)) {
+      task.pid = started.pid;
+      trackProcess(task, started.pid);
+      return;
+    }
+    task.state = "failed";
+    task.error = "engineering runner did not return a process id";
+    emitTelemetry({ event: "a2a_task", task_id: taskId, state: "failed", duration_ms: Date.now() - task.startedAt, error: task.error });
   }).catch((error) => {
     task.state = "failed";
     task.error = error.message;

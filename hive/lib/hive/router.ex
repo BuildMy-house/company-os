@@ -109,8 +109,23 @@ defmodule Hive.Router do
 
   defp refresh_remote(%{remote: %{"id" => remote_id}} = task) do
     case Hive.Engineering.get(remote_id) do
-      {:ok, remote} -> Hive.Tasks.attach_remote(task.id, remote)
-      _ -> task
+      {:ok, remote} ->
+        previous = get_in(task.remote, ["status", "state"])
+        current = get_in(remote, ["status", "state"])
+
+        if previous != current and current in ["completed", "failed", "canceled", "rejected"] do
+          Hive.Telemetry.emit(%{
+            "event" => "a2a_task",
+            "task_id" => task.id,
+            "remote_task_id" => remote_id,
+            "state" => current
+          })
+        end
+
+        Hive.Tasks.attach_remote(task.id, remote)
+
+      _ ->
+        task
     end
   end
 
