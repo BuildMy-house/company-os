@@ -13,6 +13,10 @@ GLM Flash. Elixir is the default for new Company OS infrastructure, while
 Python remains appropriate for existing integrations, agent tooling, and data
 work where it is the simpler choice.
 
+This is a development environment: quality and maintainability outrank
+backwards compatibility with the current manager/MCP wiring. Refactor that
+wiring when a clean A2A boundary is the better design.
+
 Each agent container should expose A2A for tasks, status, artifacts, and
 completion signals. Keep MCP for tools and resources; A2A and MCP are
 complementary boundaries.
