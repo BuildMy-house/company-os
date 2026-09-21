@@ -20,38 +20,40 @@ export const AxiomUsage = async () => {
   // (commit be94cc6), applied here so opencode-side events actually reach it.
   const endpoint = `https://eu-central-1.aws.edge.axiom.co/v1/ingest/${dataset}`;
   const queue = [];
-  let flushing = false;
   const roleByMessageID = new Map(); // populated from message.updated, read by message.part.updated
 
-  async function flush() {
-    if (flushing || queue.length === 0) return;
-    flushing = true;
+  // `currentFlush` chains every flush attempt serially (instead of an
+  // in-flight-guard boolean that DROPS an overlapping call) and `dispose()`
+  // below awaits it — this is what actually makes delivery reliable for a
+  // one-shot `opencode run` CLI dispatch, which exits the process as soon as
+  // the session goes idle. Earlier attempt (awaiting flush() inline from each
+  // push(), without a dispose hook or serial chaining) was NOT sufficient:
+  // verified live 2026-09-20 that two pushes firing ~14ms apart produced two
+  // overlapping flush() calls — the second saw the boolean `flushing` guard
+  // still true from the first's in-flight fetch and returned immediately
+  // without sending, and the process exited before the first fetch's promise
+  // ever resolved (confirmed via instrumented trace: no FLUSH_RESULT/
+  // FLUSH_ERROR ever logged for that request). The `dispose` hook (from
+  // @opencode-ai/plugin's Hooks interface) is the one opencode actually
+  // awaits before tearing the plugin instance down — the interval below
+  // remains only as a best-effort belt-and-braces for long-lived sessions.
+  let currentFlush = Promise.resolve();
+  function flush() {
+    if (queue.length === 0) return currentFlush;
     const batch = queue.splice(0, queue.length);
-    try {
-      await fetch(endpoint, {
+    currentFlush = currentFlush.then(() =>
+      fetch(endpoint, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify(batch),
-      });
-    } catch {
-      // fail-open: usage tracking must never break a coding session
-    } finally {
-      flushing = false;
-    }
+      }).catch(() => {
+        // fail-open: usage tracking must never break a coding session
+      })
+    );
+    return currentFlush;
   }
   setInterval(flush, 5000);
 
-  // Every push MUST await flush() synchronously (not just rely on the 5s
-  // interval below) — a one-shot `opencode run` CLI dispatch exits the
-  // process immediately after the turn completes, killing any pending
-  // setInterval before its next tick. Without this, the final (and often
-  // only) llm_call/message events of a real dispatch were queued then
-  // silently lost on exit, even though the plugin loaded and fired
-  // correctly — this was the actual reason `role: "worker"` events never
-  // reached Axiom for real dispatches despite exhaustive parity checks
-  // finding nothing wrong with the plugin, config, or environment.
-  // Verified live 2026-09-20: same class of flush-timing bug as the
-  // Hermes-side fix (see hermes-plugins/axiom_usage's on_session_end hook).
   async function push(event) {
     try {
       queue.push({
@@ -68,6 +70,13 @@ export const AxiomUsage = async () => {
   }
 
   return {
+    dispose: async () => {
+      try {
+        await flush();
+      } catch {
+        // fail-open
+      }
+    },
     event: async ({ event }) => {
       try {
         if (event.type === "message.updated") {
