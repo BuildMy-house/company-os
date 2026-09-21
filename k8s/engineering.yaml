@@ -28,6 +28,7 @@ spec:
             allowPrivilegeEscalation: false
           ports:
             - containerPort: 8000
+            - containerPort: 8001
           resources:
             requests:
               cpu: 200m
@@ -100,5 +101,9 @@ spec:
   selector:
     app: engineering-agent
   ports:
-    - port: 8000
+    - name: mcp
+      port: 8000
       targetPort: 8000
+    - name: a2a
+      port: 8001
+      targetPort: 8001

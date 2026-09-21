@@ -3,7 +3,9 @@
 // Small policy facade: Hermes gets a Claude-only engineering tool. Claude's
 // own ai-cli MCP remains untouched, so Claude can still delegate internally.
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, statfsSync } from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import readline from "node:readline";
 
@@ -15,6 +17,7 @@ const upstream = spawn("npx", ["-y", "ai-cli-mcp@latest"], {
 const MANAGER = { agent: "claude", model: "sonnet", reasoning_effort: "medium", auto_compact: "200k" };
 
 const pending = new Map();
+const a2aTasks = new Map();
 let nextId = 1_000_000;
 
 function send(message) {
@@ -31,6 +34,16 @@ function error(id, code, message) {
 
 function tool(name, description, inputSchema) {
   return { name, description, inputSchema };
+}
+
+function upstreamCall(name, arguments_) {
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    upstream.stdin.write(`${JSON.stringify({
+      jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: arguments_ },
+    })}\n`);
+  });
 }
 
 function health() {
@@ -72,6 +85,7 @@ input.on("line", (line) => {
   const waiter = pending.get(message.id);
   if (!waiter) return;
   pending.delete(message.id);
+  if (waiter.resolve) return waiter.resolve(message);
   if (waiter.original !== message.id) message.id = waiter.original;
   if (waiter.method === "tools/list" && message.result?.tools) {
     const run = message.result.tools.find((item) => item.name === "run");
@@ -93,6 +107,71 @@ input.on("line", (line) => {
   send(message);
 });
 
+function a2aResponse(task) {
+  return {
+    id: task.id,
+    status: { state: task.state },
+    ...(task.result ? { artifacts: [{ parts: [{ text: JSON.stringify(task.result) }] }] } : {}),
+    ...(task.error ? { status: { state: "failed", message: { parts: [{ text: task.error }] } } } : {}),
+  };
+}
+
+function sendHttp(response, status, body) {
+  response.writeHead(status, { "content-type": "application/json" });
+  response.end(JSON.stringify(body));
+}
+
+async function readJson(request) {
+  let body = "";
+  for await (const chunk of request) body += chunk;
+  return JSON.parse(body || "{}");
+}
+
+async function handleA2A(request, response) {
+  const url = new URL(request.url, "http://127.0.0.1");
+  if (request.method === "GET" && url.pathname === "/.well-known/agent-card.json") {
+    return sendHttp(response, 200, {
+      name: "buildmy.house engineering agent",
+      description: "Claude engineering manager with OpenCode worker dispatch",
+      url: `http://${process.env.A2A_HOST || "engineering-agent"}:${process.env.A2A_PORT || 8001}`,
+      version: "0.1.0",
+      capabilities: { streaming: false, pushNotifications: false },
+      skills: [{ id: "engineering", name: "Engineering work" }],
+    });
+  }
+  if (request.method === "GET" && url.pathname.startsWith("/tasks/")) {
+    const task = a2aTasks.get(url.pathname.slice("/tasks/".length));
+    return task ? sendHttp(response, 200, a2aResponse(task)) : sendHttp(response, 404, { error: "task not found" });
+  }
+  if (request.method !== "POST" || url.pathname !== "/") return sendHttp(response, 404, { error: "not found" });
+
+  let message;
+  try { message = await readJson(request); } catch { return sendHttp(response, 400, { error: "invalid JSON" }); }
+  if (message.jsonrpc !== "2.0" || message.method !== "message/send") {
+    return sendHttp(response, 400, { jsonrpc: "2.0", id: message.id ?? null, error: { code: -32600, message: "expected message/send" } });
+  }
+
+  const taskId = `task_${randomUUID()}`;
+  const parts = message.params?.message?.parts || [];
+  const prompt = parts.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n");
+  const arguments_ = { workFolder: "/workspace", ...(message.params?.metadata || {}), prompt };
+  const task = { id: taskId, state: "working" };
+  a2aTasks.set(taskId, task);
+  upstreamCall("run", { ...arguments_, agent: MANAGER.agent, model: MANAGER.model }).then((result) => {
+    task.state = result.error ? "failed" : "completed";
+    if (result.error) task.error = result.error.message || "engineering request failed";
+    else task.result = result.result;
+  }).catch((error) => {
+    task.state = "failed";
+    task.error = error.message;
+  });
+  return sendHttp(response, 200, { jsonrpc: "2.0", id: message.id, result: a2aResponse(task) });
+}
+
+http.createServer((request, response) => {
+  handleA2A(request, response).catch((error) => sendHttp(response, 500, { error: error.message }));
+}).listen(Number(process.env.A2A_PORT || 8001), "0.0.0.0");
+
 const requests = readline.createInterface({ input: process.stdin });
 requests.on("line", async (line) => {
   let message;
@@ -101,10 +180,11 @@ requests.on("line", async (line) => {
     const name = message.params?.name;
     if (name === "team_health" || name === "container_telemetry") return localCall(message.id, name);
     if (name === "engineering") {
-      const id = nextId++;
       const args = { ...(message.params.arguments ?? {}), agent: MANAGER.agent, model: MANAGER.model };
-      pending.set(id, { original: message.id, method: "tools/call" });
-      upstream.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "run", arguments: args } })}\n`);
+      upstreamCall("run", args).then((reply) => {
+        reply.id = message.id;
+        send(reply);
+      }).catch((err) => send(error(message.id, -32000, err.message)));
       return;
     }
     if (name === "run" || name === "models") return send(error(message.id, -32601, `${name} is not exposed to Hermes`));

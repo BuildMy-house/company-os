@@ -67,5 +67,5 @@ COPY scripts/opencode-plugins/axiom-usage.js /opt/company-ops/scripts/opencode-p
 ENV HOME=/home/engineering
 USER engineering
 
-EXPOSE 8000
+EXPOSE 8000 8001
 ENTRYPOINT ["bash", "/opt/company-ops/scripts/engineering-entrypoint.sh"]
