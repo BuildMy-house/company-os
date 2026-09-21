@@ -25,5 +25,5 @@ Workers implement, test, and report their own commits.
 
 For the long-term coordination model, read
 [`docs/HIVE-ARCHITECTURE.md`](../docs/HIVE-ARCHITECTURE.md). New coordination
-work should move toward Python/Postgres durable events, leases, and task-ID
+work should move toward Elixir/Postgres durable events, leases, and task-ID
 completion signals while preserving the existing Steward and k3s boundaries.
