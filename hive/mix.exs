@@ -12,7 +12,7 @@ defmodule Hive.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger], mod: {Hive.Application, []}]
+    [extra_applications: [:logger, :inets, :ssl], mod: {Hive.Application, []}]
   end
 
   defp deps do

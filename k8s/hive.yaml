@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: hive-coordinator
-          image: docker.io/library/company-os-hive:dev
-          imagePullPolicy: IfNotPresent
+          image: localhost:30500/company-os-hive:dev
+          imagePullPolicy: Always
           ports:
             - containerPort: 4100
           env:
@@ -24,6 +24,13 @@ spec:
               value: "4100"
             - name: ENGINEERING_A2A_URL
               value: http://engineering-agent:8001
+            - name: AXIOM_SERVICE_NAME
+              value: hive-coordinator-k8s
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: local-k8s
+          envFrom:
+            - secretRef:
+                name: company-ops-secrets
           readinessProbe:
             httpGet:
               path: /.well-known/agent-card.json

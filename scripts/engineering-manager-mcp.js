@@ -20,6 +20,15 @@ const pending = new Map();
 const a2aTasks = new Map();
 let nextId = 1_000_000;
 
+function emitTelemetry(event) {
+  if (!process.env.AXIOM_TOKEN) return;
+  fetch(`https://eu-central-1.aws.edge.axiom.co/v1/ingest/${process.env.AXIOM_DATASET || "bmh-company"}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.AXIOM_TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify([{ _time: new Date().toISOString(), service: process.env.AXIOM_SERVICE_NAME || "engineering-manager", environment: process.env.DEPLOYMENT_ENVIRONMENT || "local", role: "manager", ...event }]),
+  }).catch(() => {});
+}
+
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
@@ -38,8 +47,19 @@ function tool(name, description, inputSchema) {
 
 function upstreamCall(name, arguments_) {
   const id = nextId++;
+  const started = Date.now();
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+    pending.set(id, {
+      resolve: (message) => {
+        emitTelemetry({ event: "manager_upstream_call", call_id: id, tool: name, state: message.error ? "failed" : "completed", duration_ms: Date.now() - started, error: message.error?.message });
+        resolve(message);
+      },
+      reject: (error) => {
+        emitTelemetry({ event: "manager_upstream_call", call_id: id, tool: name, state: "failed", duration_ms: Date.now() - started, error: error.message });
+        reject(error);
+      },
+    });
+    emitTelemetry({ event: "manager_upstream_call", call_id: id, tool: name, state: "started" });
     upstream.stdin.write(`${JSON.stringify({
       jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: arguments_ },
     })}\n`);
@@ -107,6 +127,19 @@ input.on("line", (line) => {
   send(message);
 });
 
+upstream.on("error", (error) => {
+  emitTelemetry({ event: "manager_upstream_process", state: "failed", error: error.message });
+  for (const waiter of pending.values()) waiter.reject(error);
+  pending.clear();
+});
+
+upstream.on("exit", (code, signal) => {
+  const error = new Error(`ai-cli-mcp exited (${code ?? "signal " + signal})`);
+  emitTelemetry({ event: "manager_upstream_process", state: "failed", error: error.message });
+  for (const waiter of pending.values()) waiter.reject(error);
+  pending.clear();
+});
+
 function a2aResponse(task) {
   return {
     id: task.id,
@@ -155,15 +188,18 @@ async function handleA2A(request, response) {
   const parts = message.params?.message?.parts || [];
   const prompt = parts.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n");
   const arguments_ = { workFolder: "/workspace", ...(message.params?.metadata || {}), prompt };
-  const task = { id: taskId, state: "working" };
+  const task = { id: taskId, state: "working", startedAt: Date.now() };
   a2aTasks.set(taskId, task);
+  emitTelemetry({ event: "a2a_task", task_id: taskId, state: "working" });
   upstreamCall("run", { ...arguments_, agent: MANAGER.agent, model: MANAGER.model }).then((result) => {
     task.state = result.error ? "failed" : "completed";
     if (result.error) task.error = result.error.message || "engineering request failed";
     else task.result = result.result;
+    emitTelemetry({ event: "a2a_task", task_id: taskId, state: task.state, duration_ms: Date.now() - task.startedAt, error: task.error });
   }).catch((error) => {
     task.state = "failed";
     task.error = error.message;
+    emitTelemetry({ event: "a2a_task", task_id: taskId, state: "failed", duration_ms: Date.now() - task.startedAt, error: task.error });
   });
   return sendHttp(response, 200, { jsonrpc: "2.0", id: message.id, result: a2aResponse(task) });
 }
