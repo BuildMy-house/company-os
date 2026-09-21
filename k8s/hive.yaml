@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hive-coordinator
+  namespace: company-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hive-coordinator
+  template:
+    metadata:
+      labels:
+        app: hive-coordinator
+    spec:
+      containers:
+        - name: hive-coordinator
+          image: docker.io/library/company-os-hive:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 4100
+          env:
+            - name: PORT
+              value: "4100"
+            - name: ENGINEERING_A2A_URL
+              value: http://engineering-agent:8001
+          readinessProbe:
+            httpGet:
+              path: /.well-known/agent-card.json
+              port: 4100
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /.well-known/agent-card.json
+              port: 4100
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hive-coordinator
+  namespace: company-ops
+spec:
+  selector:
+    app: hive-coordinator
+  ports:
+    - port: 4100
+      targetPort: 4100

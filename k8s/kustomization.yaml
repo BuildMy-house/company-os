@@ -9,4 +9,5 @@ resources:
   - browser-adversary.yaml
   - company-ops.yaml
   - engineering.yaml
+  - hive.yaml
   - postgres-backup.yaml

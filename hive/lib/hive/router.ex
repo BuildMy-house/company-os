@@ -21,7 +21,25 @@ defmodule Hive.Router do
       %{"jsonrpc" => "2.0", "id" => request_id, "method" => "message/send", "params" => params} ->
         task_id = "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
         task = Hive.Tasks.create(task_id, get_in(params, ["message", "parts"]) || [])
-        json(conn, %{"jsonrpc" => "2.0", "id" => request_id, "result" => task_response(task)})
+
+        case Hive.Engineering.submit(task.message) do
+          {:ok, remote} ->
+            task = Hive.Tasks.attach_remote(task_id, remote)
+            json(conn, %{"jsonrpc" => "2.0", "id" => request_id, "result" => task_response(task)})
+
+          {:error, reason} ->
+            task = Hive.Tasks.attach_remote(task_id, %{"error" => reason})
+
+            json(
+              conn,
+              %{
+                "jsonrpc" => "2.0",
+                "id" => request_id,
+                "error" => %{"code" => -32000, "message" => reason, "data" => task_response(task)}
+              },
+              502
+            )
+        end
 
       %{"jsonrpc" => "2.0", "id" => request_id, "method" => method} ->
         json(
@@ -50,7 +68,7 @@ defmodule Hive.Router do
   get "/tasks/:task_id" do
     case Hive.Tasks.get(task_id) do
       nil -> json(conn, %{"error" => "task not found"}, 404)
-      task -> json(conn, task_response(task))
+      task -> json(conn, task_response(refresh_remote(task)))
     end
   end
 
@@ -58,7 +76,21 @@ defmodule Hive.Router do
     json(conn, %{"error" => "not found"}, 404)
   end
 
-  defp task_response(task), do: %{"id" => task.id, "status" => %{"state" => task.state}}
+  defp task_response(task),
+    do: %{
+      "id" => task.id,
+      "status" => %{"state" => task.state},
+      "metadata" => %{"remote" => task.remote}
+    }
+
+  defp refresh_remote(%{remote: %{"id" => remote_id}} = task) do
+    case Hive.Engineering.get(remote_id) do
+      {:ok, remote} -> Hive.Tasks.attach_remote(task.id, remote)
+      _ -> task
+    end
+  end
+
+  defp refresh_remote(task), do: task
 
   defp json(conn, body, status \\ 200) do
     conn |> put_resp_content_type("application/json") |> send_resp(status, Jason.encode!(body))

@@ -1,8 +1,25 @@
 defmodule Hive.RouterTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case
   import Plug.Test
 
   @opts Hive.Router.init([])
+
+  setup do
+    Application.put_env(:hive, :engineering_submit, fn parts ->
+      {:ok, %{"id" => "engineering_1", "status" => %{"state" => "working"}, "parts" => parts}}
+    end)
+
+    Application.put_env(:hive, :engineering_get, fn "engineering_1" ->
+      {:ok, %{"id" => "engineering_1", "status" => %{"state" => "completed"}}}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:hive, :engineering_submit)
+      Application.delete_env(:hive, :engineering_get)
+    end)
+
+    :ok
+  end
 
   test "publishes an agent card" do
     conn = conn(:get, "/.well-known/agent-card.json") |> Hive.Router.call(@opts)
@@ -35,5 +52,6 @@ defmodule Hive.RouterTest do
 
     assert conn.status == 200
     assert task["status"]["state"] == "submitted"
+    assert task["metadata"]["remote"]["status"]["state"] == "completed"
   end
 end
