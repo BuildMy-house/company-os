@@ -20,7 +20,7 @@ RUN npm install -g @anthropic-ai/claude-code@latest \
   && codex mcp add ai-cli-mcp -- npx -y ai-cli-mcp@latest \
   && mkdir -p /opt/company-ops/.claude/agents /opt/company-ops/.claude/skills \
   && mv "$(command -v claude)" /usr/local/bin/claude-real \
-  && printf '#!/bin/sh\nexec /usr/local/bin/claude-real --autocompact 200k "$@"\n' > /usr/local/bin/claude \
+  && printf '#!/bin/sh\nexec /usr/local/bin/claude-real --autocompact 200k --disallowed-tools Agent "$@"\n' > /usr/local/bin/claude \
   && chmod 755 /usr/local/bin/claude
 
 # Headless Chromium for screenshot capability: installed as root at build
@@ -55,6 +55,7 @@ COPY agent-config /opt/company-ops/agent-config
 COPY scripts/github-app-token.js /opt/company-ops/scripts/github-app-token.js
 COPY scripts/fetch-infisical-secrets.js /opt/company-ops/scripts/fetch-infisical-secrets.js
 COPY scripts/generate-agent-mcp-config.js /opt/company-ops/scripts/generate-agent-mcp-config.js
+COPY scripts/ai-cli-mcp-policy.js /opt/company-ops/scripts/ai-cli-mcp-policy.js
 COPY scripts/sync-repo.sh /opt/company-ops/scripts/sync-repo.sh
 COPY scripts/stall-watch.sh /opt/company-ops/scripts/stall-watch.sh
 COPY scripts/engineering-manager-mcp.js /opt/company-ops/scripts/engineering-manager-mcp.js

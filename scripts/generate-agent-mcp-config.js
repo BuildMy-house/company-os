@@ -92,15 +92,11 @@ function buildServers() {
     };
   }
 
-  // ai-cli-mcp: registered without an explicit env override (matches how
-  // Dockerfile.engineering already does `claude mcp add ai-cli-mcp` and
-  // `codex mcp add ai-cli-mcp` — no --env flags, so it inherits the
-  // container's process environment naturally) — lets an agent recursively
-  // dispatch sub-tasks to opencode/codex/claude through the same router
-  // this container itself exposes.
+  // Route worker calls through the policy wrapper: only OpenCode workers are
+  // allowed, and bare opencode/* models get the required oc- prefix.
   servers['ai-cli'] = {
     kind: 'stdio',
-    command: ['npx', '-y', 'ai-cli-mcp@latest'],
+    command: ['node', '/opt/company-ops/scripts/ai-cli-mcp-policy.js'],
     environment: null,
   };
 
