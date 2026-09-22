@@ -6,7 +6,10 @@ defmodule Hive.Application do
     children = [
       Hive.Tasks,
       Hive.Work,
-      {Plug.Cowboy, scheme: :http, plug: Hive.Router, options: [port: port()]}
+      {Plug.Cowboy,
+       scheme: :http,
+       plug: Hive.Router,
+       options: [port: port(), protocol_options: [idle_timeout: :infinity, reset_idle_timeout_on_send: true]]}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Hive.Supervisor)
