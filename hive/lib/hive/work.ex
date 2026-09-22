@@ -96,10 +96,16 @@ defmodule Hive.Work do
   end
 
   def handle_call({:available, limit}, _from, %{db: db} = state) do
+    Postgrex.query!(
+      db,
+      "UPDATE company.hive_work_items SET state = 'available', claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE state = 'claimed' AND lease_expires_at < now()",
+      []
+    )
+
     result =
       Postgrex.query!(
         db,
-        "UPDATE company.hive_work_items SET state = 'available', claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE state = 'claimed' AND lease_expires_at < now(); SELECT id, payload, state, claimed_by FROM company.hive_work_items WHERE state = 'available' ORDER BY created_at LIMIT $1",
+        "SELECT id, payload, state, claimed_by FROM company.hive_work_items WHERE state = 'available' ORDER BY created_at LIMIT $1",
         [limit]
       )
 
