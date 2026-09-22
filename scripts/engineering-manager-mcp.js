@@ -297,10 +297,10 @@ async function subscribeHive() {
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split("\\n\\n");
+      const events = buffer.split("\n\n");
       buffer = events.pop() || "";
       for (const event of events) {
-        const data = event.split("\\n").find((line) => line.startsWith("data: "))?.slice(6);
+        const data = event.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
         if (data) runHiveWork(JSON.parse(data));
       }
     }
