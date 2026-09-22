@@ -22,7 +22,7 @@ spec:
         runAsNonRoot: true
       containers:
         - name: engineering-agent
-          image: docker.io/library/company-os-engineering:container-manager
+          image: localhost:30500/company-os-engineering:container-manager
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
