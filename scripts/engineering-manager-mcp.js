@@ -261,13 +261,9 @@ async function hiveRequest(path, options = {}) {
 }
 
 let hiveBusy = false;
-async function pollHive() {
-  if (!process.env.HIVE_URL || hiveBusy) return;
+async function runHiveWork(candidate) {
+  if (hiveBusy) return;
   try {
-    await hiveRequest("/agents/register", { method: "POST", body: JSON.stringify({ id: process.env.HIVE_AGENT_ID || "engineering-agent", endpoint: "http://engineering-agent:8001", capabilities: { modes: ["execute", "review"] } }) });
-    const available = await hiveRequest("/work?limit=1");
-    const candidate = available.work?.[0];
-    if (!candidate) return;
     const claimed = await hiveRequest(`/work/${candidate.id}/claim`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", lease_seconds: 900 }) });
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "claimed", agent_id: process.env.HIVE_AGENT_ID || "engineering-agent" });
     hiveBusy = true;
@@ -282,10 +278,38 @@ async function pollHive() {
       hiveRequest(`/work/${candidate.id}/complete`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", state: "failed", result: { error: error.message } }) }).catch(() => {}).finally(() => { hiveBusy = false; });
     });
   } catch (error) {
-    emitTelemetry({ event: "hive_poll", state: "failed", error: error.message });
+    emitTelemetry({ event: "hive_subscription", state: "failed", error: error.message });
   }
 }
-if (process.env.HIVE_URL) setInterval(pollHive, 2000);
+
+async function subscribeHive() {
+  if (!process.env.HIVE_URL) return;
+  const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
+  try {
+    await hiveRequest("/agents/register", { method: "POST", body: JSON.stringify({ id: agentId, endpoint: "http://engineering-agent:8001", capabilities: { modes: ["execute", "review"] } }) });
+    const response = await fetch(`${process.env.HIVE_URL}/work/subscribe?agent_id=${encodeURIComponent(agentId)}`, { headers: { accept: "text/event-stream" } });
+    if (!response.ok || !response.body) throw new Error(`Hive subscription returned ${response.status}`);
+    emitTelemetry({ event: "hive_subscription", state: "connected", agent_id: agentId });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\\n\\n");
+      buffer = events.pop() || "";
+      for (const event of events) {
+        const data = event.split("\\n").find((line) => line.startsWith("data: "))?.slice(6);
+        if (data) runHiveWork(JSON.parse(data));
+      }
+    }
+  } catch (error) {
+    emitTelemetry({ event: "hive_subscription", state: "failed", error: error.message });
+  }
+  setTimeout(subscribeHive, 1000);
+}
+if (process.env.HIVE_URL) subscribeHive();
 
 const requests = readline.createInterface({ input: process.stdin });
 requests.on("line", async (line) => {

@@ -84,6 +84,24 @@ defmodule Hive.Router do
     end
   end
 
+  get "/work/subscribe" do
+    case conn.params["agent_id"] do
+      agent_id when is_binary(agent_id) and byte_size(agent_id) > 0 ->
+        conn =
+          conn
+          |> put_resp_header("cache-control", "no-cache")
+          |> put_resp_header("connection", "keep-alive")
+          |> put_resp_header("content-type", "text/event-stream")
+          |> send_chunked(200)
+
+        :ok = Hive.Work.subscribe(self(), agent_id)
+        stream_work(conn)
+
+      _ ->
+        json(conn, %{"error" => "agent_id required"}, 400)
+    end
+  end
+
   get "/work" do
     {:ok, work} = Hive.Work.available(String.to_integer(conn.params["limit"] || "10"))
     json(conn, %{"work" => work})
@@ -137,5 +155,57 @@ defmodule Hive.Router do
 
   defp json(conn, body, status \\ 200) do
     conn |> put_resp_content_type("application/json") |> send_resp(status, Jason.encode!(body))
+  end
+
+  defp stream_work(conn) do
+    try do
+      case Hive.Work.available(100) do
+        {:ok, work} -> stream_available(conn, work)
+        _ -> :closed
+      end
+      |> case do
+        {:ok, next} -> stream_loop(next)
+        :closed -> :ok
+      end
+    after
+      Hive.Work.unsubscribe(self())
+    end
+  end
+
+  defp stream_loop(conn) do
+    receive do
+      {:hive_work_available, _id} ->
+        case Hive.Work.available(100) do
+          {:ok, work} ->
+            case stream_available(conn, work) do
+              {:ok, next} -> stream_loop(next)
+              :closed -> :ok
+            end
+
+          _ -> stream_loop(conn)
+        end
+
+      {:hive_work_heartbeat} ->
+        case Plug.Conn.chunk(conn, ": heartbeat\\n\\n") do
+          {:ok, next} -> stream_loop(next)
+          {:error, :closed} -> conn
+        end
+
+    after
+      15_000 ->
+        case Plug.Conn.chunk(conn, ": heartbeat\\n\\n") do
+          {:ok, next} -> stream_loop(next)
+          {:error, :closed} -> conn
+        end
+    end
+  end
+
+  defp stream_available(conn, work) do
+    Enum.reduce_while(work, {:ok, conn}, fn item, {:ok, current} ->
+      case Plug.Conn.chunk(current, "data: " <> Jason.encode!(item) <> "\\n\\n") do
+        {:ok, next} -> {:cont, {:ok, next}}
+        {:error, :closed} -> {:halt, :closed}
+      end
+    end)
   end
 end

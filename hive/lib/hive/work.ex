@@ -10,6 +10,8 @@ defmodule Hive.Work do
   def enqueue(id, parts), do: GenServer.call(__MODULE__, {:enqueue, id, parts})
   def available(limit \\ 10), do: GenServer.call(__MODULE__, {:available, limit})
   def register_agent(agent), do: GenServer.call(__MODULE__, {:register_agent, agent})
+  def subscribe(pid, agent_id), do: GenServer.call(__MODULE__, {:subscribe, pid, agent_id})
+  def unsubscribe(pid), do: GenServer.call(__MODULE__, {:unsubscribe, pid})
 
   def claim(id, agent_id, lease_seconds),
     do: GenServer.call(__MODULE__, {:claim, id, agent_id, lease_seconds})
@@ -21,6 +23,8 @@ defmodule Hive.Work do
 
   @impl true
   def init(_) do
+    ensure_subscribers_table()
+
     case System.get_env("COMPANY_DATABASE_URL") do
       nil ->
         {:ok, %{memory: %{work: %{}, agents: %{}}}}
@@ -72,6 +76,7 @@ defmodule Hive.Work do
   @impl true
   def handle_call({:enqueue, id, parts}, _from, %{memory: _memory} = state) do
     item = %{id: id, payload: %{"parts" => parts}, state: "available", claimed_by: nil}
+    notify_subscribers(id)
     {:reply, {:ok, item}, put_in(state.memory.work[id], item)}
   end
 
@@ -85,6 +90,7 @@ defmodule Hive.Work do
     )
 
     Postgrex.query!(db, "SELECT pg_notify($1, $2)", [@channel, id])
+    notify_subscribers(id)
     {:reply, get_db(db, id), state}
   end
 
@@ -124,6 +130,23 @@ defmodule Hive.Work do
     )
 
     {:reply, :ok, state}
+  end
+
+  def handle_call({:subscribe, pid, agent_id}, _from, state) do
+    :ets.insert(:hive_subscribers, {pid, agent_id})
+    Process.monitor(pid)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:unsubscribe, pid}, _from, state) do
+    :ets.delete(:hive_subscribers, pid)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+    :ets.delete(:hive_subscribers, pid)
+    {:noreply, state}
   end
 
   def handle_call({:claim, id, agent_id, _lease_seconds}, _from, %{memory: memory} = state) do
@@ -210,6 +233,17 @@ defmodule Hive.Work do
         _ -> acc
       end
     end)
+  end
+
+  defp ensure_subscribers_table do
+    case :ets.whereis(:hive_subscribers) do
+      :undefined -> :ets.new(:hive_subscribers, [:named_table, :public, :set])
+      _ -> :hive_subscribers
+    end
+  end
+
+  defp notify_subscribers(id) do
+    for {pid, _agent_id} <- :ets.tab2list(:hive_subscribers), do: send(pid, {:hive_work_available, id})
   end
 
   defp db_opts(url) do
