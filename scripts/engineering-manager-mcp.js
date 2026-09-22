@@ -269,6 +269,7 @@ async function pollHive() {
     const candidate = available.work?.[0];
     if (!candidate) return;
     const claimed = await hiveRequest(`/work/${candidate.id}/claim`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", lease_seconds: 900 }) });
+    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "claimed", agent_id: process.env.HIVE_AGENT_ID || "engineering-agent" });
     hiveBusy = true;
     const task = { id: candidate.id, state: "working", startedAt: Date.now() };
     const prompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
@@ -276,7 +277,7 @@ async function pollHive() {
       const started = toolPayload(reply);
       if (reply.error || started?.status !== "started" || !Number.isInteger(started.pid)) throw new Error(reply.error?.message || "engineering runner did not return a process id");
       task.pid = started.pid;
-      trackProcess(task, started.pid, (finished) => hiveRequest(`/work/${candidate.id}/complete`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", state: finished.state, result: finished.result || { error: finished.error } }) }).catch((error) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", error: error.message })).finally(() => { hiveBusy = false; }));
+      trackProcess(task, started.pid, (finished) => hiveRequest(`/work/${candidate.id}/complete`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", state: finished.state, result: finished.result || { error: finished.error } }) }).then(() => emitTelemetry({ event: "hive_work", task_id: candidate.id, state: finished.state, agent_id: process.env.HIVE_AGENT_ID || "engineering-agent" })).catch((error) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", error: error.message })).finally(() => { hiveBusy = false; }));
     }).catch((error) => {
       hiveRequest(`/work/${candidate.id}/complete`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", state: "failed", result: { error: error.message } }) }).catch(() => {}).finally(() => { hiveBusy = false; });
     });

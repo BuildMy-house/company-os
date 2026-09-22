@@ -201,7 +201,16 @@ defmodule Hive.Work do
   end
 
   defp rows(%Postgrex.Result{columns: columns, rows: values}),
-    do: Enum.map(values, &Map.new(Enum.zip(columns, &1)))
+    do: Enum.map(values, &decode_row(Map.new(Enum.zip(columns, &1))))
+
+  defp decode_row(row) do
+    Enum.reduce(["payload", "result"], row, fn key, acc ->
+      case Map.get(acc, key) do
+        value when is_binary(value) -> Map.put(acc, key, Jason.decode!(value))
+        _ -> acc
+      end
+    end)
+  end
 
   defp db_opts(url) do
     uri = URI.parse(url)
