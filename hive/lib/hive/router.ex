@@ -186,14 +186,14 @@ defmodule Hive.Router do
         end
 
       {:hive_work_heartbeat} ->
-        case Plug.Conn.chunk(conn, ": heartbeat\\n\\n") do
+        case Plug.Conn.chunk(conn, ": heartbeat\n\n") do
           {:ok, next} -> stream_loop(next)
           {:error, :closed} -> conn
         end
 
     after
       15_000 ->
-        case Plug.Conn.chunk(conn, ": heartbeat\\n\\n") do
+        case Plug.Conn.chunk(conn, ": heartbeat\n\n") do
           {:ok, next} -> stream_loop(next)
           {:error, :closed} -> conn
         end
@@ -202,7 +202,7 @@ defmodule Hive.Router do
 
   defp stream_available(conn, work) do
     Enum.reduce_while(work, {:ok, conn}, fn item, {:ok, current} ->
-      case Plug.Conn.chunk(current, "data: " <> Jason.encode!(item) <> "\\n\\n") do
+      case Plug.Conn.chunk(current, "data: " <> Jason.encode!(item) <> "\n\n") do
         {:ok, next} -> {:cont, {:ok, next}}
         {:error, :closed} -> {:halt, :closed}
       end
