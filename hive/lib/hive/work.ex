@@ -41,14 +41,26 @@ defmodule Hive.Work do
             result JSONB,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-          );
-          CREATE INDEX IF NOT EXISTS hive_work_available_idx ON company.hive_work_items (state, created_at);
+          )
+          """,
+          []
+        )
+
+        Postgrex.query!(
+          db,
+          "CREATE INDEX IF NOT EXISTS hive_work_available_idx ON company.hive_work_items (state, created_at)",
+          []
+        )
+
+        Postgrex.query!(
+          db,
+          """
           CREATE TABLE IF NOT EXISTS company.hive_agents (
             id TEXT PRIMARY KEY,
             endpoint TEXT,
             capabilities JSONB NOT NULL DEFAULT '{}'::jsonb,
             last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
-          );
+          )
           """,
           []
         )
