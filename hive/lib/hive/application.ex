@@ -5,6 +5,7 @@ defmodule Hive.Application do
   def start(_type, _args) do
     children = [
       Hive.Tasks,
+      Hive.Work,
       {Plug.Cowboy, scheme: :http, plug: Hive.Router, options: [port: port()]}
     ]
 

@@ -43,6 +43,10 @@ spec:
               value: engineering-k8s
             - name: DEPLOYMENT_ENVIRONMENT
               value: local-k8s
+            - name: HIVE_URL
+              value: http://hive-coordinator:4100
+            - name: HIVE_AGENT_ID
+              value: engineering-agent
             - name: CODEX_HOME
               value: /tmp/company-ops-home/.codex
             - name: KUBERNETES_SERVICE_HOST

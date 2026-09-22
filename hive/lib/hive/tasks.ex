@@ -6,7 +6,7 @@ defmodule Hive.Tasks do
   def create(task_id, message) do
     Agent.update(
       __MODULE__,
-      &Map.put(&1, task_id, %{id: task_id, message: message, state: "submitted", remote: nil})
+      &Map.put(&1, task_id, %{id: task_id, message: message, state: "available", remote: nil})
     )
 
     get(task_id)

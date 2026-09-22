@@ -2,6 +2,7 @@ defmodule Hive.Router do
   use Plug.Router
 
   plug(:match)
+  plug(:fetch_query_params)
   plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
   plug(:dispatch)
 
@@ -20,7 +21,8 @@ defmodule Hive.Router do
     case conn.body_params do
       %{"jsonrpc" => "2.0", "id" => request_id, "method" => "message/send", "params" => params} ->
         task_id = "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
-        task = Hive.Tasks.create(task_id, get_in(params, ["message", "parts"]) || [])
+        parts = get_in(params, ["message", "parts"]) || []
+        task = Hive.Tasks.create(task_id, parts)
         started_at = System.monotonic_time(:millisecond)
 
         Hive.Telemetry.emit(%{
@@ -29,41 +31,16 @@ defmodule Hive.Router do
           "state" => "submitted"
         })
 
-        case Hive.Engineering.submit(task.message) do
-          {:ok, remote} ->
-            task = Hive.Tasks.attach_remote(task_id, remote)
+        {:ok, _work} = Hive.Work.enqueue(task_id, parts)
 
-            Hive.Telemetry.emit(%{
-              "event" => "a2a_task",
-              "task_id" => task_id,
-              "state" => "working",
-              "duration_ms" => System.monotonic_time(:millisecond) - started_at,
-              "remote_task_id" => remote["id"]
-            })
+        Hive.Telemetry.emit(%{
+          "event" => "a2a_task",
+          "task_id" => task_id,
+          "state" => "available",
+          "duration_ms" => System.monotonic_time(:millisecond) - started_at
+        })
 
-            json(conn, %{"jsonrpc" => "2.0", "id" => request_id, "result" => task_response(task)})
-
-          {:error, reason} ->
-            task = Hive.Tasks.attach_remote(task_id, %{"error" => reason})
-
-            Hive.Telemetry.emit(%{
-              "event" => "a2a_task",
-              "task_id" => task_id,
-              "state" => "failed",
-              "duration_ms" => System.monotonic_time(:millisecond) - started_at,
-              "error" => reason
-            })
-
-            json(
-              conn,
-              %{
-                "jsonrpc" => "2.0",
-                "id" => request_id,
-                "error" => %{"code" => -32000, "message" => reason, "data" => task_response(task)}
-              },
-              502
-            )
-        end
+        json(conn, %{"jsonrpc" => "2.0", "id" => request_id, "result" => task_response(task)})
 
       %{"jsonrpc" => "2.0", "id" => request_id, "method" => method} ->
         json(
@@ -92,7 +69,51 @@ defmodule Hive.Router do
   get "/tasks/:task_id" do
     case Hive.Tasks.get(task_id) do
       nil -> json(conn, %{"error" => "task not found"}, 404)
-      task -> json(conn, task_response(refresh_remote(task)))
+      task -> json(conn, task_response(refresh_work(task)))
+    end
+  end
+
+  post "/agents/register" do
+    case conn.body_params do
+      %{"id" => id} = agent ->
+        :ok = Hive.Work.register_agent(Map.put_new(agent, "capabilities", %{}))
+        json(conn, %{"agent_id" => id, "status" => "registered"})
+
+      _ ->
+        json(conn, %{"error" => "agent id required"}, 400)
+    end
+  end
+
+  get "/work" do
+    {:ok, work} = Hive.Work.available(String.to_integer(conn.params["limit"] || "10"))
+    json(conn, %{"work" => work})
+  end
+
+  post "/work/:work_id/claim" do
+    with %{"agent_id" => agent_id} <- conn.body_params,
+         {:ok, work} <-
+           Hive.Work.claim(work_id, agent_id, conn.body_params["lease_seconds"] || 300) do
+      json(conn, work)
+    else
+      {:error, :unavailable} -> json(conn, %{"error" => "work unavailable"}, 409)
+      _ -> json(conn, %{"error" => "agent_id required"}, 400)
+    end
+  end
+
+  post "/work/:work_id/complete" do
+    with %{"agent_id" => agent_id, "state" => state} <- conn.body_params,
+         {:ok, work} <-
+           Hive.Work.complete(work_id, agent_id, state, conn.body_params["result"] || %{}) do
+      Hive.Tasks.attach_remote(work_id, %{
+        "id" => work_id,
+        "status" => %{"state" => state},
+        "result" => work["result"]
+      })
+
+      json(conn, work)
+    else
+      {:error, :not_owner} -> json(conn, %{"error" => "agent does not hold lease"}, 409)
+      _ -> json(conn, %{"error" => "agent_id and state required"}, 400)
     end
   end
 
@@ -107,29 +128,12 @@ defmodule Hive.Router do
       "metadata" => %{"remote" => task.remote}
     }
 
-  defp refresh_remote(%{remote: %{"id" => remote_id}} = task) do
-    case Hive.Engineering.get(remote_id) do
-      {:ok, remote} ->
-        previous = get_in(task.remote, ["status", "state"])
-        current = get_in(remote, ["status", "state"])
-
-        if previous != current and current in ["completed", "failed", "canceled", "rejected"] do
-          Hive.Telemetry.emit(%{
-            "event" => "a2a_task",
-            "task_id" => task.id,
-            "remote_task_id" => remote_id,
-            "state" => current
-          })
-        end
-
-        Hive.Tasks.attach_remote(task.id, remote)
-
-      _ ->
-        task
+  defp refresh_work(task) do
+    case Hive.Work.get(task.id) do
+      %{} = work -> %{task | state: work["state"] || work.state}
+      _ -> task
     end
   end
-
-  defp refresh_remote(task), do: task
 
   defp json(conn, body, status \\ 200) do
     conn |> put_resp_content_type("application/json") |> send_resp(status, Jason.encode!(body))

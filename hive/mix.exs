@@ -18,7 +18,8 @@ defmodule Hive.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
-      {:plug_cowboy, "~> 2.7"}
+      {:plug_cowboy, "~> 2.7"},
+      {:postgrex, "~> 0.20"}
     ]
   end
 end

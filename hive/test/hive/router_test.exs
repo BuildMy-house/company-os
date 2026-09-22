@@ -51,7 +51,53 @@ defmodule Hive.RouterTest do
       |> Jason.decode!()
 
     assert conn.status == 200
-    assert task["status"]["state"] == "completed"
-    assert task["metadata"]["remote"]["status"]["state"] == "completed"
+    assert task["status"]["state"] == "available"
+    assert task["metadata"]["remote"] == nil
+  end
+
+  test "an agent claims and completes queued work" do
+    body =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => 3,
+        "method" => "message/send",
+        "params" => %{"message" => %{"parts" => [%{"text" => "queued"}]}}
+      })
+
+    response =
+      conn(:post, "/", body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    task_id = response["result"]["id"]
+
+    claim_body = Jason.encode!(%{"agent_id" => "agent-1"})
+
+    claimed =
+      conn(:post, "/work/#{task_id}/claim", claim_body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert claimed["state"] == "claimed"
+
+    complete_body =
+      Jason.encode!(%{
+        "agent_id" => "agent-1",
+        "state" => "completed",
+        "result" => %{"ok" => true}
+      })
+
+    completed =
+      conn(:post, "/work/#{task_id}/complete", complete_body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert completed["state"] == "completed"
   end
 end

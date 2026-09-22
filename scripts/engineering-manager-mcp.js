@@ -155,7 +155,7 @@ function a2aResponse(task) {
   };
 }
 
-function trackProcess(task, pid) {
+function trackProcess(task, pid, onDone = () => {}) {
   const poll = () => upstreamCall("get_result", { pid, verbose: true }, { task_id: task.id }).then((reply) => {
     const payload = toolPayload(reply);
     if (["completed", "failed", "killed"].includes(payload?.status)) {
@@ -166,6 +166,7 @@ function trackProcess(task, pid) {
       }
       if (task.state === "failed") task.error = payload.error || `agent process ${payload.status}`;
       emitTelemetry({ event: "a2a_task", task_id: task.id, state: task.state, duration_ms: Date.now() - task.startedAt, pid, error: task.error });
+      onDone(task);
       return;
     }
     setTimeout(poll, 2000);
@@ -173,6 +174,7 @@ function trackProcess(task, pid) {
     task.state = "failed";
     task.error = error.message;
     emitTelemetry({ event: "a2a_task", task_id: task.id, state: "failed", duration_ms: Date.now() - task.startedAt, pid, error: task.error });
+    onDone(task);
   });
 
   setTimeout(poll, 1000);
@@ -247,6 +249,42 @@ async function handleA2A(request, response) {
 http.createServer((request, response) => {
   handleA2A(request, response).catch((error) => sendHttp(response, 500, { error: error.message }));
 }).listen(Number(process.env.A2A_PORT || 8001), "0.0.0.0");
+
+async function hiveRequest(path, options = {}) {
+  const response = await fetch(`${process.env.HIVE_URL}${path}`, {
+    ...options,
+    headers: { "content-type": "application/json", ...(options.headers || {}) },
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || `Hive returned ${response.status}`);
+  return body;
+}
+
+let hiveBusy = false;
+async function pollHive() {
+  if (!process.env.HIVE_URL || hiveBusy) return;
+  try {
+    await hiveRequest("/agents/register", { method: "POST", body: JSON.stringify({ id: process.env.HIVE_AGENT_ID || "engineering-agent", endpoint: "http://engineering-agent:8001", capabilities: { modes: ["execute", "review"] } }) });
+    const available = await hiveRequest("/work?limit=1");
+    const candidate = available.work?.[0];
+    if (!candidate) return;
+    const claimed = await hiveRequest(`/work/${candidate.id}/claim`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", lease_seconds: 900 }) });
+    hiveBusy = true;
+    const task = { id: candidate.id, state: "working", startedAt: Date.now() };
+    const prompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
+    upstreamCall("run", { workFolder: "/workspace", prompt, agent: MANAGER.agent, model: MANAGER.model }, { task_id: task.id }).then((reply) => {
+      const started = toolPayload(reply);
+      if (reply.error || started?.status !== "started" || !Number.isInteger(started.pid)) throw new Error(reply.error?.message || "engineering runner did not return a process id");
+      task.pid = started.pid;
+      trackProcess(task, started.pid, (finished) => hiveRequest(`/work/${candidate.id}/complete`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", state: finished.state, result: finished.result || { error: finished.error } }) }).catch((error) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", error: error.message })).finally(() => { hiveBusy = false; }));
+    }).catch((error) => {
+      hiveRequest(`/work/${candidate.id}/complete`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", state: "failed", result: { error: error.message } }) }).catch(() => {}).finally(() => { hiveBusy = false; });
+    });
+  } catch (error) {
+    emitTelemetry({ event: "hive_poll", state: "failed", error: error.message });
+  }
+}
+if (process.env.HIVE_URL) setInterval(pollHive, 2000);
 
 const requests = readline.createInterface({ input: process.stdin });
 requests.on("line", async (line) => {
