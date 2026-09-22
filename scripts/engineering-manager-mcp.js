@@ -51,17 +51,17 @@ function tool(name, description, inputSchema) {
   return { name, description, inputSchema };
 }
 
-function upstreamCall(name, arguments_) {
+function upstreamCall(name, arguments_, context = {}) {
   const id = nextId++;
   const started = Date.now();
   return new Promise((resolve, reject) => {
     pending.set(id, {
       resolve: (message) => {
-        emitTelemetry({ event: "manager_upstream_call", call_id: id, tool: name, state: message.error ? "failed" : "completed", duration_ms: Date.now() - started, error: message.error?.message });
+        emitTelemetry({ event: "manager_upstream_call", call_id: id, tool: name, state: message.error ? "failed" : "completed", duration_ms: Date.now() - started, error: message.error?.message, ...context });
         resolve(message);
       },
       reject: (error) => {
-        emitTelemetry({ event: "manager_upstream_call", call_id: id, tool: name, state: "failed", duration_ms: Date.now() - started, error: error.message });
+        emitTelemetry({ event: "manager_upstream_call", call_id: id, tool: name, state: "failed", duration_ms: Date.now() - started, error: error.message, ...context });
         reject(error);
       },
     });
@@ -156,11 +156,14 @@ function a2aResponse(task) {
 }
 
 function trackProcess(task, pid) {
-  const poll = () => upstreamCall("get_result", { pid, verbose: true }).then((reply) => {
+  const poll = () => upstreamCall("get_result", { pid, verbose: true }, { task_id: task.id }).then((reply) => {
     const payload = toolPayload(reply);
     if (["completed", "failed", "killed"].includes(payload?.status)) {
       task.state = payload.status === "completed" ? "completed" : "failed";
       task.result = payload;
+      for (const call of payload.agentOutput?.tools || []) {
+        emitTelemetry({ event: "tool_call", task_id: task.id, tool_name: call.tool, state: call.error ? "failed" : "completed", args: call.input, result: call.output, error: call.error });
+      }
       if (task.state === "failed") task.error = payload.error || `agent process ${payload.status}`;
       emitTelemetry({ event: "a2a_task", task_id: task.id, state: task.state, duration_ms: Date.now() - task.startedAt, pid, error: task.error });
       return;
@@ -217,7 +220,7 @@ async function handleA2A(request, response) {
   const task = { id: taskId, state: "working", startedAt: Date.now() };
   a2aTasks.set(taskId, task);
   emitTelemetry({ event: "a2a_task", task_id: taskId, state: "working" });
-  upstreamCall("run", { ...arguments_, agent: MANAGER.agent, model: MANAGER.model }).then((result) => {
+  upstreamCall("run", { ...arguments_, agent: MANAGER.agent, model: MANAGER.model }, { task_id: taskId }).then((result) => {
     if (result.error) {
       task.state = "failed";
       task.error = result.error.message || "engineering request failed";
