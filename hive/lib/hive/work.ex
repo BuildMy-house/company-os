@@ -142,7 +142,7 @@ defmodule Hive.Work do
       Postgrex.query!(
         db,
         "UPDATE company.hive_work_items SET state = 'claimed', claimed_by = $2, lease_expires_at = now() + ($3 || ' seconds')::interval, updated_at = now() WHERE id = $1 AND (state = 'available' OR (state = 'claimed' AND lease_expires_at < now())) RETURNING id, payload, state, claimed_by",
-        [id, agent_id, lease_seconds]
+        [id, agent_id, Integer.to_string(lease_seconds)]
       )
 
     {:reply,
