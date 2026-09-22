@@ -162,7 +162,9 @@ function trackProcess(task, pid, onDone = () => {}) {
       task.state = payload.status === "completed" ? "completed" : "failed";
       task.result = payload;
       for (const call of payload.agentOutput?.tools || []) {
-        emitTelemetry({ event: "tool_call", task_id: task.id, tool_name: call.tool, state: call.error ? "failed" : "completed", args: call.input, result: call.output, error: call.error });
+        const output = typeof call.output === "string" ? call.output : "";
+        const error = call.error || (/\bExit (?:code|status)\s+[1-9]\d*\b/i.test(output) ? output.match(/\bExit (?:code|status)\s+[1-9]\d*\b/i)?.[0] : null);
+        emitTelemetry({ event: "tool_call", task_id: task.id, tool_name: call.tool, state: error ? "failed" : "completed", args: call.input, result: call.output, error });
       }
       if (task.state === "failed") task.error = payload.error || `agent process ${payload.status}`;
       emitTelemetry({ event: "a2a_task", task_id: task.id, state: task.state, duration_ms: Date.now() - task.startedAt, pid, error: task.error });
