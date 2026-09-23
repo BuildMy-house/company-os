@@ -6,10 +6,7 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   selector:
     matchLabels:
       app: hermes-gateway
@@ -21,7 +18,7 @@ spec:
       serviceAccountName: company-ops
       containers:
         - name: hermes-gateway
-          image: docker.io/library/company-os:container-manager
+          image: localhost:30500/company-os:hive-member
           imagePullPolicy: Always
           command: ["bash", "/opt/company-ops/scripts/entrypoint.sh", "hermes", "gateway", "run"]
           resources:
@@ -35,6 +32,10 @@ spec:
             - secretRef:
                 name: company-ops-secrets
           env:
+            - name: HIVE_URL
+              value: http://hive-coordinator:4100
+            - name: HIVE_AGENT_ID
+              value: hermees
             - name: AXIOM_SERVICE_NAME
               value: hermes-gateway-k8s
             - name: DEPLOYMENT_ENVIRONMENT

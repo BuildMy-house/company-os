@@ -201,6 +201,11 @@ mcp_servers:
     args: ["/opt/company-ops/scripts/builder-manager-mcp.js"]
     connect_timeout: 30
     timeout: 1800
+  hive_member:
+    command: "node"
+    args: ["/opt/company-ops/scripts/hive-member-mcp.js"]
+    connect_timeout: 30
+    timeout: 900
 
 # OpenAI-compatible HTTP API surface (gateway/platforms/api_server.py),
 # used by scripts/hermes-messenger-mcp.js so Claude/agent-manager can talk
@@ -238,3 +243,4 @@ platform_toolsets:
     - hermes-api-server
     - container_manager
     - builder_manager
+    - hive_member

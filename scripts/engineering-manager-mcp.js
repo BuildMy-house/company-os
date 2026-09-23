@@ -14,7 +14,13 @@ const upstream = spawn("npx", ["-y", "ai-cli-mcp@latest"], {
   env: process.env,
 });
 
-const MANAGER = { agent: "claude", model: "sonnet", reasoning_effort: "medium", auto_compact: "200k" };
+const MANAGER = {
+  agent: process.env.RUNNER_AGENT || "claude",
+  model: process.env.RUNNER_MODEL || "sonnet",
+  reasoning_effort: process.env.RUNNER_REASONING || "medium",
+  auto_compact: "200k",
+};
+const capabilities = (process.env.AGENT_CAPABILITIES || "execute,review").split(",").map((value) => value.trim()).filter(Boolean);
 
 const pending = new Map();
 const a2aTasks = new Map();
@@ -156,6 +162,17 @@ function a2aResponse(task) {
 }
 
 function trackProcess(task, pid, onDone = () => {}) {
+  const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
+  const heartbeat = process.env.HIVE_URL ? setInterval(() => {
+    hiveRequest(`/work/${task.id}/heartbeat`, {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId, lease_seconds: 900 }),
+    }).catch((error) => emitTelemetry({ event: "hive_lease", task_id: task.id, state: "failed", error: error.message }));
+  }, 60_000) : null;
+  const finish = (value) => {
+    if (heartbeat) clearInterval(heartbeat);
+    onDone(value);
+  };
   const poll = () => upstreamCall("get_result", { pid, verbose: true }, { task_id: task.id }).then((reply) => {
     const payload = toolPayload(reply);
     if (["completed", "failed", "killed"].includes(payload?.status)) {
@@ -168,7 +185,7 @@ function trackProcess(task, pid, onDone = () => {}) {
       }
       if (task.state === "failed") task.error = payload.error || `agent process ${payload.status}`;
       emitTelemetry({ event: "a2a_task", task_id: task.id, state: task.state, duration_ms: Date.now() - task.startedAt, pid, error: task.error });
-      onDone(task);
+      finish(task);
       return;
     }
     setTimeout(poll, 2000);
@@ -176,7 +193,7 @@ function trackProcess(task, pid, onDone = () => {}) {
     task.state = "failed";
     task.error = error.message;
     emitTelemetry({ event: "a2a_task", task_id: task.id, state: "failed", duration_ms: Date.now() - task.startedAt, pid, error: task.error });
-    onDone(task);
+    finish(task);
   });
 
   setTimeout(poll, 1000);
@@ -288,7 +305,7 @@ async function subscribeHive() {
   if (!process.env.HIVE_URL) return;
   const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
   try {
-    await hiveRequest("/agents/register", { method: "POST", body: JSON.stringify({ id: agentId, endpoint: "http://engineering-agent:8001", capabilities: { modes: ["execute", "review"] } }) });
+    await hiveRequest("/agents/register", { method: "POST", body: JSON.stringify({ id: agentId, endpoint: "http://engineering-agent:8001", capabilities: { profile: process.env.AGENT_PROFILE || MANAGER.agent, modes: capabilities } }) });
     const response = await fetch(`${process.env.HIVE_URL}/work/subscribe?agent_id=${encodeURIComponent(agentId)}`, { headers: { accept: "text/event-stream" } });
     if (!response.ok || !response.body) throw new Error(`Hive subscription returned ${response.status}`);
     emitTelemetry({ event: "hive_subscription", state: "connected", agent_id: agentId });

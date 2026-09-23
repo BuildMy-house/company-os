@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hive-agent-profile
+  namespace: company-ops
+data:
+  AGENT_PROFILE: builder
+  AGENT_CAPABILITIES: execute,review
+  RUNNER_AGENT: opencode
+  RUNNER_MODEL: tokenrouter/z-ai/glm-5.3-free
+  HIVE_AGENT_ID: website-builder

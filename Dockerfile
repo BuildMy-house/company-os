@@ -28,6 +28,7 @@ RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --s
   && command -v hermes
 
 COPY . /opt/company-ops/
+RUN chmod 755 /opt/company-ops/scripts/hive-member-mcp.js
 COPY hermes/config.yaml /opt/data/config.yaml
 COPY hermes/SOUL.md /root/.hermes/SOUL.md
 COPY hermes-plugins/axiom_usage /opt/hermes/plugins/observability/axiom_usage

@@ -84,6 +84,17 @@ defmodule Hive.RouterTest do
 
     assert claimed["state"] == "claimed"
 
+    heartbeat_body = Jason.encode!(%{"agent_id" => "agent-1", "lease_seconds" => 900})
+
+    heartbeat =
+      conn(:post, "/work/#{task_id}/heartbeat", heartbeat_body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert heartbeat["state"] == "claimed"
+
     complete_body =
       Jason.encode!(%{
         "agent_id" => "agent-1",
@@ -116,5 +127,16 @@ defmodule Hive.RouterTest do
       |> Jason.decode!()
 
     assert length(event_response["events"]) == 4
+
+    event_id = hd(event_response["events"])["event_id"]
+
+    ack =
+      conn(:post, "/events/#{event_id}/ack", Jason.encode!(%{"consumer_id" => "hermees"}))
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert ack["acknowledged"] == true
   end
 end

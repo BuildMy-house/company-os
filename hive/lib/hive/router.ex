@@ -163,6 +163,26 @@ defmodule Hive.Router do
     end
   end
 
+  post "/work/:work_id/heartbeat" do
+    with %{"agent_id" => agent_id} <- conn.body_params,
+         {:ok, work} <-
+           Hive.Work.heartbeat(work_id, agent_id, conn.body_params["lease_seconds"] || 900) do
+      json(conn, work)
+    else
+      {:error, :not_owner} -> json(conn, %{"error" => "agent does not hold active lease"}, 409)
+      _ -> json(conn, %{"error" => "agent_id required"}, 400)
+    end
+  end
+
+  post "/events/:event_id/ack" do
+    with %{"consumer_id" => consumer_id} <- conn.body_params do
+      :ok = Hive.Work.acknowledge_event(event_id, consumer_id)
+      json(conn, %{"event_id" => event_id, "consumer_id" => consumer_id, "acknowledged" => true})
+    else
+      _ -> json(conn, %{"error" => "consumer_id required"}, 400)
+    end
+  end
+
   match _ do
     json(conn, %{"error" => "not found"}, 404)
   end

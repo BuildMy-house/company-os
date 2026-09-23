@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: hive-coordinator
-          image: localhost:30500/company-os-hive:dev
+          image: localhost:30500/company-os-hive:events
           imagePullPolicy: Always
           ports:
             - containerPort: 4100

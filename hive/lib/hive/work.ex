@@ -25,7 +25,13 @@ defmodule Hive.Work do
   def complete(id, agent_id, state, result),
     do: GenServer.call(__MODULE__, {:complete, id, agent_id, state, result})
 
+  def heartbeat(id, agent_id, lease_seconds),
+    do: GenServer.call(__MODULE__, {:heartbeat, id, agent_id, lease_seconds})
+
   def get(id), do: GenServer.call(__MODULE__, {:get, id})
+
+  def acknowledge_event(event_id, consumer_id),
+    do: GenServer.call(__MODULE__, {:ack_event, event_id, consumer_id})
 
   @impl true
   def init(_) do
@@ -75,6 +81,19 @@ defmodule Hive.Work do
         Postgrex.query!(
           db,
           "CREATE INDEX IF NOT EXISTS hive_events_task_idx ON company.hive_events (task_id, occurred_at)",
+          []
+        )
+
+        Postgrex.query!(
+          db,
+          """
+          CREATE TABLE IF NOT EXISTS company.hive_event_consumptions (
+            event_id TEXT NOT NULL,
+            consumer_id TEXT NOT NULL,
+            acknowledged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (event_id, consumer_id)
+          )
+          """,
           []
         )
 
@@ -344,6 +363,41 @@ defmodule Hive.Work do
 
     if match?({:ok, _}, result), do: notify_event_subscribers(completion_event)
     {:reply, result, state}
+  end
+
+  def handle_call({:heartbeat, id, agent_id, _lease_seconds}, _from, %{memory: memory} = state) do
+    case memory.work[id] do
+      %{state: "claimed", claimed_by: ^agent_id} = item -> {:reply, {:ok, item}, state}
+      _ -> {:reply, {:error, :not_owner}, state}
+    end
+  end
+
+  def handle_call({:heartbeat, id, agent_id, lease_seconds}, _from, %{db: db} = state) do
+    result =
+      Postgrex.query!(
+        db,
+        "UPDATE company.hive_work_items SET lease_expires_at = now() + ($3 || ' seconds')::interval, updated_at = now() WHERE id = $1 AND state = 'claimed' AND claimed_by = $2 AND lease_expires_at >= now() RETURNING id, payload, state, claimed_by, lease_expires_at",
+        [id, agent_id, Integer.to_string(lease_seconds)]
+      )
+
+    {:reply,
+     case rows(result) do
+       [item] -> {:ok, item}
+       _ -> {:error, :not_owner}
+     end, state}
+  end
+
+  def handle_call({:ack_event, _event_id, _consumer_id}, _from, %{memory: _memory} = state),
+    do: {:reply, :ok, state}
+
+  def handle_call({:ack_event, event_id, consumer_id}, _from, %{db: db} = state) do
+    Postgrex.query!(
+      db,
+      "INSERT INTO company.hive_event_consumptions (event_id, consumer_id) VALUES ($1, $2) ON CONFLICT (event_id, consumer_id) DO UPDATE SET acknowledged_at = now()",
+      [event_id, consumer_id]
+    )
+
+    {:reply, :ok, state}
   end
 
   def handle_call({:get, id}, _from, %{memory: memory} = state),

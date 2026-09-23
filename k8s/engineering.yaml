@@ -47,6 +47,14 @@ spec:
               value: http://hive-coordinator:4100
             - name: HIVE_AGENT_ID
               value: engineering-agent
+            - name: AGENT_PROFILE
+              value: generalist
+            - name: AGENT_CAPABILITIES
+              value: execute,review
+            - name: RUNNER_AGENT
+              value: claude
+            - name: RUNNER_MODEL
+              value: sonnet
             - name: CODEX_HOME
               value: /tmp/company-ops-home/.codex
             - name: KUBERNETES_SERVICE_HOST
