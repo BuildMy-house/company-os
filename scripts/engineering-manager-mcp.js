@@ -378,11 +378,19 @@ requests.on("line", async (line) => {
     const name = message.params?.name;
     if (name === "team_health" || name === "container_telemetry") return localCall(message.id, name);
     if (name === "engineering") {
-      const args = { ...(message.params.arguments ?? {}), agent: MANAGER.agent, model: MANAGER.model };
-      upstreamCall("run", args).then((reply) => {
-        reply.id = message.id;
-        send(reply);
-      }).catch((err) => send(error(message.id, -32000, err.message)));
+      const args = message.params.arguments ?? {};
+      const prompt = typeof args.prompt === "string" ? args.prompt : "Complete the assigned engineering work.";
+      hiveCall("hive_submit", {
+        message: prompt,
+        metadata: { workFolder: args.workFolder || "/workspace", requested_by: "engineering-mcp" },
+      }).then(async (submitted) => {
+        const taskId = submitted?.result?.id;
+        if (!taskId) throw new Error("Hive did not return a task id");
+        emitTelemetry({ event: "hive_submission", task_id: taskId, state: "submitted" });
+        const completion = await hiveCall("hive_wait", { task_id: taskId, timeout_seconds: 900 });
+        return { task_id: taskId, completion };
+      }).then((value) => send(result(message.id, { content: [{ type: "text", text: JSON.stringify(value) }] })))
+        .catch((err) => send(error(message.id, -32000, err.message)));
       return;
     }
     if (name === "run" || name === "models") return send(error(message.id, -32601, `${name} is not exposed to Hermes`));
