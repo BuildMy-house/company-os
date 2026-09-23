@@ -107,6 +107,34 @@ defmodule Hive.Router do
     json(conn, %{"work" => work})
   end
 
+  get "/events" do
+    task_id = conn.params["task_id"]
+    limit = String.to_integer(conn.params["limit"] || "100")
+
+    case task_id && Hive.Work.events(task_id, limit) do
+      {:ok, events} -> json(conn, %{"events" => events})
+      _ -> json(conn, %{"error" => "task_id required"}, 400)
+    end
+  end
+
+  get "/events/subscribe" do
+    case conn.params["task_id"] do
+      task_id when is_binary(task_id) and byte_size(task_id) > 0 ->
+        conn =
+          conn
+          |> put_resp_header("cache-control", "no-cache")
+          |> put_resp_header("connection", "keep-alive")
+          |> put_resp_header("content-type", "text/event-stream")
+          |> send_chunked(200)
+
+        :ok = Hive.Work.subscribe_events(self(), task_id)
+        stream_events(conn, task_id)
+
+      _ ->
+        json(conn, %{"error" => "task_id required"}, 400)
+    end
+  end
+
   post "/work/:work_id/claim" do
     with %{"agent_id" => agent_id} <- conn.body_params,
          {:ok, work} <-
@@ -182,7 +210,8 @@ defmodule Hive.Router do
               :closed -> :ok
             end
 
-          _ -> stream_loop(conn)
+          _ ->
+            stream_loop(conn)
         end
 
       {:hive_work_heartbeat} ->
@@ -190,7 +219,6 @@ defmodule Hive.Router do
           {:ok, next} -> stream_loop(next)
           {:error, :closed} -> conn
         end
-
     after
       15_000 ->
         case Plug.Conn.chunk(conn, ": heartbeat\n\n") do
@@ -207,5 +235,42 @@ defmodule Hive.Router do
         {:error, :closed} -> {:halt, :closed}
       end
     end)
+  end
+
+  defp stream_events(conn, task_id) do
+    try do
+      case Hive.Work.events(task_id) do
+        {:ok, events} -> stream_event_list(conn, events)
+        _ -> conn
+      end
+    after
+      Hive.Work.unsubscribe_events(self())
+    end
+  end
+
+  defp stream_event_list(conn, events) do
+    Enum.reduce_while(events, conn, fn event, current ->
+      case Plug.Conn.chunk(current, "data: " <> Jason.encode!(event) <> "\n\n") do
+        {:ok, next} -> {:cont, next}
+        {:error, :closed} -> {:halt, current}
+      end
+    end)
+    |> stream_event_loop()
+  end
+
+  defp stream_event_loop(conn) do
+    receive do
+      {:hive_event_available, event} ->
+        case Plug.Conn.chunk(conn, "data: " <> Jason.encode!(event) <> "\n\n") do
+          {:ok, next} -> stream_event_loop(next)
+          {:error, :closed} -> conn
+        end
+    after
+      15_000 ->
+        case Plug.Conn.chunk(conn, ": heartbeat\n\n") do
+          {:ok, next} -> stream_event_loop(next)
+          {:error, :closed} -> conn
+        end
+    end
   end
 end

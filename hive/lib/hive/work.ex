@@ -12,6 +12,12 @@ defmodule Hive.Work do
   def register_agent(agent), do: GenServer.call(__MODULE__, {:register_agent, agent})
   def subscribe(pid, agent_id), do: GenServer.call(__MODULE__, {:subscribe, pid, agent_id})
   def unsubscribe(pid), do: GenServer.call(__MODULE__, {:unsubscribe, pid})
+  def events(task_id, limit \\ 100), do: GenServer.call(__MODULE__, {:events, task_id, limit})
+
+  def subscribe_events(pid, task_id),
+    do: GenServer.call(__MODULE__, {:subscribe_events, pid, task_id})
+
+  def unsubscribe_events(pid), do: GenServer.call(__MODULE__, {:unsubscribe_events, pid})
 
   def claim(id, agent_id, lease_seconds),
     do: GenServer.call(__MODULE__, {:claim, id, agent_id, lease_seconds})
@@ -27,7 +33,7 @@ defmodule Hive.Work do
 
     case System.get_env("COMPANY_DATABASE_URL") do
       nil ->
-        {:ok, %{memory: %{work: %{}, agents: %{}}}}
+        {:ok, %{memory: %{work: %{}, agents: %{}, events: []}}}
 
       url ->
         opts = db_opts(url)
@@ -47,6 +53,28 @@ defmodule Hive.Work do
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
           )
           """,
+          []
+        )
+
+        Postgrex.query!(
+          db,
+          """
+          CREATE TABLE IF NOT EXISTS company.hive_events (
+            event_id TEXT PRIMARY KEY,
+            topic TEXT NOT NULL,
+            task_id TEXT,
+            sender TEXT NOT NULL,
+            occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            attempt INTEGER NOT NULL DEFAULT 1
+          )
+          """,
+          []
+        )
+
+        Postgrex.query!(
+          db,
+          "CREATE INDEX IF NOT EXISTS hive_events_task_idx ON company.hive_events (task_id, occurred_at)",
           []
         )
 
@@ -75,22 +103,50 @@ defmodule Hive.Work do
 
   @impl true
   def handle_call({:enqueue, id, parts}, _from, %{memory: _memory} = state) do
-    item = %{id: id, payload: %{"parts" => parts}, state: "available", claimed_by: nil}
-    notify_subscribers(id)
-    {:reply, {:ok, item}, put_in(state.memory.work[id], item)}
+    case state.memory.work[id] do
+      nil ->
+        item = %{id: id, payload: %{"parts" => parts}, state: "available", claimed_by: nil}
+        event = event("work.created", id, %{"parts" => parts})
+        notify_subscribers(id)
+        notify_event_subscribers(event)
+
+        {:reply, {:ok, item},
+         state
+         |> put_in([:memory, :work, id], item)
+         |> update_in([:memory, :events], &[event | &1])}
+
+      item ->
+        {:reply, {:ok, item}, state}
+    end
   end
 
   def handle_call({:enqueue, id, parts}, _from, %{db: db} = state) do
     payload = Jason.encode!(%{"parts" => parts})
 
-    Postgrex.query!(
-      db,
-      "INSERT INTO company.hive_work_items (id, payload) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO NOTHING",
-      [id, payload]
-    )
+    created =
+      transaction!(db, fn tx ->
+        inserted =
+          Postgrex.query!(
+            tx,
+            "INSERT INTO company.hive_work_items (id, payload) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO NOTHING RETURNING id",
+            [id, payload]
+          )
 
-    Postgrex.query!(db, "SELECT pg_notify($1, $2)", [@channel, id])
-    notify_subscribers(id)
+        case inserted.rows do
+          [] ->
+            false
+
+          _ ->
+            persist_event(tx, event("work.created", id, %{"parts" => parts}))
+            true
+        end
+      end)
+
+    if created do
+      Postgrex.query!(db, "SELECT pg_notify($1, $2)", [@channel, id])
+      notify_subscribers(id)
+    end
+
     {:reply, get_db(db, id), state}
   end
 
@@ -118,6 +174,22 @@ defmodule Hive.Work do
     {:reply, {:ok, rows(result)}, state}
   end
 
+  def handle_call({:events, task_id, limit}, _from, %{memory: memory} = state) do
+    {:reply, {:ok, memory.events |> Enum.filter(&(&1["task_id"] == task_id)) |> Enum.take(limit)},
+     state}
+  end
+
+  def handle_call({:events, task_id, limit}, _from, %{db: db} = state) do
+    result =
+      Postgrex.query!(
+        db,
+        "SELECT event_id, topic, task_id, sender, occurred_at, payload, attempt FROM company.hive_events WHERE task_id = $1 ORDER BY occurred_at LIMIT $2",
+        [task_id, limit]
+      )
+
+    {:reply, {:ok, rows(result)}, state}
+  end
+
   def handle_call({:register_agent, agent}, _from, %{memory: _memory} = state) do
     {:reply, :ok, put_in(state.memory.agents[agent["id"]], agent)}
   end
@@ -133,27 +205,43 @@ defmodule Hive.Work do
   end
 
   def handle_call({:subscribe, pid, agent_id}, _from, state) do
-    :ets.insert(:hive_subscribers, {pid, agent_id})
+    :ets.insert(:hive_subscribers, {:work, pid, agent_id})
     Process.monitor(pid)
     {:reply, :ok, state}
   end
 
   def handle_call({:unsubscribe, pid}, _from, state) do
-    :ets.delete(:hive_subscribers, pid)
+    :ets.match_delete(:hive_subscribers, {:work, pid, :_})
+    :ets.match_delete(:hive_subscribers, {:event, pid, :_})
     {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    :ets.delete(:hive_subscribers, pid)
-    {:noreply, state}
+  def handle_call({:subscribe_events, pid, task_id}, _from, state) do
+    :ets.insert(:hive_subscribers, {:event, pid, task_id})
+    Process.monitor(pid)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:unsubscribe_events, pid}, _from, state) do
+    :ets.match_delete(:hive_subscribers, {:event, pid, :_})
+    {:reply, :ok, state}
   end
 
   def handle_call({:claim, id, agent_id, _lease_seconds}, _from, %{memory: memory} = state) do
     case memory.work[id] do
       %{state: "available"} = item ->
         claimed = %{item | state: "claimed", claimed_by: agent_id}
-        {:reply, {:ok, claimed}, put_in(state.memory.work[id], claimed)}
+        event = event("work.allocated", id, %{"agent_id" => agent_id})
+        started = event("work.started", id, %{"agent_id" => agent_id})
+
+        next =
+          state
+          |> put_in([:memory, :work, id], claimed)
+          |> update_in([:memory, :events], &[started, event | &1])
+
+        notify_event_subscribers(started)
+        notify_event_subscribers(event)
+        {:reply, {:ok, claimed}, next}
 
       _ ->
         {:reply, {:error, :unavailable}, state}
@@ -161,18 +249,35 @@ defmodule Hive.Work do
   end
 
   def handle_call({:claim, id, agent_id, lease_seconds}, _from, %{db: db} = state) do
-    result =
-      Postgrex.query!(
-        db,
-        "UPDATE company.hive_work_items SET state = 'claimed', claimed_by = $2, lease_expires_at = now() + ($3 || ' seconds')::interval, updated_at = now() WHERE id = $1 AND (state = 'available' OR (state = 'claimed' AND lease_expires_at < now())) RETURNING id, payload, state, claimed_by",
-        [id, agent_id, Integer.to_string(lease_seconds)]
-      )
+    allocated = event("work.allocated", id, %{"agent_id" => agent_id})
+    started = event("work.started", id, %{"agent_id" => agent_id})
 
-    {:reply,
-     case rows(result) do
-       [item] -> {:ok, item}
-       _ -> {:error, :unavailable}
-     end, state}
+    result =
+      transaction!(db, fn tx ->
+        result =
+          Postgrex.query!(
+            tx,
+            "UPDATE company.hive_work_items SET state = 'claimed', claimed_by = $2, lease_expires_at = now() + ($3 || ' seconds')::interval, updated_at = now() WHERE id = $1 AND (state = 'available' OR (state = 'claimed' AND lease_expires_at < now())) RETURNING id, payload, state, claimed_by",
+            [id, agent_id, Integer.to_string(lease_seconds)]
+          )
+
+        case rows(result) do
+          [item] ->
+            persist_event(tx, allocated)
+            persist_event(tx, started)
+            {:ok, item}
+
+          _ ->
+            {:error, :unavailable}
+        end
+      end)
+
+    if match?({:ok, _}, result) do
+      notify_event_subscribers(allocated)
+      notify_event_subscribers(started)
+    end
+
+    {:reply, result, state}
   end
 
   def handle_call(
@@ -183,7 +288,25 @@ defmodule Hive.Work do
     case memory.work[id] do
       %{claimed_by: ^agent_id} = item ->
         completed = Map.merge(item, %{state: final_state, result: result})
-        {:reply, {:ok, completed}, put_in(state.memory.work[id], completed)}
+
+        topic =
+          if final_state == "completed", do: "engineering.completed", else: "engineering.failed"
+
+        event =
+          event(topic, id, %{
+            "agent_id" => agent_id,
+            "state" => final_state,
+            "result" => result || %{}
+          })
+
+        notify_event_subscribers(event)
+
+        next =
+          state
+          |> put_in([:memory, :work, id], completed)
+          |> update_in([:memory, :events], &[event | &1])
+
+        {:reply, {:ok, completed}, next}
 
       _ ->
         {:reply, {:error, :not_owner}, state}
@@ -191,24 +314,49 @@ defmodule Hive.Work do
   end
 
   def handle_call({:complete, id, agent_id, final_state, result}, _from, %{db: db} = state) do
-    updated =
-      Postgrex.query!(
-        db,
-        "UPDATE company.hive_work_items SET state = $3, result = $4::jsonb, updated_at = now() WHERE id = $1 AND claimed_by = $2 RETURNING id, payload, state, claimed_by, result",
-        [id, agent_id, final_state, Jason.encode!(result || %{})]
-      )
+    topic = if final_state == "completed", do: "engineering.completed", else: "engineering.failed"
 
-    {:reply,
-     case rows(updated) do
-       [item] -> {:ok, item}
-       _ -> {:error, :not_owner}
-     end, state}
+    completion_event =
+      event(topic, id, %{
+        "agent_id" => agent_id,
+        "state" => final_state,
+        "result" => result || %{}
+      })
+
+    result =
+      transaction!(db, fn tx ->
+        updated =
+          Postgrex.query!(
+            tx,
+            "UPDATE company.hive_work_items SET state = $3, result = $4::jsonb, updated_at = now() WHERE id = $1 AND claimed_by = $2 RETURNING id, payload, state, claimed_by, result",
+            [id, agent_id, final_state, Jason.encode!(result || %{})]
+          )
+
+        case rows(updated) do
+          [item] ->
+            persist_event(tx, completion_event)
+            {:ok, item}
+
+          _ ->
+            {:error, :not_owner}
+        end
+      end)
+
+    if match?({:ok, _}, result), do: notify_event_subscribers(completion_event)
+    {:reply, result, state}
   end
 
   def handle_call({:get, id}, _from, %{memory: memory} = state),
     do: {:reply, Map.get(memory.work, id), state}
 
   def handle_call({:get, id}, _from, %{db: db} = state), do: {:reply, get_db(db, id), state}
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+    :ets.match_delete(:hive_subscribers, {:work, pid, :_})
+    :ets.match_delete(:hive_subscribers, {:event, pid, :_})
+    {:noreply, state}
+  end
 
   defp get_db(db, id) do
     case rows(
@@ -220,6 +368,41 @@ defmodule Hive.Work do
          ) do
       [item] -> {:ok, item}
       _ -> {:error, :not_found}
+    end
+  end
+
+  defp event(topic, task_id, payload) do
+    %{
+      "event_id" => "evt_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
+      "topic" => topic,
+      "task_id" => task_id,
+      "sender" => System.get_env("HIVE_AGENT_ID", "hive-coordinator"),
+      "occurred_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "payload" => payload,
+      "attempt" => 1
+    }
+  end
+
+  defp persist_event(db, event) do
+    Postgrex.query!(
+      db,
+      "INSERT INTO company.hive_events (event_id, topic, task_id, sender, occurred_at, payload, attempt) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)",
+      [
+        event["event_id"],
+        event["topic"],
+        event["task_id"],
+        event["sender"],
+        event["occurred_at"],
+        Jason.encode!(event["payload"]),
+        event["attempt"]
+      ]
+    )
+  end
+
+  defp transaction!(db, fun) do
+    case Postgrex.transaction(db, fun) do
+      {:ok, value} -> value
+      {:error, reason} -> raise "Hive database transaction failed: #{inspect(reason)}"
     end
   end
 
@@ -243,7 +426,16 @@ defmodule Hive.Work do
   end
 
   defp notify_subscribers(id) do
-    for {pid, _agent_id} <- :ets.tab2list(:hive_subscribers), do: send(pid, {:hive_work_available, id})
+    for {:work, pid, _agent_id} <- :ets.tab2list(:hive_subscribers),
+        do: send(pid, {:hive_work_available, id})
+  end
+
+  defp notify_event_subscribers(event) do
+    task_id = event["task_id"]
+
+    for {:event, pid, subscribed_task_id} <- :ets.tab2list(:hive_subscribers),
+        subscribed_task_id == task_id,
+        do: send(pid, {:hive_event_available, task_id})
   end
 
   defp db_opts(url) do

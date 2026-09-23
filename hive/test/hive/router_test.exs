@@ -99,5 +99,22 @@ defmodule Hive.RouterTest do
       |> Jason.decode!()
 
     assert completed["state"] == "completed"
+
+    assert {:ok, events} = Hive.Work.events(task_id)
+
+    assert Enum.map(events, & &1["topic"]) == [
+             "engineering.completed",
+             "work.started",
+             "work.allocated",
+             "work.created"
+           ]
+
+    event_response =
+      conn(:get, "/events?task_id=#{task_id}")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert length(event_response["events"]) == 4
   end
 end
