@@ -103,6 +103,15 @@ defmodule Hive.Router do
     end
   end
 
+  post "/work/:work_id/allocate" do
+    case Hive.Work.allocate(work_id, conn.body_params["lease_seconds"] || 900) do
+      {:ok, work} -> json(conn, work)
+      {:error, :work_not_found} -> json(conn, %{"error" => "work not found"}, 404)
+      {:error, :no_bids} -> json(conn, %{"error" => "no interested bids"}, 409)
+      {:error, :unavailable} -> json(conn, %{"error" => "work unavailable"}, 409)
+    end
+  end
+
   get "/work/subscribe" do
     case conn.params["agent_id"] do
       agent_id when is_binary(agent_id) and byte_size(agent_id) > 0 ->

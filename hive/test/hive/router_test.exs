@@ -166,4 +166,48 @@ defmodule Hive.RouterTest do
 
     assert ack["acknowledged"] == true
   end
+
+  test "allocates available work to the highest-ranked bidder" do
+    body =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => 4,
+        "method" => "message/send",
+        "params" => %{"message" => %{"parts" => [%{"text" => "allocate"}]}}
+      })
+
+    task_id =
+      conn(:post, "/", body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+      |> get_in(["result", "id"])
+
+    for {agent_id, confidence, benefit, cost} <- [{"low", 0.5, 2, 2}, {"high", 0.9, 5, 1}] do
+      conn(
+        :post,
+        "/work/#{task_id}/bids",
+        Jason.encode!(%{
+          "agent_id" => agent_id,
+          "confidence" => confidence,
+          "approach" => "test",
+          "estimated_cost" => cost,
+          "expected_benefit" => benefit
+        })
+      )
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+    end
+
+    allocated =
+      conn(:post, "/work/#{task_id}/allocate", Jason.encode!(%{"lease_seconds" => 900}))
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert allocated["claimed_by"] == "high"
+    assert allocated["allocated_to"] == "high"
+  end
 end

@@ -15,6 +15,10 @@ defmodule Hive.Work do
     do: GenServer.call(__MODULE__, {:submit_bid, work_id, agent_id, bid})
 
   def ranked_bids(work_id), do: GenServer.call(__MODULE__, {:ranked_bids, work_id})
+
+  def allocate(work_id, lease_seconds \\ 900),
+    do: GenServer.call(__MODULE__, {:allocate, work_id, lease_seconds})
+
   def subscribe(pid, agent_id), do: GenServer.call(__MODULE__, {:subscribe, pid, agent_id})
   def unsubscribe(pid), do: GenServer.call(__MODULE__, {:unsubscribe, pid})
   def events(task_id, limit \\ 100), do: GenServer.call(__MODULE__, {:events, task_id, limit})
@@ -340,6 +344,84 @@ defmodule Hive.Work do
       )
 
     {:reply, {:ok, rows(result)}, state}
+  end
+
+  def handle_call({:allocate, work_id, _lease_seconds}, _from, %{memory: memory} = state) do
+    with %{state: "available"} = work <- memory.work[work_id],
+         [{_key, winner}] <-
+           memory.bids
+           |> Enum.filter(fn {{id, _agent}, bid} -> id == work_id and bid["interested"] end)
+           |> Enum.sort_by(fn {_key, bid} -> score(bid) end, :desc)
+           |> Enum.take(1) do
+      agent_id = winner["agent_id"]
+      allocated = %{work | state: "claimed", claimed_by: agent_id}
+
+      allocation =
+        event("work.allocated", work_id, %{"agent_id" => agent_id, "score" => score(winner)})
+
+      started = event("work.started", work_id, %{"agent_id" => agent_id})
+      next = put_in(state.memory.work[work_id], allocated)
+      next = update_in(next.memory.events, &[started, allocation | &1])
+      notify_event_subscribers(allocation)
+      notify_event_subscribers(started)
+      {:reply, {:ok, Map.put(allocated, :allocated_to, agent_id)}, next}
+    else
+      nil -> {:reply, {:error, :work_not_found}, state}
+      %{state: _} -> {:reply, {:error, :no_bids}, state}
+      _ -> {:reply, {:error, :no_bids}, state}
+    end
+  end
+
+  def handle_call({:allocate, work_id, lease_seconds}, _from, %{db: db} = state) do
+    result =
+      transaction!(db, fn tx ->
+        winner =
+          Postgrex.query!(
+            tx,
+            "SELECT agent_id, confidence * expected_benefit / GREATEST(estimated_cost, 0.01) AS score FROM company.hive_work_bids WHERE work_id = $1 AND interested ORDER BY score DESC, created_at ASC LIMIT 1",
+            [work_id]
+          )
+          |> rows()
+          |> List.first()
+
+        case winner do
+          nil ->
+            {:error, :no_bids}
+
+          %{"agent_id" => agent_id, "score" => score} ->
+            allocation =
+              event("work.allocated", work_id, %{"agent_id" => agent_id, "score" => score})
+
+            started = event("work.started", work_id, %{"agent_id" => agent_id})
+
+            updated =
+              Postgrex.query!(
+                tx,
+                "UPDATE company.hive_work_items SET state = 'claimed', claimed_by = $2, lease_expires_at = now() + ($3 || ' seconds')::interval, updated_at = now() WHERE id = $1 AND state = 'available' RETURNING id, payload, state, claimed_by, lease_expires_at",
+                [work_id, agent_id, Integer.to_string(lease_seconds)]
+              )
+
+            case rows(updated) do
+              [item] ->
+                persist_event(tx, allocation)
+                persist_event(tx, started)
+                {:ok, Map.put(item, "allocated_to", agent_id)}
+
+              _ ->
+                {:error, :unavailable}
+            end
+        end
+      end)
+
+    case result do
+      {:ok, item} ->
+        notify_event_subscribers(%{"task_id" => work_id, "topic" => "work.allocated"})
+        notify_event_subscribers(%{"task_id" => work_id, "topic" => "work.started"})
+        {:reply, {:ok, item}, state}
+
+      error ->
+        {:reply, error, state}
+    end
   end
 
   def handle_call({:subscribe, pid, agent_id}, _from, state) do
