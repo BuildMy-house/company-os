@@ -550,7 +550,7 @@ defmodule Hive.Work do
       "topic" => topic,
       "task_id" => task_id,
       "sender" => System.get_env("HIVE_AGENT_ID", "hive-coordinator"),
-      "occurred_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "occurred_at" => DateTime.utc_now(),
       "payload" => payload,
       "attempt" => 1
     }
