@@ -97,9 +97,37 @@ defmodule Hive.Router do
   end
 
   get "/work/:work_id/bids" do
-    case Hive.Work.ranked_bids(work_id) do
-      {:ok, bids} -> json(conn, %{"work_id" => work_id, "bids" => bids})
-      _ -> json(conn, %{"error" => "unable to rank bids"}, 500)
+    limit =
+      case Integer.parse(conn.params["limit"] || "4") do
+        {value, ""} -> min(max(value, 1), 100)
+        _ -> 4
+      end
+
+    case Hive.Work.ranked_bids(work_id, limit) do
+      {:ok, bids} ->
+        ranked =
+          Enum.with_index(bids, 1) |> Enum.map(fn {bid, rank} -> Map.put(bid, "rank", rank) end)
+
+        json(conn, %{"work_id" => work_id, "bids" => ranked})
+
+      _ ->
+        json(conn, %{"error" => "unable to rank bids"}, 500)
+    end
+  end
+
+  get "/scoring" do
+    {:ok, scoring} = Hive.Work.scoring()
+
+    json(conn, %{
+      "scoring" => scoring,
+      "formula" => "confidence^confidence_weight * benefit^benefit_weight / cost^cost_weight"
+    })
+  end
+
+  post "/scoring" do
+    case Hive.Work.set_scoring(conn.body_params) do
+      {:ok, scoring} -> json(conn, %{"scoring" => scoring})
+      {:error, :invalid_scoring} -> json(conn, %{"error" => "invalid scoring"}, 422)
     end
   end
 

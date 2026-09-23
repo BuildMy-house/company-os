@@ -4,6 +4,7 @@ defmodule Hive.Work do
   use GenServer
 
   @channel "hive_work"
+  @default_scoring %{"confidence_weight" => 1.0, "benefit_weight" => 1.0, "cost_weight" => 1.0}
 
   def start_link(_), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
 
@@ -14,10 +15,14 @@ defmodule Hive.Work do
   def submit_bid(work_id, agent_id, bid),
     do: GenServer.call(__MODULE__, {:submit_bid, work_id, agent_id, bid})
 
-  def ranked_bids(work_id), do: GenServer.call(__MODULE__, {:ranked_bids, work_id})
+  def ranked_bids(work_id, limit \\ 4),
+    do: GenServer.call(__MODULE__, {:ranked_bids, work_id, limit})
 
   def allocate(work_id, lease_seconds \\ 900),
     do: GenServer.call(__MODULE__, {:allocate, work_id, lease_seconds})
+
+  def scoring, do: GenServer.call(__MODULE__, :scoring)
+  def set_scoring(config), do: GenServer.call(__MODULE__, {:set_scoring, config})
 
   def subscribe(pid, agent_id), do: GenServer.call(__MODULE__, {:subscribe, pid, agent_id})
   def unsubscribe(pid), do: GenServer.call(__MODULE__, {:unsubscribe, pid})
@@ -48,7 +53,8 @@ defmodule Hive.Work do
 
     case System.get_env("COMPANY_DATABASE_URL") do
       nil ->
-        {:ok, %{memory: %{work: %{}, agents: %{}, bids: %{}, events: []}}}
+        {:ok,
+         %{memory: %{work: %{}, agents: %{}, bids: %{}, events: [], scoring: @default_scoring}}}
 
       url ->
         opts = db_opts(url)
@@ -152,7 +158,27 @@ defmodule Hive.Work do
           []
         )
 
-        {:ok, %{db: db}}
+        Postgrex.query!(
+          db,
+          """
+          CREATE TABLE IF NOT EXISTS company.hive_scoring_config (
+            id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
+            confidence_weight DOUBLE PRECISION NOT NULL DEFAULT 1,
+            benefit_weight DOUBLE PRECISION NOT NULL DEFAULT 1,
+            cost_weight DOUBLE PRECISION NOT NULL DEFAULT 1,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          )
+          """,
+          []
+        )
+
+        Postgrex.query!(
+          db,
+          "INSERT INTO company.hive_scoring_config (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING",
+          []
+        )
+
+        {:ok, %{db: db, scoring: load_scoring(db)}}
     end
   end
 
@@ -319,31 +345,71 @@ defmodule Hive.Work do
     end
   end
 
-  def handle_call({:ranked_bids, work_id}, _from, %{memory: memory} = state) do
+  def handle_call({:ranked_bids, work_id, limit}, _from, %{memory: memory} = state) do
     bids =
       memory.bids
       |> Enum.filter(fn {{id, _agent}, _bid} -> id == work_id end)
-      |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid)) end)
+      |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid, memory.scoring)) end)
       |> Enum.sort_by(& &1["score"], :desc)
+      |> Enum.take(limit)
 
     {:reply, {:ok, bids}, state}
   end
 
-  def handle_call({:ranked_bids, work_id}, _from, %{db: db} = state) do
+  def handle_call({:ranked_bids, work_id, limit}, _from, %{db: db, scoring: scoring} = state) do
     result =
       Postgrex.query!(
         db,
         """
         SELECT bid_id, work_id, agent_id, interested, confidence, approach,
           estimated_cost, expected_benefit, risk, proposal, created_at,
-          CASE WHEN interested THEN confidence * expected_benefit / GREATEST(estimated_cost, 0.01) ELSE 0 END AS score
+          CASE WHEN interested THEN
+            POWER(GREATEST(confidence, 0.0001), $2) * POWER(GREATEST(expected_benefit, 0.0001), $3) /
+            POWER(GREATEST(estimated_cost, 0.01), $4)
+          ELSE 0 END AS score
         FROM company.hive_work_bids WHERE work_id = $1
         ORDER BY score DESC, created_at ASC
+        LIMIT $5
         """,
-        [work_id]
+        [
+          work_id,
+          scoring["confidence_weight"],
+          scoring["benefit_weight"],
+          scoring["cost_weight"],
+          limit
+        ]
       )
 
     {:reply, {:ok, rows(result)}, state}
+  end
+
+  def handle_call(:scoring, _from, %{memory: memory} = state),
+    do: {:reply, {:ok, memory.scoring}, state}
+
+  def handle_call(:scoring, _from, %{scoring: scoring} = state),
+    do: {:reply, {:ok, scoring}, state}
+
+  def handle_call({:set_scoring, config}, _from, %{memory: _memory} = state) do
+    case normalize_scoring(config) do
+      {:ok, scoring} -> {:reply, {:ok, scoring}, put_in(state.memory.scoring, scoring)}
+      error -> {:reply, error, state}
+    end
+  end
+
+  def handle_call({:set_scoring, config}, _from, %{db: db} = state) do
+    case normalize_scoring(config) do
+      {:ok, scoring} ->
+        Postgrex.query!(
+          db,
+          "UPDATE company.hive_scoring_config SET confidence_weight = $1, benefit_weight = $2, cost_weight = $3, updated_at = now() WHERE id = TRUE",
+          [scoring["confidence_weight"], scoring["benefit_weight"], scoring["cost_weight"]]
+        )
+
+        {:reply, {:ok, scoring}, %{state | scoring: scoring}}
+
+      error ->
+        {:reply, error, state}
+    end
   end
 
   def handle_call({:allocate, work_id, _lease_seconds}, _from, %{memory: memory} = state) do
@@ -351,13 +417,16 @@ defmodule Hive.Work do
          [{_key, winner}] <-
            memory.bids
            |> Enum.filter(fn {{id, _agent}, bid} -> id == work_id and bid["interested"] end)
-           |> Enum.sort_by(fn {_key, bid} -> score(bid) end, :desc)
+           |> Enum.sort_by(fn {_key, bid} -> score(bid, memory.scoring) end, :desc)
            |> Enum.take(1) do
       agent_id = winner["agent_id"]
       allocated = %{work | state: "claimed", claimed_by: agent_id}
 
       allocation =
-        event("work.allocated", work_id, %{"agent_id" => agent_id, "score" => score(winner)})
+        event("work.allocated", work_id, %{
+          "agent_id" => agent_id,
+          "score" => score(winner, memory.scoring)
+        })
 
       started = event("work.started", work_id, %{"agent_id" => agent_id})
       next = put_in(state.memory.work[work_id], allocated)
@@ -372,14 +441,19 @@ defmodule Hive.Work do
     end
   end
 
-  def handle_call({:allocate, work_id, lease_seconds}, _from, %{db: db} = state) do
+  def handle_call({:allocate, work_id, lease_seconds}, _from, %{db: db, scoring: scoring} = state) do
     result =
       transaction!(db, fn tx ->
         winner =
           Postgrex.query!(
             tx,
-            "SELECT agent_id, confidence * expected_benefit / GREATEST(estimated_cost, 0.01) AS score FROM company.hive_work_bids WHERE work_id = $1 AND interested ORDER BY score DESC, created_at ASC LIMIT 1",
-            [work_id]
+            "SELECT agent_id, POWER(GREATEST(confidence, 0.0001), $2) * POWER(GREATEST(expected_benefit, 0.0001), $3) / POWER(GREATEST(estimated_cost, 0.01), $4) AS score FROM company.hive_work_bids WHERE work_id = $1 AND interested ORDER BY score DESC, created_at ASC LIMIT 1",
+            [
+              work_id,
+              scoring["confidence_weight"],
+              scoring["benefit_weight"],
+              scoring["cost_weight"]
+            ]
           )
           |> rows()
           |> List.first()
@@ -679,12 +753,27 @@ defmodule Hive.Work do
 
   defp number(_), do: -1.0
 
-  defp score(bid),
-    do:
-      if(bid["interested"],
-        do: bid["confidence"] * bid["expected_benefit"] / max(bid["estimated_cost"], 0.01),
-        else: 0.0
-      )
+  defp normalize_scoring(config) do
+    scoring = %{
+      "confidence_weight" => number(Map.get(config, "confidence_weight", 1)),
+      "benefit_weight" => number(Map.get(config, "benefit_weight", 1)),
+      "cost_weight" => number(Map.get(config, "cost_weight", 1))
+    }
+
+    if Enum.all?(scoring, fn {_key, value} -> value >= 0 end) and scoring["cost_weight"] > 0,
+      do: {:ok, scoring},
+      else: {:error, :invalid_scoring}
+  end
+
+  defp score(bid, scoring) do
+    if bid["interested"] do
+      :math.pow(max(bid["confidence"], 0.0001), scoring["confidence_weight"]) *
+        :math.pow(max(bid["expected_benefit"], 0.0001), scoring["benefit_weight"]) /
+        :math.pow(max(bid["estimated_cost"], 0.01), scoring["cost_weight"])
+    else
+      0.0
+    end
+  end
 
   defp random_id, do: Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 
@@ -754,5 +843,21 @@ defmodule Hive.Work do
       database: String.trim_leading(uri.path || "", "/"),
       pool_size: 5
     ]
+  end
+
+  defp load_scoring(db) do
+    case Postgrex.query!(
+           db,
+           "SELECT confidence_weight, benefit_weight, cost_weight FROM company.hive_scoring_config WHERE id = TRUE",
+           []
+         )
+         |> rows()
+         |> List.first() do
+      %{"confidence_weight" => confidence, "benefit_weight" => benefit, "cost_weight" => cost} ->
+        %{"confidence_weight" => confidence, "benefit_weight" => benefit, "cost_weight" => cost}
+
+      _ ->
+        @default_scoring
+    end
   end
 end

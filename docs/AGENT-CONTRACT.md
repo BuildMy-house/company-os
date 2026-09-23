@@ -6,10 +6,14 @@ OpenCode, `ai-cli-mcp`, or another runner, but it exposes the same contract:
 1. Register with `POST /agents/register` and declare `profile`, `modes`, and
    capabilities.
 2. Subscribe to `GET /work/subscribe?agent_id=...` for work notifications.
-3. Submit a bid with `POST /work/:work_id/bids`; inspect the deterministic
-   ranking with `GET /work/:work_id/bids`.
+3. Submit a bid with `POST /work/:work_id/bids`; inspect the top four ranked
+   bids with `GET /work/:work_id/bids`.
 4. Allocate available work with `POST /work/:work_id/allocate`; Hive leases it
    to the highest-ranked interested bidder.
+
+Hive scores bids as `confidence^confidence_weight * benefit^benefit_weight /
+cost^cost_weight`. The weights are durable and adjustable through
+`GET/POST /scoring`; defaults are `1, 1, 1`.
 3. Claim with `POST /work/:task_id/claim` and a finite lease.
 4. Renew with `POST /work/:task_id/heartbeat` while executing.
 5. Report `completed` or `failed` with `POST /work/:task_id/complete`.
