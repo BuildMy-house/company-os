@@ -2,11 +2,34 @@
 
 ## What the engineering container is
 
-The `engineering-agent` runs the Claude engineering-manager persona plus
-opencode/codex CLI workers for Hermees's own dispatch path. It is defined by
+The `engineering-agent` runs a manager persona plus `ai-cli-mcp` worker
+dispatch for Hermees's own dispatch path. The production Claude flavor keeps
+the existing Claude manager + OpenCode worker arrangement. A slim OpenCode
+flavor uses the same manager facade and worker path without installing Claude
+or Codex. It is defined by
 `Dockerfile.engineering` at the repo root and started by
 `scripts/engineering-entrypoint.sh`, which syncs BuildMy-house repos then
-execs `supergateway` serving `ai-cli-mcp`.
+execs `mcp-proxy` serving the manager facade over `ai-cli-mcp`.
+
+The flavor is a build-time choice; manager versus worker is a runtime pattern,
+not a second codebase:
+
+```bash
+# Current production flavor
+docker build -f Dockerfile.engineering --build-arg AGENT_FLAVOR=claude \
+  --build-context "shared=https://x-access-token:$(gh auth token)@github.com/BuildMy-house/workspace.git" \
+  -t localhost:30500/company-os-engineering:<tag> .
+
+# Slim OpenCode manager/workers flavor
+docker build -f Dockerfile.engineering --build-arg AGENT_FLAVOR=opencode \
+  --build-arg INSTALL_BROWSER=false \
+  --build-context "shared=https://x-access-token:$(gh auth token)@github.com/BuildMy-house/workspace.git" \
+  -t localhost:30500/company-os-engineering-opencode:<tag> .
+```
+
+Set `AGENT_FLAVOR=opencode`, `AGENT_ROLE=manager`, and
+`RUNNER_AGENT=opencode` on an OpenCode deployment. `ai-cli-mcp` remains the
+stable manager-facing dispatch service; it is not a separate worker runtime.
 
 ## How it actually runs in production
 

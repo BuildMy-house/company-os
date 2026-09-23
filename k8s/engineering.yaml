@@ -47,6 +47,10 @@ spec:
               value: http://hive-coordinator:4100
             - name: HIVE_AGENT_ID
               value: engineering-agent
+            - name: AGENT_FLAVOR
+              value: claude
+            - name: AGENT_ROLE
+              value: manager
             - name: AGENT_PROFILE
               value: generalist
             - name: AGENT_CAPABILITIES

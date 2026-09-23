@@ -4,6 +4,11 @@ metadata:
   name: hive-agent-profile
   namespace: company-ops
 data:
+  # Build the same Dockerfile with --build-arg AGENT_FLAVOR=opencode for a
+  # slim OpenCode manager/workers image. Claude flavor remains the production
+  # default and keeps the current Claude manager + ai-cli worker path.
+  AGENT_FLAVOR: opencode
+  AGENT_ROLE: manager
   AGENT_PROFILE: builder
   AGENT_CAPABILITIES: execute,review
   RUNNER_AGENT: opencode

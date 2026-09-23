@@ -51,7 +51,7 @@ if [ -n "${AXIOM_TOKEN:-}" ]; then
   # while debugging the axiom_usage Hermes plugin's own identical bug.
   export OTEL_EXPORTER_OTLP_ENDPOINT=https://eu-central-1.aws.edge.axiom.co
   export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${AXIOM_TOKEN},X-Axiom-Dataset=bmh-company"
-  export OTEL_RESOURCE_ATTRIBUTES="service.name=${AXIOM_SERVICE_NAME:-claude-code},deployment.environment.name=${DEPLOYMENT_ENVIRONMENT:-production},role=manager"
+  export OTEL_RESOURCE_ATTRIBUTES="service.name=${AXIOM_SERVICE_NAME:-${AGENT_FLAVOR:-agent}-code},deployment.environment.name=${DEPLOYMENT_ENVIRONMENT:-production},role=${AGENT_ROLE:-manager}"
   # Ship full prompt/response text, not just usage counters — same
   # content-visible decision (2026-09-18) applied to the Hermes/OpenCode
   # plugins above, extended to Claude Code's own native OTel export.
@@ -68,7 +68,7 @@ fi
 echo "[mcp-config] Generating agent MCP config for Claude and OpenCode..."
 node "$SCRIPT_DIR/generate-agent-mcp-config.js"
 
-if [ -n "${AXIOM_TOKEN:-}" ]; then
+if [ -n "${AXIOM_TOKEN:-}" ] && command -v codex >/dev/null 2>&1; then
   codex mcp add axiom \
     --env AXIOM_TOKEN="$AXIOM_TOKEN" \
     --env AXIOM_ORG_ID="${AXIOM_ORG_ID:-}" \
@@ -78,7 +78,7 @@ if [ -n "${AXIOM_TOKEN:-}" ]; then
     || echo "[mcp-config] WARN: codex mcp add axiom failed" >&2
 fi
 
-if [ -n "${INFISICAL_UNIVERSAL_AUTH_CLIENT_ID:-}" ]; then
+if [ -n "${INFISICAL_UNIVERSAL_AUTH_CLIENT_ID:-}" ] && command -v codex >/dev/null 2>&1; then
   codex mcp add infisical \
     --env INFISICAL_HOST_URL="${INFISICAL_HOST_URL:-https://app.infisical.com}" \
     --env INFISICAL_AUTH_METHOD=universal-auth \
@@ -99,6 +99,8 @@ echo "[ai-cli] Setting up ai-cli-mcp configuration..."
 mkdir -p "$HOME/.config/ai-cli"
 mkdir -p "$HOME/.claude"
 cp /opt/company-ops/.claude/agents/agent-manager.md "$HOME/.claude/CLAUDE.md"
+mkdir -p "$HOME/.config/opencode"
+cp /opt/company-ops/.claude/agents/agent-manager.md "$HOME/.config/opencode/AGENTS.md"
 
 # Create config if not already present
 if [[ ! -f "$HOME/.config/ai-cli/config.toml" ]]; then
@@ -127,10 +129,10 @@ fi
 # Codex auth: CODEX_API_KEY is read directly by the CLI, but OAuth needs an
 # actual `codex login` run to persist ~/.codex/auth.json — the CLI does not
 # read an OAuth token from the environment per-invocation the way `claude` does.
-if [[ -n "${CODEX_API_KEY:-}" ]]; then
+if command -v codex >/dev/null 2>&1 && [[ -n "${CODEX_API_KEY:-}" ]]; then
   export CODEX_API_KEY
   echo "[ai-cli] CODEX_API_KEY set"
-elif [[ -n "${CODEX_ACCESS_TOKEN:-}" ]]; then
+elif command -v codex >/dev/null 2>&1 && [[ -n "${CODEX_ACCESS_TOKEN:-}" ]]; then
   if [[ "$(id -u)" != "0" ]]; then
     echo "[ai-cli] Skipping Codex OAuth file login for non-root worker; use CODEX_API_KEY or a writable Codex home"
   elif printf '%s' "$CODEX_ACCESS_TOKEN" | codex login --with-access-token >/dev/null 2>&1; then

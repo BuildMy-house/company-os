@@ -15,8 +15,10 @@ const upstream = spawn("npx", ["-y", "ai-cli-mcp@latest"], {
 });
 
 const MANAGER = {
-  agent: process.env.RUNNER_AGENT || "claude",
-  model: process.env.RUNNER_MODEL || "sonnet",
+  flavor: process.env.AGENT_FLAVOR || "claude",
+  role: process.env.AGENT_ROLE || "manager",
+  agent: process.env.RUNNER_AGENT || (process.env.AGENT_FLAVOR === "opencode" ? "opencode" : "claude"),
+  model: process.env.RUNNER_MODEL || (process.env.AGENT_FLAVOR === "opencode" ? "oc-opencode/mimo-v2.5-free" : "sonnet"),
   reasoning_effort: process.env.RUNNER_REASONING || "medium",
   auto_compact: "200k",
 };
@@ -79,7 +81,9 @@ function upstreamCall(name, arguments_, context = {}) {
 }
 
 function health() {
-  const binaries = ["/usr/local/bin/claude", "/usr/local/bin/opencode"];
+  const binaries = MANAGER.flavor === "opencode"
+    ? ["/usr/local/bin/opencode"]
+    : ["/usr/local/bin/claude", "/usr/local/bin/opencode"];
   const workspace = "/workspace";
   return {
     status: binaries.every(existsSync) && existsSync(workspace) ? "healthy" : "degraded",
@@ -215,7 +219,7 @@ async function handleA2A(request, response) {
   if (request.method === "GET" && url.pathname === "/.well-known/agent-card.json") {
     return sendHttp(response, 200, {
       name: "buildmy.house engineering agent",
-      description: "Claude engineering manager with OpenCode worker dispatch",
+      description: `${MANAGER.flavor} engineering manager with ai-cli-mcp worker dispatch`,
       url: `http://${process.env.A2A_HOST || "engineering-agent"}:${process.env.A2A_PORT || 8001}`,
       version: "0.1.0",
       capabilities: { streaming: false, pushNotifications: false },
