@@ -22,7 +22,7 @@ spec:
         runAsNonRoot: true
       containers:
         - name: engineering-agent
-          image: localhost:30500/company-os-engineering@sha256:7fbb2eb9fd7b7bea3048a945bc20ee7eaa18c21a6d04f1137942db2d16b6c632
+          image: localhost:30500/company-os-engineering@sha256:2769e9b80c899ca3716e7619cdf7e2bb5f264d69853a4d30da44e09ec1e4947a
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

@@ -1,5 +1,11 @@
 ## Container operations
 
+## Worker model constraint
+
+For engineering worker dispatches, use only `oc-opencode/mimo-v2.6-flash-free`
+or `oc-zai-coding-plan/glm-5.3-flash`. Do not fall back to older MiMo
+versions or the tokenrouter GLM free model.
+
 You also have direct control over this container's own deployment via the
 `container-manager` MCP tools — use these when the board/ticket is about
 the engineering container itself (self-upgrade, rollback, health):
