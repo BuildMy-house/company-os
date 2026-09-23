@@ -287,8 +287,26 @@ let hiveBusy = false;
 async function runHiveWork(candidate) {
   if (hiveBusy) return;
   try {
-    const claimed = await hiveRequest(`/work/${candidate.id}/claim`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", lease_seconds: 900 }) });
-    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "claimed", agent_id: process.env.HIVE_AGENT_ID || "engineering-agent" });
+    const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
+    await hiveRequest(`/work/${candidate.id}/bids`, {
+      method: "POST",
+      body: JSON.stringify({
+        agent_id: agentId,
+        interested: true,
+        confidence: Number(process.env.HIVE_BID_CONFIDENCE || 0.7),
+        approach: `${MANAGER.flavor} ${MANAGER.role} execution`,
+        estimated_cost: Number(process.env.HIVE_BID_COST || 1),
+        expected_benefit: Number(process.env.HIVE_BID_BENEFIT || 1),
+        risk: process.env.HIVE_BID_RISK || "medium"
+      })
+    });
+    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_submitted", agent_id: agentId });
+    const allocated = await hiveRequest(`/work/${candidate.id}/allocate`, { method: "POST", body: JSON.stringify({ lease_seconds: 900 }) });
+    if (allocated.claimed_by !== agentId) {
+      emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "allocation_lost", agent_id: agentId, claimed_by: allocated.claimed_by });
+      return;
+    }
+    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "allocated", agent_id: agentId });
     hiveBusy = true;
     const task = { id: candidate.id, state: "working", startedAt: Date.now() };
     const prompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
