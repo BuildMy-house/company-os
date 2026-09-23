@@ -10,5 +10,6 @@ resources:
   - company-ops.yaml
   - engineering.yaml
   - engineering-opencode.yaml
+  - engineering-opencode-direct.yaml
   - hive.yaml
   - postgres-backup.yaml

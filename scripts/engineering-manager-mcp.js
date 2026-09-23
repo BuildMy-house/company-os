@@ -178,11 +178,11 @@ input.on("line", (line) => {
       if (Array.isArray(schema.required)) schema.required = schema.required.filter((name) => name !== "model");
       visible.unshift(tool(
         "engineering",
-        "Dispatch work to the Claude Sonnet engineering manager only. The manager may delegate workers internally.",
+        `Dispatch work to the ${MANAGER.flavor} ${MANAGER.role}. It may delegate workers internally when configured.`,
         schema,
       ));
     }
-    visible.push(tool("team_health", "Check Claude manager, workspace, identity, and worker-binary health.", { type: "object", properties: {}, additionalProperties: false }));
+    visible.push(tool("team_health", `Check ${MANAGER.flavor} ${MANAGER.role}, workspace, identity, and worker-binary health.`, { type: "object", properties: {}, additionalProperties: false }));
     visible.push(tool("container_telemetry", "Get lightweight engineering-container uptime, load, memory, process, and disk telemetry.", { type: "object", properties: {}, additionalProperties: false }));
     message.result.tools = visible;
   }

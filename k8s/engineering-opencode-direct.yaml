@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: engineering-opencode
+  name: engineering-opencode-direct
   namespace: company-ops
 spec:
   replicas: 1
@@ -9,11 +9,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: engineering-opencode
+      app: engineering-opencode-direct
   template:
     metadata:
       labels:
-        app: engineering-opencode
+        app: engineering-opencode-direct
     spec:
       serviceAccountName: company-ops
       securityContext:
@@ -21,7 +21,7 @@ spec:
         runAsGroup: 1001
         runAsNonRoot: true
       containers:
-        - name: engineering-opencode
+        - name: engineering-opencode-direct
           image: localhost:30500/company-os-engineering@sha256:4e3ed38180b72af4750050fed73d95c9a835debb20cc1c292461d4c24e5ed4c0
           imagePullPolicy: Always
           securityContext:
@@ -40,7 +40,7 @@ spec:
             - name: HOME
               value: /tmp/company-ops-home
             - name: AXIOM_SERVICE_NAME
-              value: engineering-opencode-k8s
+              value: engineering-opencode-direct-k8s
             - name: DEPLOYMENT_ENVIRONMENT
               value: local-k8s
             - name: HIVE_URL
@@ -50,19 +50,19 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: A2A_ENDPOINT
-              value: http://engineering-opencode:8001
+              value: http://engineering-opencode-direct:8001
             - name: AGENT_FLAVOR
               value: opencode
             - name: AGENT_ROLE
-              value: manager
+              value: direct
             - name: AGENT_PROFILE
-              value: generalist
+              value: builder
             - name: AGENT_CAPABILITIES
               value: execute,review
             - name: RUNNER_AGENT
               value: opencode
             - name: RUNNER_MODEL
-              value: tokenrouter/z-ai/glm-5.3-free
+              value: opencode/mimo-v2.5-free
             - name: CODEX_HOME
               value: /tmp/company-ops-home/.codex
             - name: KUBERNETES_SERVICE_HOST
@@ -115,11 +115,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: engineering-opencode
+  name: engineering-opencode-direct
   namespace: company-ops
 spec:
   selector:
-    app: engineering-opencode
+    app: engineering-opencode-direct
   ports:
     - name: mcp
       port: 8000
