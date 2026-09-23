@@ -8,6 +8,7 @@ __pycache__/
 *.jsonl
 artifacts/
 reports/*.pdf
+graphify-out/
 
 # Real TLS/SSH private keys — never track cert material.
 certs/
