@@ -9,5 +9,6 @@ resources:
   - browser-adversary.yaml
   - company-ops.yaml
   - engineering.yaml
+  - engineering-opencode.yaml
   - hive.yaml
   - postgres-backup.yaml
