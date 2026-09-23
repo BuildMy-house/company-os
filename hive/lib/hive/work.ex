@@ -10,6 +10,11 @@ defmodule Hive.Work do
   def enqueue(id, parts), do: GenServer.call(__MODULE__, {:enqueue, id, parts})
   def available(limit \\ 10), do: GenServer.call(__MODULE__, {:available, limit})
   def register_agent(agent), do: GenServer.call(__MODULE__, {:register_agent, agent})
+
+  def submit_bid(work_id, agent_id, bid),
+    do: GenServer.call(__MODULE__, {:submit_bid, work_id, agent_id, bid})
+
+  def ranked_bids(work_id), do: GenServer.call(__MODULE__, {:ranked_bids, work_id})
   def subscribe(pid, agent_id), do: GenServer.call(__MODULE__, {:subscribe, pid, agent_id})
   def unsubscribe(pid), do: GenServer.call(__MODULE__, {:unsubscribe, pid})
   def events(task_id, limit \\ 100), do: GenServer.call(__MODULE__, {:events, task_id, limit})
@@ -39,7 +44,7 @@ defmodule Hive.Work do
 
     case System.get_env("COMPANY_DATABASE_URL") do
       nil ->
-        {:ok, %{memory: %{work: %{}, agents: %{}, events: []}}}
+        {:ok, %{memory: %{work: %{}, agents: %{}, bids: %{}, events: []}}}
 
       url ->
         opts = db_opts(url)
@@ -100,6 +105,33 @@ defmodule Hive.Work do
         Postgrex.query!(
           db,
           "CREATE INDEX IF NOT EXISTS hive_work_available_idx ON company.hive_work_items (state, created_at)",
+          []
+        )
+
+        Postgrex.query!(
+          db,
+          """
+          CREATE TABLE IF NOT EXISTS company.hive_work_bids (
+            bid_id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES company.hive_work_items(id) ON DELETE CASCADE,
+            agent_id TEXT NOT NULL,
+            interested BOOLEAN NOT NULL,
+            confidence DOUBLE PRECISION NOT NULL,
+            approach TEXT NOT NULL DEFAULT '',
+            estimated_cost DOUBLE PRECISION NOT NULL,
+            expected_benefit DOUBLE PRECISION NOT NULL,
+            risk TEXT NOT NULL DEFAULT '',
+            proposal JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            UNIQUE (work_id, agent_id)
+          )
+          """,
+          []
+        )
+
+        Postgrex.query!(
+          db,
+          "CREATE INDEX IF NOT EXISTS hive_work_bids_rank_idx ON company.hive_work_bids (work_id, confidence, expected_benefit)",
           []
         )
 
@@ -221,6 +253,93 @@ defmodule Hive.Work do
     )
 
     {:reply, :ok, state}
+  end
+
+  def handle_call({:submit_bid, work_id, agent_id, bid}, _from, %{memory: memory} = state) do
+    with {:ok, normalized} <- normalize_bid(bid),
+         true <- Map.has_key?(memory.work, work_id) do
+      item =
+        Map.merge(normalized, %{
+          "bid_id" => "bid_" <> random_id(),
+          "work_id" => work_id,
+          "agent_id" => agent_id
+        })
+
+      {:reply, {:ok, item}, put_in(state.memory.bids[{work_id, agent_id}], item)}
+    else
+      false -> {:reply, {:error, :work_not_found}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:submit_bid, work_id, agent_id, bid}, _from, %{db: db} = state) do
+    with {:ok, normalized} <- normalize_bid(bid),
+         {:ok, _work} <- get_db(db, work_id) do
+      result =
+        transaction!(db, fn tx ->
+          Postgrex.query!(
+            tx,
+            """
+            INSERT INTO company.hive_work_bids
+              (bid_id, work_id, agent_id, interested, confidence, approach, estimated_cost, expected_benefit, risk, proposal)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+            ON CONFLICT (work_id, agent_id) DO UPDATE SET
+              interested = EXCLUDED.interested, confidence = EXCLUDED.confidence,
+              approach = EXCLUDED.approach, estimated_cost = EXCLUDED.estimated_cost,
+              expected_benefit = EXCLUDED.expected_benefit, risk = EXCLUDED.risk,
+              proposal = EXCLUDED.proposal, created_at = now()
+            RETURNING bid_id, work_id, agent_id, interested, confidence, approach,
+              estimated_cost, expected_benefit, risk, proposal, created_at
+            """,
+            [
+              "bid_" <> random_id(),
+              work_id,
+              agent_id,
+              normalized["interested"],
+              normalized["confidence"],
+              normalized["approach"],
+              normalized["estimated_cost"],
+              normalized["expected_benefit"],
+              normalized["risk"],
+              Jason.encode!(bid)
+            ]
+          )
+          |> rows()
+          |> List.first()
+        end)
+
+      {:reply, {:ok, result}, state}
+    else
+      {:error, :not_found} -> {:reply, {:error, :work_not_found}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:ranked_bids, work_id}, _from, %{memory: memory} = state) do
+    bids =
+      memory.bids
+      |> Enum.filter(fn {{id, _agent}, _bid} -> id == work_id end)
+      |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid)) end)
+      |> Enum.sort_by(& &1["score"], :desc)
+
+    {:reply, {:ok, bids}, state}
+  end
+
+  def handle_call({:ranked_bids, work_id}, _from, %{db: db} = state) do
+    result =
+      Postgrex.query!(
+        db,
+        """
+        SELECT bid_id, work_id, agent_id, interested, confidence, approach,
+          estimated_cost, expected_benefit, risk, proposal, created_at,
+          CASE WHEN interested THEN confidence * expected_benefit / GREATEST(estimated_cost, 0.01) ELSE 0 END AS score
+        FROM company.hive_work_bids WHERE work_id = $1
+        ORDER BY score DESC, created_at ASC
+        """,
+        [work_id]
+      )
+
+    {:reply, {:ok, rows(result)}, state}
   end
 
   def handle_call({:subscribe, pid, agent_id}, _from, state) do
@@ -436,6 +555,56 @@ defmodule Hive.Work do
       "attempt" => 1
     }
   end
+
+  defp normalize_bid(bid) do
+    interested = Map.get(bid, "interested", true)
+    confidence = number(Map.get(bid, "confidence", 0))
+    estimated_cost = number(Map.get(bid, "estimated_cost", 0))
+    expected_benefit = number(Map.get(bid, "expected_benefit", 0))
+
+    cond do
+      not is_boolean(interested) ->
+        {:error, :invalid_bid}
+
+      confidence < 0 or confidence > 1 ->
+        {:error, :invalid_bid}
+
+      estimated_cost < 0 or expected_benefit < 0 ->
+        {:error, :invalid_bid}
+
+      true ->
+        {:ok,
+         %{
+           "interested" => interested,
+           "confidence" => confidence,
+           "approach" => Map.get(bid, "approach", ""),
+           "estimated_cost" => estimated_cost,
+           "expected_benefit" => expected_benefit,
+           "risk" => Map.get(bid, "risk", "")
+         }}
+    end
+  end
+
+  defp number(value) when is_integer(value), do: value * 1.0
+  defp number(value) when is_float(value), do: value
+
+  defp number(value) when is_binary(value) do
+    case Float.parse(value) do
+      {number, ""} -> number
+      _ -> -1.0
+    end
+  end
+
+  defp number(_), do: -1.0
+
+  defp score(bid),
+    do:
+      if(bid["interested"],
+        do: bid["confidence"] * bid["expected_benefit"] / max(bid["estimated_cost"], 0.01),
+        else: 0.0
+      )
+
+  defp random_id, do: Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 
   defp persist_event(db, event) do
     Postgrex.query!(

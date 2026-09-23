@@ -84,6 +84,25 @@ defmodule Hive.Router do
     end
   end
 
+  post "/work/:work_id/bids" do
+    with %{"agent_id" => agent_id} <- conn.body_params,
+         {:ok, bid} <-
+           Hive.Work.submit_bid(work_id, agent_id, Map.delete(conn.body_params, "agent_id")) do
+      json(conn, bid, 201)
+    else
+      {:error, :work_not_found} -> json(conn, %{"error" => "work not found"}, 404)
+      {:error, :invalid_bid} -> json(conn, %{"error" => "invalid bid"}, 422)
+      _ -> json(conn, %{"error" => "agent_id required"}, 400)
+    end
+  end
+
+  get "/work/:work_id/bids" do
+    case Hive.Work.ranked_bids(work_id) do
+      {:ok, bids} -> json(conn, %{"work_id" => work_id, "bids" => bids})
+      _ -> json(conn, %{"error" => "unable to rank bids"}, 500)
+    end
+  end
+
   get "/work/subscribe" do
     case conn.params["agent_id"] do
       agent_id when is_binary(agent_id) and byte_size(agent_id) > 0 ->

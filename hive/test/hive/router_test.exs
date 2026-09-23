@@ -73,6 +73,33 @@ defmodule Hive.RouterTest do
 
     task_id = response["result"]["id"]
 
+    for {agent_id, confidence, benefit, cost} <- [{"slow", 0.9, 5, 2}, {"fast", 0.8, 4, 1}] do
+      bid =
+        conn(
+          :post,
+          "/work/#{task_id}/bids",
+          Jason.encode!(%{
+            "agent_id" => agent_id,
+            "confidence" => confidence,
+            "approach" => "test",
+            "estimated_cost" => cost,
+            "expected_benefit" => benefit
+          })
+        )
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> Hive.Router.call(@opts)
+
+      assert bid.status == 201
+    end
+
+    ranked =
+      conn(:get, "/work/#{task_id}/bids")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert Enum.map(ranked["bids"], & &1["agent_id"]) == ["fast", "slow"]
+
     claim_body = Jason.encode!(%{"agent_id" => "agent-1"})
 
     claimed =
