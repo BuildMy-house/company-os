@@ -69,9 +69,12 @@ const tools = [
   { name: "hive_submit", description: "Submit work to Hive and return its durable task id.", inputSchema: { type: "object", required: ["message"], properties: { message: { type: "string" }, metadata: { type: "object" } }, additionalProperties: false } },
   { name: "hive_bid", description: "Submit or update this agent's bid for Hive work.", inputSchema: { type: "object", required: ["work_id", "confidence", "approach", "estimated_cost", "expected_benefit"], properties: { work_id: { type: "string" }, interested: { type: "boolean" }, confidence: { type: "number", minimum: 0, maximum: 1 }, approach: { type: "string" }, estimated_cost: { type: "number", minimum: 0 }, expected_benefit: { type: "number", minimum: 0 }, risk: { type: "string" } }, additionalProperties: false } },
   { name: "hive_allocate", description: "Allocate available Hive work to its highest-ranked interested bidder.", inputSchema: { type: "object", required: ["work_id"], properties: { work_id: { type: "string" }, lease_seconds: { type: "integer", minimum: 60, maximum: 3600 } }, additionalProperties: false } },
+  { name: "hive_heartbeat", description: "Renew this agent's temporary Hive work lease.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, lease_seconds: { type: "integer", minimum: 60, maximum: 3600 } }, additionalProperties: false } },
+  { name: "hive_complete", description: "Record completion or failure for work held by this agent.", inputSchema: { type: "object", required: ["task_id", "state"], properties: { task_id: { type: "string" }, state: { type: "string" }, result: { type: "object" } }, additionalProperties: false } },
   { name: "hive_status", description: "Read the durable status of a Hive task.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" } }, additionalProperties: false } },
   { name: "hive_events", description: "Replay durable lifecycle events for a task.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
   { name: "hive_wait", description: "Wait for a task completion/failure event over SSE without polling.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
+  { name: "hive_next_work", description: "Wait for the next available Hive work item over SSE without polling.", inputSchema: { type: "object", properties: { timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
 ];
 
 function send(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }
@@ -82,10 +85,41 @@ async function call(name, args) {
   if (name === "hive_submit") return request("/", { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "message/send", params: { message: { parts: [{ text: args.message }] }, ...(args.metadata ? { metadata: args.metadata } : {}) } }) });
   if (name === "hive_bid") { const { work_id, ...bid } = args; return request(`/work/${encodeURIComponent(work_id)}/bids`, { method: "POST", body: JSON.stringify({ agent_id: consumerId, ...bid }) }); }
   if (name === "hive_allocate") return request(`/work/${encodeURIComponent(args.work_id)}/allocate`, { method: "POST", body: JSON.stringify({ lease_seconds: args.lease_seconds || 900 }) });
+  if (name === "hive_heartbeat") return request(`/work/${encodeURIComponent(args.task_id)}/heartbeat`, { method: "POST", body: JSON.stringify({ agent_id: consumerId, lease_seconds: args.lease_seconds || 900 }) });
+  if (name === "hive_complete") return request(`/work/${encodeURIComponent(args.task_id)}/complete`, { method: "POST", body: JSON.stringify({ agent_id: consumerId, state: args.state, result: args.result || {} }) });
   if (name === "hive_status") return request(`/tasks/${encodeURIComponent(args.task_id)}`);
   if (name === "hive_events") return request(`/events?task_id=${encodeURIComponent(args.task_id)}&limit=${args.limit || 100}`);
   if (name === "hive_wait") return waitForEvent(args.task_id, args.timeout_seconds || 900);
+  if (name === "hive_next_work") return waitForWork(args.timeout_seconds || 900);
   throw new Error(`unknown tool: ${name}`);
+}
+
+async function waitForWork(timeoutSeconds = 900) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
+  try {
+    const response = await fetch(`${base}/work/subscribe?agent_id=${encodeURIComponent(consumerId)}`, {
+      signal: controller.signal,
+      headers: { accept: "text/event-stream" },
+    });
+    if (!response.ok || !response.body) throw new Error(`Hive work stream returned ${response.status}`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error("Hive work stream closed");
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() || "";
+      for (const frame of frames) {
+        const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
+        if (data) return JSON.parse(data);
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const input = readline.createInterface({ input: process.stdin });

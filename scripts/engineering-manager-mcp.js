@@ -24,6 +24,52 @@ const MANAGER = {
 };
 const capabilities = (process.env.AGENT_CAPABILITIES || "execute,review").split(",").map((value) => value.trim()).filter(Boolean);
 
+const hiveMember = process.env.HIVE_URL
+  ? spawn(process.execPath, [process.env.HIVE_MCP_SCRIPT || "/opt/company-ops/scripts/hive-member-mcp.js"], {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: process.env,
+  })
+  : null;
+const hivePending = new Map();
+let hiveNextId = 1;
+let hiveReady;
+
+if (hiveMember) {
+  hiveReady = new Promise((resolve, reject) => {
+    hivePending.set(0, { resolve, reject });
+    hiveMember.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-03-26" } })}\n`);
+  });
+  const hiveInput = readline.createInterface({ input: hiveMember.stdout });
+  hiveInput.on("line", (line) => {
+    let message;
+    try { message = JSON.parse(line); } catch { return; }
+    const waiter = hivePending.get(message.id);
+    if (!waiter) return;
+    hivePending.delete(message.id);
+    if (message.error) waiter.reject(new Error(message.error.message || "Hive MCP call failed"));
+    else waiter.resolve(message);
+  });
+  hiveMember.on("error", (error) => {
+    for (const waiter of hivePending.values()) waiter.reject(error);
+    hivePending.clear();
+  });
+  hiveMember.on("exit", (code, signal) => {
+    const error = new Error(`Hive MCP exited (${code ?? "signal " + signal})`);
+    for (const waiter of hivePending.values()) waiter.reject(error);
+    hivePending.clear();
+  });
+}
+
+async function hiveCall(name, arguments_ = {}) {
+  if (!hiveMember) throw new Error("Hive MCP is not configured");
+  await hiveReady;
+  const id = hiveNextId++;
+  return new Promise((resolve, reject) => {
+    hivePending.set(id, { resolve, reject });
+    hiveMember.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: arguments_ } })}\n`);
+  }).then(toolPayload);
+}
+
 const pending = new Map();
 const a2aTasks = new Map();
 let nextId = 1_000_000;
@@ -168,10 +214,8 @@ function a2aResponse(task) {
 function trackProcess(task, pid, onDone = () => {}) {
   const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
   const heartbeat = process.env.HIVE_URL ? setInterval(() => {
-    hiveRequest(`/work/${task.id}/heartbeat`, {
-      method: "POST",
-      body: JSON.stringify({ agent_id: agentId, lease_seconds: 900 }),
-    }).catch((error) => emitTelemetry({ event: "hive_lease", task_id: task.id, state: "failed", error: error.message }));
+    hiveCall("hive_heartbeat", { task_id: task.id, lease_seconds: 900 })
+      .catch((error) => emitTelemetry({ event: "hive_lease", task_id: task.id, state: "failed", error: error.message }));
   }, 60_000) : null;
   const finish = (value) => {
     if (heartbeat) clearInterval(heartbeat);
@@ -273,35 +317,22 @@ http.createServer((request, response) => {
   handleA2A(request, response).catch((error) => sendHttp(response, 500, { error: error.message }));
 }).listen(Number(process.env.A2A_PORT || 8001), "0.0.0.0");
 
-async function hiveRequest(path, options = {}) {
-  const response = await fetch(`${process.env.HIVE_URL}${path}`, {
-    ...options,
-    headers: { "content-type": "application/json", ...(options.headers || {}) },
-  });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error || `Hive returned ${response.status}`);
-  return body;
-}
-
 let hiveBusy = false;
 async function runHiveWork(candidate) {
   if (hiveBusy) return;
   try {
     const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
-    await hiveRequest(`/work/${candidate.id}/bids`, {
-      method: "POST",
-      body: JSON.stringify({
-        agent_id: agentId,
-        interested: true,
-        confidence: Number(process.env.HIVE_BID_CONFIDENCE || 0.7),
-        approach: `${MANAGER.flavor} ${MANAGER.role} execution`,
-        estimated_cost: Number(process.env.HIVE_BID_COST || 1),
-        expected_benefit: Number(process.env.HIVE_BID_BENEFIT || 1),
-        risk: process.env.HIVE_BID_RISK || "medium"
-      })
+    await hiveCall("hive_bid", {
+      work_id: candidate.id,
+      interested: true,
+      confidence: Number(process.env.HIVE_BID_CONFIDENCE || 0.7),
+      approach: `${MANAGER.flavor} ${MANAGER.role} execution`,
+      estimated_cost: Number(process.env.HIVE_BID_COST || 1),
+      expected_benefit: Number(process.env.HIVE_BID_BENEFIT || 1),
+      risk: process.env.HIVE_BID_RISK || "medium"
     });
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_submitted", agent_id: agentId });
-    const allocated = await hiveRequest(`/work/${candidate.id}/allocate`, { method: "POST", body: JSON.stringify({ lease_seconds: 900 }) });
+    const allocated = await hiveCall("hive_allocate", { work_id: candidate.id, lease_seconds: 900 });
     if (allocated.claimed_by !== agentId) {
       emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "allocation_lost", agent_id: agentId, claimed_by: allocated.claimed_by });
       return;
@@ -314,9 +345,9 @@ async function runHiveWork(candidate) {
       const started = toolPayload(reply);
       if (reply.error || started?.status !== "started" || !Number.isInteger(started.pid)) throw new Error(reply.error?.message || "engineering runner did not return a process id");
       task.pid = started.pid;
-      trackProcess(task, started.pid, (finished) => hiveRequest(`/work/${candidate.id}/complete`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", state: finished.state, result: finished.result || { error: finished.error } }) }).then(() => emitTelemetry({ event: "hive_work", task_id: candidate.id, state: finished.state, agent_id: process.env.HIVE_AGENT_ID || "engineering-agent" })).catch((error) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", error: error.message })).finally(() => { hiveBusy = false; }));
+      trackProcess(task, started.pid, (finished) => hiveCall("hive_complete", { task_id: candidate.id, state: finished.state, result: finished.result || { error: finished.error } }).then(() => emitTelemetry({ event: "hive_work", task_id: candidate.id, state: finished.state, agent_id: process.env.HIVE_AGENT_ID || "engineering-agent" })).catch((error) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", error: error.message })).finally(() => { hiveBusy = false; }));
     }).catch((error) => {
-      hiveRequest(`/work/${candidate.id}/complete`, { method: "POST", body: JSON.stringify({ agent_id: process.env.HIVE_AGENT_ID || "engineering-agent", state: "failed", result: { error: error.message } }) }).catch(() => {}).finally(() => { hiveBusy = false; });
+      hiveCall("hive_complete", { task_id: candidate.id, state: "failed", result: { error: error.message } }).catch(() => {}).finally(() => { hiveBusy = false; });
     });
   } catch (error) {
     emitTelemetry({ event: "hive_subscription", state: "failed", error: error.message });
@@ -324,33 +355,20 @@ async function runHiveWork(candidate) {
 }
 
 async function subscribeHive() {
-  if (!process.env.HIVE_URL) return;
+  if (!hiveMember) return;
   const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
   try {
-    await hiveRequest("/agents/register", { method: "POST", body: JSON.stringify({ id: agentId, endpoint: "http://engineering-agent:8001", capabilities: { profile: process.env.AGENT_PROFILE || MANAGER.agent, modes: capabilities } }) });
-    const response = await fetch(`${process.env.HIVE_URL}/work/subscribe?agent_id=${encodeURIComponent(agentId)}`, { headers: { accept: "text/event-stream" } });
-    if (!response.ok || !response.body) throw new Error(`Hive subscription returned ${response.status}`);
     emitTelemetry({ event: "hive_subscription", state: "connected", agent_id: agentId });
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split("\n\n");
-      buffer = events.pop() || "";
-      for (const event of events) {
-        const data = event.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
-        if (data) runHiveWork(JSON.parse(data));
-      }
+      const candidate = await hiveCall("hive_next_work", { timeout_seconds: 900 });
+      await runHiveWork(candidate);
     }
   } catch (error) {
     emitTelemetry({ event: "hive_subscription", state: "failed", error: error.message });
   }
   setTimeout(subscribeHive, 1000);
 }
-if (process.env.HIVE_URL) subscribeHive();
+if (hiveMember) subscribeHive();
 
 const requests = readline.createInterface({ input: process.stdin });
 requests.on("line", async (line) => {
