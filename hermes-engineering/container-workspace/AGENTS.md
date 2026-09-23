@@ -75,8 +75,8 @@ There are no named worker-tier aliases (`free`/`cheap`/`balanced`/etc.) —
 `~/.config/ai-cli/config.toml` no longer defines any; dispatch every
 worker with an explicit `ai-cli run --model <provider/model>`, the same
 raw-string resolution local dev already uses. **For opencode, that string
-needs an `oc-` prefix — `ai-cli run --model oc-opencode/mimo-v2.5-free`,
-not `opencode/mimo-v2.5-free`.** Without the prefix `ai-cli` doesn't
+needs an `oc-` prefix — `ai-cli run --model oc-opencode/mimo-v2.6-flash-free`,
+not `opencode/mimo-v2.6-flash-free`.** Without the prefix `ai-cli` doesn't
 error, it silently dispatches Claude instead — see the canonical file's
 "Environment-neutral model selection" warning for why (third-party
 package, can't be patched to fix this since both this container and local

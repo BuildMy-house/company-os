@@ -22,7 +22,7 @@ spec:
         runAsNonRoot: true
       containers:
         - name: engineering-opencode-direct
-          image: localhost:30500/company-os-engineering@sha256:98fdfc2a3eccdc5586f9a3dd602f409fb5b508d9f7a1f1444ce3460a1bf9a2d4
+          image: localhost:30500/company-os-engineering@sha256:0b8dc658f904f7afd24169d14e11102a0ca6347aa131cc8a4f822498f0e20dc3
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
@@ -62,7 +62,7 @@ spec:
             - name: RUNNER_AGENT
               value: opencode
             - name: RUNNER_MODEL
-              value: opencode/mimo-v2.5-free
+              value: opencode/mimo-v2.6-flash-free
             - name: CODEX_HOME
               value: /tmp/company-ops-home/.codex
             - name: KUBERNETES_SERVICE_HOST
