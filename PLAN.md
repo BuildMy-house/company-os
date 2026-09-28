@@ -124,7 +124,7 @@ Observer Postgres role. Corresponding account-setup item tracked in
 
 | Ticket | Title | Deps | Owner paths | Phase | Claimed-by | Status | Notes |
 |--------|-------|------|-------------|-------|------------|--------|-------|
-| P10-A | Route Hermes conversation fallback to Z.AI Coding Plan GLM-5.3-Flash | — | hermes/config.yaml | 10 | 2_Chris | review | Nous hit HTTP 429 and the TokenRouter `glm-5.3-free` fallback returned HTTP 503. Existing `ZAI_CODING_PLAN_API_KEY` is present in the live gateway; fallback now uses the official Coding Plan endpoint. TokenRouter auxiliary routes are unchanged. |
+| P10-A | Route Hermes conversation fallback to Z.AI Coding Plan GLM-5.3-Flash | — | hermes/config.yaml | 10 | 2_Chris | done | Commits `ab5be80` (main), `eb049a5` (prod). Verified YAML, Coding Plan key present, active config loaded, and `hermes-gateway` 1/1 ready on image `p10a-glm-coding-plan-eb049a5`. TokenRouter auxiliary routes are unchanged. |
 
 ## Phase 8 — Monthly spend review ritual (recurring Human Interface ritual)
 
