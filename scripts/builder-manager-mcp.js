@@ -53,8 +53,7 @@ function k8sRequest(method, path, body) {
       ca: fs.readFileSync(CA_PATH),
       headers: {
         Authorization: `Bearer ${token}`,
-        "Content-Type": body ? "application/json" : undefined,
-        ...(data ? { "Content-Length": data.length } : {}),
+        ...(data ? { "Content-Type": "application/json", "Content-Length": data.length } : {}),
       },
     };
     const request = https.request(options, (response) => {
