@@ -1,8 +1,18 @@
-"""Detect CoreDNS forwarding to a stale/unreachable upstream DNS resolver.
+"""Detect CoreDNS forwarding to a stale/unreachable upstream DNS resolver,
+and auto-remediate it.
 
 Pure module — no Ledger/ObserverWriter dependency. Run directly via
 ``python -m company_ops.dns_healthcheck``; ``--dry-run`` prints the detection
-result without opening a Steward task.
+result only (never remediates, never opens a Steward task).
+
+Auto-remediation (added 2026-09-28, explicitly authorized): on detection,
+patches the ``coredns`` Deployment's pod-template annotations to trigger a
+rollout restart — see ``attempt_remediation``. This requires the narrowly
+scoped RBAC grant in ``k8s/dns-healthcheck.yaml`` (get+patch on ONLY the
+named ``coredns`` Deployment in kube-system; nothing broader). A Steward
+task is opened on every detection regardless of remediation outcome, so
+there is always an audit trail of what was detected AND what automated
+action was taken (or attempted and failed).
 
 Automates detection of the 2026-09-28 incident class: CoreDNS's pod caches
 the host's /etc/resolv.conf, so when the host's resolver moves (that day:
@@ -32,6 +42,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 import requests
 
@@ -44,6 +55,21 @@ DEFAULT_AGENT_ID = "dns-healthcheck"
 RAW_TAIL_LINES = 40
 HTTP_TIMEOUT_SECS = 30
 UNKNOWN_UPSTREAM = "<unparsed-upstream>"
+# Auto-remediation: patch the coredns Deployment (rollout-restart
+# equivalent) once the stale-upstream signal fires. Explicitly authorized
+# 2026-09-28 (repeated, explicit user grant) — see the RBAC comment in
+# k8s/dns-healthcheck.yaml for the exact scoped grant this relies on
+# (get/patch on the single named "coredns" Deployment, kube-system only).
+COREDNS_NAMESPACE = "kube-system"
+COREDNS_DEPLOYMENT = "coredns"
+# Do not attempt a second restart within this many seconds of the
+# youngest coredns pod's creationTimestamp — if a pod that young already
+# exists, either our own last restart or some other restart already
+# happened recently; retrying immediately would just restart-loop a
+# genuine upstream outage instead of a stale-forward-target. No separate
+# state store needed: the cluster's own pod age IS the last-remediation
+# timestamp.
+REMEDIATION_COOLDOWN_SECS = 600
 
 # The two error shapes validated by hand on 2026-09-28.
 _ERROR_RES: tuple[re.Pattern[str], ...] = (
@@ -136,8 +162,165 @@ def check_coredns_logs(
     return result
 
 
-def _task_text(evidence: dict) -> tuple[str, str]:
-    """Build (title, description) for the Steward task from detection evidence."""
+def _youngest_coredns_pod_age_secs(namespace: str = COREDNS_NAMESPACE) -> float | None:
+    """Age in seconds of the most-recently-created coredns pod, or None.
+
+    None means "couldn't determine" (kubectl failure, no pods, unparsable
+    timestamp) — callers must treat that as "cooldown status unknown, do NOT
+    remediate" rather than assuming it's safe to proceed.
+    """
+    cmd = [
+        "kubectl", "get", "pods",
+        "-n", namespace,
+        "-l", "k8s-app=kube-dns",
+        "-o", "json",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        log.warning(
+            "dns_healthcheck: could not list coredns pods for cooldown check "
+            "(kubectl exited %s): %s", proc.returncode, (proc.stderr or "").strip()[:300],
+        )
+        return None
+    try:
+        items = json.loads(proc.stdout or "{}").get("items", [])
+    except json.JSONDecodeError:
+        return None
+    timestamps = []
+    for item in items:
+        ts = (item.get("metadata") or {}).get("creationTimestamp")
+        if not ts:
+            continue
+        try:
+            timestamps.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+        except ValueError:
+            continue
+    if not timestamps:
+        return None
+    youngest = max(timestamps)
+    return (datetime.now(timezone.utc) - youngest).total_seconds()
+
+
+def attempt_remediation(
+    cooldown_secs: int = REMEDIATION_COOLDOWN_SECS,
+) -> dict:
+    """Patch the coredns Deployment to trigger a rollout restart, if safe.
+
+    Equivalent to ``kubectl rollout restart deployment/coredns -n
+    kube-system``: patches ``spec.template.metadata.annotations`` with a
+    fresh RFC3339 timestamp under the same
+    ``kubectl.kubernetes.io/restartedAt`` key kubectl itself uses, which
+    k3s's deployment controller treats as a pod-template change and rolls
+    the (single-replica) pod. Requires the scoped RBAC grant documented in
+    ``k8s/dns-healthcheck.yaml`` (get+patch on the single named "coredns"
+    Deployment in kube-system) — a ServiceAccount without that grant gets a
+    clean 403 back via ``kubectl``'s stderr, captured below, never a crash.
+
+    Cooldown guard: skips (does not attempt the patch) if a coredns pod
+    younger than ``cooldown_secs`` already exists — see
+    ``_youngest_coredns_pod_age_secs``. This also fires defensively if pod
+    age can't be determined at all (treat unknown as "assume recent").
+
+    Returns a dict always containing ``attempted`` (bool) and ``reason``
+    (str, human-readable) plus, when attempted, ``success`` (bool) and
+    either ``patched_at`` or ``error``.
+    """
+    age = _youngest_coredns_pod_age_secs()
+    if age is None:
+        return {
+            "attempted": False,
+            "reason": (
+                "could not determine coredns pod age (kubectl get pods "
+                "failed or returned nothing parsable) — skipping remediation "
+                "defensively rather than risk a restart-loop"
+            ),
+        }
+    if age < cooldown_secs:
+        return {
+            "attempted": False,
+            "reason": (
+                f"cooldown active: youngest coredns pod is {age:.0f}s old, "
+                f"< {cooldown_secs}s cooldown — a restart already happened "
+                "recently (ours or otherwise); not retrying yet"
+            ),
+            "youngest_pod_age_secs": age,
+        }
+
+    restarted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
+    # strftime %z on an aware datetime gives e.g. "+0000"; kubectl's own
+    # RFC3339 annotation uses "+00:00" — normalize the same way kubectl does.
+    if restarted_at[-5] in "+-":
+        restarted_at = restarted_at[:-2] + ":" + restarted_at[-2:]
+    patch = {
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "kubectl.kubernetes.io/restartedAt": restarted_at,
+                    }
+                }
+            }
+        }
+    }
+    cmd = [
+        "kubectl", "patch", "deployment", COREDNS_DEPLOYMENT,
+        "-n", COREDNS_NAMESPACE,
+        "--type=strategic",
+        "-p", json.dumps(patch),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        log.error("dns_healthcheck: coredns restart patch failed: %s", stderr[:500])
+        return {
+            "attempted": True,
+            "success": False,
+            "reason": "kubectl patch failed",
+            "error": stderr[:500],
+        }
+    log.info("dns_healthcheck: patched coredns Deployment to restart at %s", restarted_at)
+    return {
+        "attempted": True,
+        "success": True,
+        "reason": "patched coredns Deployment pod-template annotation to trigger rollout restart",
+        "patched_at": restarted_at,
+    }
+
+
+def _remediation_section(remediation: dict | None) -> str:
+    """Render the auto-remediation outcome as task-description prose.
+
+    Always called, even when remediation was never attempted (e.g. this
+    detection ran via --dry-run, or something upstream skipped it) — the
+    audit trail must say what happened, never leave the reader guessing
+    whether an unattended fix silently ran.
+    """
+    if remediation is None:
+        return (
+            "Not attempted this run (dry-run or remediation step skipped "
+            "before it could execute)."
+        )
+    if not remediation.get("attempted"):
+        return f"Not attempted: {remediation.get('reason', 'no reason recorded')}."
+    if remediation.get("success"):
+        return (
+            f"Attempted and SUCCEEDED: patched `deployment/coredns` in "
+            f"kube-system (`kubectl.kubernetes.io/restartedAt` = "
+            f"`{remediation.get('patched_at')}`), equivalent to `kubectl "
+            f"rollout restart deployment/coredns -n kube-system`. The "
+            f"`dns-healthcheck` ServiceAccount's RBAC grant is scoped to "
+            f"get+patch on ONLY the named `coredns` Deployment in "
+            f"kube-system (see `k8s/dns-healthcheck.yaml`)."
+        )
+    return (
+        f"Attempted and FAILED: {remediation.get('reason', 'kubectl patch failed')}"
+        f" — {remediation.get('error', '(no stderr captured)')}. Manual fallback: "
+        f"`kubectl rollout restart deployment/coredns -n kube-system`."
+    )
+
+
+def _task_text(evidence: dict, remediation: dict | None = None) -> tuple[str, str]:
+    """Build (title, description) for the Steward task from detection + remediation evidence."""
     matches = evidence.get("matches") or []
     since = evidence.get("since") or "15m"
     top = matches[0] if matches else {"upstream": UNKNOWN_UPSTREAM, "count": 0}
@@ -169,15 +352,8 @@ def _task_text(evidence: dict) -> tuple[str, str]:
         "failure in name resolution' — but the failing service itself is "
         "healthy.",
         "",
-        "## Remediation (known-safe, intentionally NOT run automatically)",
-        "    kubectl rollout restart deployment/coredns -n kube-system",
-        "Fully reversible: k3s recreates the pod from the Deployment spec, "
-        "which re-reads the host's resolver. The healthcheck's ServiceAccount "
-        "deliberately has no permission to do this (get/list on pods + "
-        "pods/log only, no `apps` rules) — auto-remediation needs its own "
-        "sign-off on approach, so the fix is left for a human or an "
-        "already-privileged agent (e.g. Hermes via its k8s_deployment MCP, "
-        "or a host-side kubectl session) to run.",
+        "## Auto-remediation (explicitly authorized 2026-09-28)",
+        _remediation_section(remediation),
         "",
         "Optional follow-up: if hermes-gateway was already mid-crash-loop "
         "when DNS broke, its in-process aiohttp/discord.py client may still "
@@ -247,6 +423,7 @@ def _unwrap_result(message: dict) -> object:
 
 def create_steward_task(
     evidence: dict,
+    remediation: dict | None = None,
     steward_mcp_url: str | None = None,
     steward_token: str | None = None,
 ) -> dict:
@@ -278,7 +455,7 @@ def create_steward_task(
         or DEFAULT_STEWARD_MCP_URL
     )
     agent_id = os.environ.get("STEWARD_AGENT_ID") or DEFAULT_AGENT_ID
-    title, description = _task_text(evidence)
+    title, description = _task_text(evidence, remediation)
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -314,11 +491,18 @@ def create_steward_task(
 
 
 def run_healthcheck() -> dict:
-    """Detect stale-upstream errors; open a Steward task only when detected.
+    """Detect stale-upstream errors; remediate + open a Steward task.
 
     The not-detected path is the common case and must never raise, so the
     CronJob (k8s/dns-healthcheck.yaml) exits 0 cleanly and does not spam
     failure notifications on a healthy cluster.
+
+    When detected, ALWAYS attempts remediation (subject to its own cooldown
+    guard) and ALWAYS opens the Steward task regardless of the remediation
+    outcome (attempted+succeeded, attempted+failed, or skipped/cooldown) —
+    there is never a silent unattended fix with no audit trail. Remediation
+    is attempted before the task is opened so the task description can
+    record what actually happened, not just what was detected.
     """
     evidence = check_coredns_logs()
     if not evidence.get("detected"):
@@ -327,10 +511,12 @@ def run_healthcheck() -> dict:
             out["error"] = evidence["error"]
         log.info("dns_healthcheck: clean run, no repeating stale-upstream errors")
         return out
-    task_created = create_steward_task(evidence)
+    remediation = attempt_remediation()
+    task_created = create_steward_task(evidence, remediation)
     return {
         "detected": True,
         "matches": evidence["matches"],
+        "remediation": remediation,
         "task_created": task_created,
     }
 
