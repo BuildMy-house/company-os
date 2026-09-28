@@ -27,7 +27,7 @@ const K8S_HOST = process.env.KUBERNETES_SERVICE_HOST || "kubernetes.default.svc"
 const K8S_PORT = process.env.KUBERNETES_SERVICE_PORT || "443";
 const NAMESPACE = "company-ops";
 const REGISTRY_HOST = process.env.REGISTRY_HOST || "registry.company-ops.svc.cluster.local";
-const REGISTRY_PORT = process.env.REGISTRY_PORT || "5000";
+const REGISTRY_PORT = process.env.BUILDER_REGISTRY_PORT || "5000";
 const KANIKO_IMAGE = process.env.KANIKO_IMAGE || "gcr.io/kaniko-project/executor:latest";
 
 // Deliberately NOT the pod's default in-cluster SA path — see header.
