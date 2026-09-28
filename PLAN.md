@@ -120,6 +120,12 @@ infrastructure layer, not just code discipline" principle as the Phase 1
 Observer Postgres role. Corresponding account-setup item tracked in
 `company-ops/NAHAR-TODO.md` Group E (Infisical).
 
+## Phase 10 — Hermes provider fallback repair
+
+| Ticket | Title | Deps | Owner paths | Phase | Claimed-by | Status | Notes |
+|--------|-------|------|-------------|-------|------------|--------|-------|
+| P10-A | Route Hermes conversation fallback to Z.AI Coding Plan GLM-5.3-Flash | — | hermes/config.yaml | 10 | 2_Chris | review | Nous hit HTTP 429 and the TokenRouter `glm-5.3-free` fallback returned HTTP 503. Existing `ZAI_CODING_PLAN_API_KEY` is present in the live gateway; fallback now uses the official Coding Plan endpoint. TokenRouter auxiliary routes are unchanged. |
+
 ## Phase 8 — Monthly spend review ritual (recurring Human Interface ritual)
 
 | Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
