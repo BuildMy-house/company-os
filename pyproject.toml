@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "homely-company-ops"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["psycopg[binary]>=3.1"]
+dependencies = ["psycopg[binary]>=3.1", "requests>=2.31"]
 
 [project.optional-dependencies]
 test = ["pytest>=8", "boto3>=1.34"]

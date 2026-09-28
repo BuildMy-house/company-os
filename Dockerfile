@@ -23,6 +23,16 @@ RUN curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | bash \
   && apt-get update && apt-get install -y --no-install-recommends infisical \
   && rm -rf /var/lib/apt/lists/*
 
+# kubectl: the dns-healthcheck CronJob (company_ops/dns_healthcheck.py)
+# shells out to `kubectl logs -n kube-system -l k8s-app=kube-dns`, and the
+# base image ships no kubectl — without this the Job would fail every 15m on
+# FileNotFoundError. Static binary from the official release channel;
+# amd64 because this repo builds/deploys on x86_64 hosts.
+RUN curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+  && install -m 0755 /tmp/kubectl /usr/local/bin/kubectl \
+  && rm -f /tmp/kubectl \
+  && kubectl version --client
+
 RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-computer-use --skip-setup || true \
   && mkdir -p /root/.hermes /opt/data \
   && command -v hermes

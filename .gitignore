@@ -12,3 +12,6 @@ graphify-out/
 
 # Real TLS/SSH private keys — never track cert material.
 certs/
+
+# Python build artifact from setuptools develop/editable installs
+*.egg-info/
