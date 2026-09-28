@@ -62,7 +62,7 @@ spec:
             - name: RUNNER_AGENT
               value: opencode
             - name: RUNNER_MODEL
-              value: tokenrouter/z-ai/glm-5.3-free
+              value: oc-zai-coding-plan/glm-5.3-flash
             - name: CODEX_HOME
               value: /tmp/company-ops-home/.codex
             - name: KUBERNETES_SERVICE_HOST

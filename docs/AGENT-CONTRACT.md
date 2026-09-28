@@ -33,7 +33,7 @@ The same adapter can run different phenotypes without changing the Hive:
 AGENT_PROFILE=builder
 AGENT_CAPABILITIES=execute,review
 RUNNER_AGENT=opencode
-RUNNER_MODEL=tokenrouter/z-ai/glm-5.3-free
+RUNNER_MODEL=oc-zai-coding-plan/glm-5.3-flash
 HIVE_AGENT_ID=website-builder
 ```
 

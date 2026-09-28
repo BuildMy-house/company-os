@@ -161,8 +161,9 @@ but never treated as guaranteed.
 
 The current model assignment is TokenRouter MiMo for Hermes and OpenCode Zen
 MiMo-V2.5 Free for the engineering manager/worker
-TokenRouter GLM 5.3 Flash for the Claude/OpenCode roles. Keep the API key in
-runtime secrets; Nous Research is reserved as a future provider swap.
+Z.AI Coding Plan GLM 5.3 Flash for engineering OpenCode dispatches. Keep the
+API key in runtime secrets; Nous Research is reserved as a future provider
+swap.
 
 ## Staging promotion
 
