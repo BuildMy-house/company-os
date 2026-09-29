@@ -1,0 +1,15 @@
+# Self-test fixture for builder-manager-mcp.js's rootless-BuildKit Job design
+# (see docs/DEPLOY-ENGINEERING.md "Agent-triggered build+push"). Exercises a
+# NAMED additional build context (buildx's --build-context primitive) against
+# two different pinned commits of this same public repo, so the test needs no
+# GitHub App token / Secrets RBAC — only company-os.git's own public read
+# access. The RUN step below fails the build unless the two copied files
+# actually differ, which is what proves BuildKit really fetched two
+# independent contexts rather than silently reusing the primary one.
+FROM alpine:3.20
+COPY README.md /primary-README.md
+COPY --from=shared README.md /shared-README.md
+RUN diff -q /primary-README.md /shared-README.md && \
+    { echo "FAIL: primary and shared context content is identical - named context was not resolved independently"; exit 1; } || \
+    echo "OK: primary and shared context content differs as expected - named context resolved independently"
+CMD ["true"]
