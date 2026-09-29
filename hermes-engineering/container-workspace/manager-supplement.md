@@ -27,26 +27,37 @@ If the `builder-manager` MCP server is connected (it is gated on its own
 token + script prerequisites — see `docs/DEPLOY-ENGINEERING.md` in the
 `company-os` checkout, "Each runner only advertises tools it can launch";
 not every runner will have it), `builder_build_and_push(context_ref,
-dockerfile_path, image_repo, image_tag)` triggers an ephemeral Kaniko Job
-that builds a Dockerfile from a **git context** and pushes straight to the
-in-cluster registry — no docker socket, no `k3s ctr`, no `sudo`, anywhere
-in this path. Full detail, including the current Kaniko single-context gap
-that blocks building this repo's own `Dockerfile.engineering` this way, is
+dockerfile_path, image_repo, image_tag, contexts?, build_args?)` triggers
+an ephemeral, rootless-BuildKit Job that builds a Dockerfile from a **git
+context** and pushes straight to the in-cluster registry — no docker
+socket, no `k3s ctr`, no `sudo`, anywhere in this path. The optional
+`contexts` map adds named additional build contexts (buildx's
+`--build-context` equivalent, native to plain BuildKit) — this is what
+closes the previous single-context gap and makes this repo's own
+`Dockerfile.engineering` buildable this way (pass `contexts: { shared:
+"https://github.com/BuildMy-house/workspace.git#<sha>" }`). Full detail is
 in that same `docs/DEPLOY-ENGINEERING.md`. The load-bearing rules to hold
 yourself to every time:
 
-- **`context_ref` must be an approved, immutable Git revision** — a commit
-  SHA fragment (`https://github.com/<org>/<repo>.git#<sha>`), never a
-  mutable branch name. Resolve the SHA from the checkout you actually
-  verified (`git rev-parse HEAD`) rather than trusting a branch ref not to
-  move between approval and build.
-- **`dockerfile_path` is relative to that same context** — name it
+- **`context_ref` and every `contexts` value must be an approved,
+  immutable Git revision** — a full 40-hex-char commit SHA fragment
+  (`https://github.com/<org>/<repo>.git#<sha>`), never a mutable branch
+  name; the tool itself rejects anything else. Resolve the SHA from the
+  checkout you actually verified (`git rev-parse HEAD`) rather than
+  trusting a branch ref not to move between approval and build.
+- **Never pass credentials in `context_ref`/`contexts` yourself** — the
+  tool rejects URLs with embedded credentials. For private
+  `BuildMy-house/*` repos it mints and injects its own short-lived GitHub
+  App token via a per-build Kubernetes Secret; you don't need to (and
+  can't) do this yourself.
+- **`dockerfile_path` is relative to the primary context** — name it
   explicitly (`Dockerfile`, `Dockerfile.engineering`, etc.), don't assume
   a default.
 - **`builder-manager` cannot deploy anything.** Its RBAC
-  (`k8s/builder-rbac.yaml`) is Jobs/pods-log only in `company-ops` — no
-  `deployments.apps` verbs at all, and the Kaniko Job pod itself has no
-  Kubernetes API access whatsoever
+  (`k8s/builder-rbac.yaml`) is Jobs/pods-log/its-own-ephemeral-Secret only
+  in `company-ops` — no `deployments.apps` verbs at all, and no ability to
+  read back any Secret (including its own). The BuildKit Job pod itself
+  has no Kubernetes API access whatsoever
   (`automountServiceAccountToken: false`). A successful build+push changes
   nothing about what is currently running. Making a built image live is
   always a separate, explicit `container_upgrade` call via the different

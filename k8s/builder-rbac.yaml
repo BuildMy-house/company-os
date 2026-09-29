@@ -1,16 +1,20 @@
-# Dedicated, narrowly-scoped ServiceAccount + RBAC for the Kaniko-based
-# ephemeral builder Job (scripts/builder-manager-mcp.js). Deliberately
+# Dedicated, narrowly-scoped ServiceAccount + RBAC for the rootless-BuildKit-
+# based ephemeral builder Job (scripts/builder-manager-mcp.js). Deliberately
 # separate from the "company-ops" ServiceAccount in k8s/rbac.yaml (which
 # hermes-gateway/engineering-agent use for container_manager/k8s_deployment,
 # and which can patch/delete Deployments) — this SA can only
-# create/get/list/watch/delete Jobs and read their pods' logs. It cannot
-# touch Deployments, Secrets, or any resource outside what its own Jobs own.
+# create/get/list/watch/delete Jobs, read their pods' logs, and
+# create/delete (never get/list/watch/patch) Secrets. It cannot touch
+# Deployments or read any Secret already in the namespace — the create/
+# delete grant only lets it manage the ephemeral per-build git-token Secret
+# it creates itself (see "Git credential handling" in builder-manager-mcp.js);
+# it still can never read back a Secret it or anyone else created.
 #
-# The Kaniko build itself runs unauthenticated as a plain Job pod with no
-# ServiceAccount permissions of its own (see builder-manager-mcp.js, which
-# sets automountServiceAccountToken: false on the Job template) — Kaniko
-# only needs network access to the git remote and the in-cluster registry,
-# never the Kubernetes API.
+# The BuildKit build itself runs as a plain Job pod with no ServiceAccount
+# permissions of its own (see builder-manager-mcp.js, which sets
+# automountServiceAccountToken: false on the Job template) — it only needs
+# network access to the git remote and the in-cluster registry, never the
+# Kubernetes API.
 #
 # builder-manager-mcp.js (running as a subprocess inside hermes-gateway or
 # engineering-agent, both of which are already assigned the "company-ops"
@@ -38,6 +42,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

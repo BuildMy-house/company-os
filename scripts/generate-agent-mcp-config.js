@@ -128,12 +128,14 @@ function buildServers() {
     };
   }
 
-  // Kaniko-based ephemeral build+push (k8s/builder-rbac.yaml). Unlike
-  // container-manager/registry-manager/hermes-messenger above, this one is
-  // deliberately NOT added to the OpenCode skip-list below — the Kaniko
+  // Ephemeral, rootless-BuildKit-based build+push (k8s/builder-rbac.yaml).
+  // Unlike container-manager/registry-manager/hermes-messenger above, this
+  // one is deliberately NOT added to the OpenCode skip-list below — the
   // Job's own RBAC is already narrowly scoped (create/watch/delete Jobs it
-  // owns only, no Deployment/Secret access), so OpenCode workers dispatched
-  // from engineering-manager can trigger builds directly too.
+  // owns only, create/delete (never get/list/watch) only its own ephemeral
+  // per-build git-token Secret, no Deployment access or ability to read
+  // back any Secret), so OpenCode workers dispatched from
+  // engineering-manager can trigger builds directly too.
   //
   // Gated on its OWN two prerequisites, not the generic in-cluster SA check
   // above: builder-manager-mcp.js authenticates with a distinct bound token
