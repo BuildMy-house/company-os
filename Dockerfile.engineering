@@ -80,6 +80,7 @@ COPY scripts/stall-watch.sh /opt/company-ops/scripts/stall-watch.sh
 COPY scripts/engineering-manager-mcp.js /opt/company-ops/scripts/engineering-manager-mcp.js
 COPY scripts/container-manager-mcp.js /opt/company-ops/scripts/container-manager-mcp.js
 COPY scripts/registry-manager-mcp.js /opt/company-ops/scripts/registry-manager-mcp.js
+COPY scripts/hermes-messenger-mcp.js /opt/company-ops/scripts/hermes-messenger-mcp.js
 COPY scripts/builder-manager-mcp.js /opt/company-ops/scripts/builder-manager-mcp.js
 COPY scripts/check-advertised-mcp-tools.js /opt/company-ops/scripts/check-advertised-mcp-tools.js
 COPY scripts/engineering-entrypoint.sh /opt/company-ops/scripts/engineering-entrypoint.sh
