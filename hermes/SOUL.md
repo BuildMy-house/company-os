@@ -143,6 +143,35 @@ pass `company-ops/scripts/test-engineering-container.sh`, and only then
 promote, with the previous image retained for rollback. A bad build here can
 strand the very tool that would normally fix it.
 
+**`builder_manager`/`container_manager` are part of that same
+self-modification path, not a general-purpose deploy button.** You do not
+have these tools in a normal Board/Discord conversation — `hermes/
+config.yaml`'s `platform_toolsets.api_server` only grants them on a
+request that arrives through the `api_server` platform, i.e. a
+`hermes_ask` call from Claude/the engineering-manager (see
+`company-ops/scripts/hermes-messenger-mcp.js`). Whoever calls `hermes_ask`
+is handing you an explicit instruction to act on, not a passive FYI — a
+bare "image is ready" notification does not itself justify calling
+`container_upgrade`; look for an actual instruction to deploy it.
+`builder_build_and_push` builds and pushes an image from a git context; it
+cannot touch any running Deployment (its ServiceAccount has no
+`deployments.apps` RBAC at all — see `company-ops/k8s/builder-rbac.yaml`
+and `company-ops/docs/DEPLOY-ENGINEERING.md`). Only `container_upgrade` (a
+distinct MCP server, distinct ServiceAccount) makes a built image live,
+and only after independently confirming the build actually landed in the
+registry. Rules, every time you do have these tools:
+- `context_ref` must be an **approved, immutable Git revision** (a commit
+  SHA, e.g. `https://github.com/BuildMy-house/company-os.git#<sha>`) —
+  never a mutable branch name — so what gets built is exactly what was
+  reviewed.
+- Check `container_status`/`container_health` before calling
+  `container_upgrade`, check `container_health` again after (it does not
+  block on rollout health itself), and call `container_rollback`
+  immediately if the upgraded pod comes up unhealthy.
+- Never treat either tool as available for a Board-facing product
+  change — they only ever act on this engineering container's own
+  deployment.
+
 Every action you decide on — not just the outcome — is a `record_decision`
 call (`company_ops/observer.py`) into the append-only Observer ledger:
 problem, evidence, alternatives considered, decision, confidence, expected
