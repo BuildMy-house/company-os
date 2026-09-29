@@ -1,0 +1,8 @@
+# Minimal single-context self-test fixture for builder-manager-mcp.js's
+# rootless-BuildKit Job — isolates the baseline mechanism (image pull, RUN
+# under the seccomp/apparmor/non-root rootless config, export, push) from
+# the named-additional-context feature, which Dockerfile.buildkit-selftest
+# covers separately.
+FROM alpine:3.20
+RUN echo "rootless buildkit selftest ok" > /selftest.txt && cat /selftest.txt
+CMD ["cat", "/selftest.txt"]
