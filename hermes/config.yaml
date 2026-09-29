@@ -191,13 +191,14 @@ mcp_servers:
     args: ["/opt/company-ops/scripts/container-manager-mcp.js"]
     connect_timeout: 30
     timeout: 300
-  # Ephemeral Kaniko build+push — see k8s/builder-rbac.yaml for the
-  # dedicated ServiceAccount/Role this authenticates as (create/watch/
-  # delete Jobs only, never Deployments/Secrets), distinct from the
-  # container_manager/k8s_deployment entries above which use the shared
-  # "company-ops" SA. connect/timeout are generous because a real build can
-  # run for several minutes; builder_build_and_push has its own internal
-  # timeout_seconds argument as the primary bound.
+  # Ephemeral, rootless-BuildKit build+push — see k8s/builder-rbac.yaml for
+  # the dedicated ServiceAccount/Role this authenticates as (create/watch/
+  # delete Jobs, read pods/pods-log, create/delete only its own ephemeral
+  # git-token Secret — never Deployments, never reads back a Secret),
+  # distinct from the container_manager/k8s_deployment entries above which
+  # use the shared "company-ops" SA. connect/timeout are generous because a
+  # real build can run for several minutes; builder_build_and_push has its
+  # own internal timeout_seconds argument as the primary bound.
   builder_manager:
     command: "node"
     args: ["/opt/company-ops/scripts/builder-manager-mcp.js"]

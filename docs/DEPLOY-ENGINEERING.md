@@ -165,7 +165,7 @@ curl -X DELETE http://localhost:30500/v2/company-os-engineering/manifests/$diges
 kubectl exec -n company-ops deployment/registry -- registry garbage-collect /etc/docker/registry/config.yml
 ```
 
-## Agent-triggered build+push: `builder-manager` (Kaniko Job), no docker socket anywhere
+## Agent-triggered build+push: `builder-manager` (rootless BuildKit Job), no docker socket anywhere
 
 Everything above this section describes a human/CI running `docker build`/
 `docker push` from a workstation. `scripts/builder-manager-mcp.js` gives
@@ -178,31 +178,64 @@ pipeline exists to keep:
   socket, `k3s ctr` access, `sudo`, or long-lived push credentials. All they
   can do is ask the Kubernetes API to create a **Job**.
 - `builder_build_and_push(context_ref, dockerfile_path, image_repo,
-  image_tag)` creates a short-lived Job running
-  `gcr.io/kaniko-project/executor` in `company-ops`. Kaniko builds directly
-  from a **git context** (`context_ref`, e.g.
-  `https://github.com/BuildMy-house/company-os.git#main`) and pushes
-  straight to `registry.company-ops.svc.cluster.local:5000` — no docker
-  daemon involved on either end.
+  image_tag, contexts?, build_args?)` creates a short-lived Job running a
+  rootless `moby/buildkit` image (pinned by digest) via
+  `buildctl-daemonless.sh` in `company-ops`. BuildKit builds directly from a
+  **git context** (`context_ref`, e.g.
+  `https://github.com/BuildMy-house/company-os.git#<40-hex-sha>` — a full
+  commit SHA is required, a mutable branch name like `#main` is rejected)
+  and pushes straight to `registry.company-ops.svc.cluster.local:5000` — no
+  docker daemon involved on either end. Optional `contexts: { <name>: <url>
+  }` adds **named additional build contexts** (the same primitive
+  `docker buildx build --build-context` uses, native to plain BuildKit's
+  dockerfile.v0 frontend) — this is what makes `Dockerfile.engineering`
+  buildable through this tool; see "Named build contexts" below.
+- Verified live in this cluster on 2026-09-29: rootless BuildKit runs here
+  with **no privileged workaround** — no `privileged: true`, no added Linux
+  capabilities, no `/dev/fuse` hostPath, no `hostUsers`/user-namespaces
+  (tried, failed on this node's `newuidmap`/subuid setup, reverted). The
+  Job template sets `securityContext.seccompProfile: Unconfined`, the
+  `container.apparmor.security.beta.kubernetes.io/buildkit: unconfined` pod
+  annotation, a non-root `runAsUser`, and env
+  `BUILDKITD_FLAGS=--oci-worker-no-process-sandbox` (works around a
+  "mount proc: operation not permitted" failure on Dockerfile `RUN` steps
+  under this node's nested mount-namespace restrictions) — that
+  combination alone was sufficient for full builds to succeed. Confirmed
+  with two real Jobs submitted directly against this cluster's Jobs API
+  using the `builder-manager` SA token: a baseline single-context build
+  with a real `RUN` step, and a named-additional-context build resolving
+  two independently-pinned commits of the same public repo (asserted via
+  an in-build content diff, not just log inspection) — both pushed
+  successfully to the in-cluster registry, confirmed independently via a
+  direct `GET /v2/<repo>/tags/list`, with no leftover Jobs afterward. Both
+  test fixtures live in this repo (`Dockerfile.buildkit-selftest-basic`,
+  `Dockerfile.buildkit-selftest`) and need only `company-os`'s own public
+  read access — this decouples verifying the BuildKit mechanism itself
+  from the GitHub-App-token/Secrets-RBAC path below, which is separately
+  still blocked.
 - The Job pod itself runs with `automountServiceAccountToken: false` — it
   has zero Kubernetes API access; it only ever talks to the git remote and
   the registry over plain HTTP/HTTPS.
 - The MCP tool (not the Job) authenticates to the Kubernetes API as a
   **dedicated `builder-manager` ServiceAccount** (`k8s/builder-rbac.yaml`),
   deliberately separate from the shared `company-ops` SA that
-  `container_manager`/`k8s_deployment` use. Its Role can only
-  `create`/`get`/`list`/`watch`/`delete` **Jobs** and read their pods' logs
-  — it cannot touch Deployments, Secrets, or anything else. This SA's
-  bound token is mounted at a distinct path
-  (`/var/run/secrets/builder-manager/token`, via a Secret + volume added to
-  both the `hermes-gateway` and `engineering-agent` Deployments), separate
-  from the pod's default in-cluster SA token path.
-- The tool polls the Job to completion, fetches the Kaniko pod's logs on
-  either outcome, deletes the Job (best-effort; `ttlSecondsAfterFinished:
-  600` on the Job spec is the backstop if the delete call itself fails),
-  and independently confirms the pushed tag actually exists in the
-  registry (`GET /v2/<repo>/tags/list`) before reporting success — it does
-  not just trust Kaniko's own exit status.
+  `container_manager`/`k8s_deployment` use. Its Role can
+  `create`/`get`/`list`/`watch`/`delete` **Jobs**, read their pods' logs,
+  and `create`/`delete` (never `get`/`list`/`watch`/`patch`) **Secrets** —
+  the last one added for the ephemeral per-build git-token Secret described
+  below; it still cannot read any Secret, including ones it creates itself,
+  back out. It cannot touch Deployments at all. This SA's bound token is
+  mounted at a distinct path (`/var/run/secrets/builder-manager/token`, via
+  a Secret + volume added to both the `hermes-gateway` and
+  `engineering-agent` Deployments), separate from the pod's default
+  in-cluster SA token path.
+- The tool polls the Job to completion, fetches the BuildKit pod's logs on
+  either outcome (masking any injected git token before returning them —
+  see "Named build contexts" below), deletes the Job (best-effort;
+  `ttlSecondsAfterFinished: 600` on the Job spec is the backstop if the
+  delete call itself fails), and independently confirms the pushed tag
+  actually exists in the registry (`GET /v2/<repo>/tags/list`) before
+  reporting success — it does not just trust BuildKit's own exit status.
 - Wired into `scripts/generate-agent-mcp-config.js` for both Hermes and
   Claude's engineering-manager, and registered directly in
   `hermes/config.yaml` as `builder_manager`. It has its own gate, separate
@@ -217,6 +250,35 @@ pipeline exists to keep:
   added to the OpenCode skip-list in `generate-agent-mcp-config.js` — its
   own RBAC is already narrow enough that OpenCode workers dispatched from
   engineering-manager can safely trigger builds too.
+
+### Named build contexts and git credential handling
+
+`contexts` values (and `context_ref` itself) must be bare, credential-free
+`https://` URLs pinned to a full 40-hex commit SHA — enforced by
+`builder-manager-mcp.js`'s own validation, not left to caller discipline.
+For the private `BuildMy-house/*` repos specifically (recognized by URL
+pattern), the tool mints its own short-lived GitHub App installation token
+(reusing `github-app-token.js`, the same mechanism `sync-repo.sh` already
+uses) and delivers it to the Job pod via a dedicated, per-build Kubernetes
+Secret referenced with `secretKeyRef` — the token itself never appears in
+the Job manifest's own text, only a reference to the Secret's name/key
+does, so it isn't visible to anything that can merely `get`/`list` Jobs.
+The Secret is deleted alongside the Job on every exit path (success,
+failure, or crash before Job creation).
+
+Callers should never pass credentials in a `context_ref`/`contexts` value
+themselves — the tool's validation rejects any URL containing embedded
+credentials, precisely so callers don't need to handle or mint tokens.
+
+**Residual, documented limitation**: BuildKit's own git-source log line
+echoes the resolved (credentialed) URL into the *pod's* stdout logs. The
+tool masks the token in everything it returns to its own caller, but the
+raw pod log is still visible for the Job's short lifetime to anything with
+`pods/log` read in `company-ops` — bounded by the Job's
+`ttlSecondsAfterFinished` (10 min) and the token's own ~1h GitHub-imposed
+expiry either way. No fully-suppressing alternative was found in
+BuildKit's git-source op for the dockerfile frontend; this is a real,
+accepted tradeoff, not an oversight.
 
 ### Each runner only advertises tools it can launch
 
@@ -272,19 +334,27 @@ kubectl -n company-ops rollout status deployment hermes-gateway
 kubectl -n company-ops rollout status deployment engineering-agent
 ```
 
-**Partially confirmed live 2026-09-29** (from inside the running
-`engineering-agent` pod, no `kubectl` available there to check RBAC
-objects directly): `/var/run/secrets/builder-manager/token` **is** mounted
-in this pod, so the Secret + volume-mount portion of the rollout above has
-already happened — this doc's earlier "has not been applied" note is
-stale for that part. Still unverified: the Role/RoleBinding themselves
-(`kubectl -n company-ops auth can-i create jobs.batch
---as=system:serviceaccount:company-ops:builder-manager` needs to be run
-from a host with `kubectl`), and the tool end-to-end, since
-`scripts/builder-manager-mcp.js` was missing from the image running in
-this pod at the time of writing (now fixed in source — see "Known gap"
-below and the commit this doc change ships with; requires a new image
-build+push+`container_upgrade` to actually take effect).
+**Confirmed live 2026-09-29** (from inside the running `engineering-agent`
+pod, via `SelfSubjectAccessReview` probes as the `builder-manager` SA —
+`kubectl` itself is not available there): `/var/run/secrets/builder-manager/token`
+is mounted in this pod. Its Role currently grants exactly
+`create`/`get`/`list`/`watch`/`delete` on `jobs.batch` and `get`/`list`/
+`watch` on `pods`/`pods/log` — confirmed all `true`. **`secrets: ["create",
+"delete"]` (this change's addition to `k8s/builder-rbac.yaml`) is NOT yet
+applied** — `SelfSubjectAccessReview` for `create`/`delete`/`get`/`list` on
+`secrets` all came back `false`. The Jobs/pods-log portion of the RBAC was
+also independently exercised end-to-end with two real BuildKit build+push
+runs (see the "rootless BuildKit runs here" bullet above) — that part of
+the mechanism is proven, not just RBAC-probed. The Secrets addition itself
+has not been applied to the live cluster and this pod has no way to apply
+it (no `kubectl`, and the default `company-ops` SA was separately confirmed
+to lack `get`/`patch`/`update` on `roles`/`rolebindings` — this pod cannot
+self-escalate its own RBAC, by design). Applying it is an out-of-pod
+action for whoever administers this cluster. `git status` confirms
+`scripts/builder-manager-mcp.js` was absent from the image running at the
+time of writing (a prior gap now closed in source by this change) — a new
+image build+push+`container_upgrade` is still required for the running
+container to pick it up, in addition to the Secrets RBAC being applied.
 
 ```bash
 kubectl -n company-ops auth can-i create jobs.batch \
@@ -292,47 +362,57 @@ kubectl -n company-ops auth can-i create jobs.batch \
 kubectl -n company-ops get secret builder-manager-token     # expect a populated token key
 ```
 
-### Known gap: `Dockerfile.engineering` is not yet buildable via `builder_build_and_push`
+### Mechanism resolved, `Dockerfile.engineering` itself still blocked on Secrets RBAC
+
+**The previous documented gap — the builder having no equivalent of
+buildx's named additional build context — is closed in source and verified
+live 2026-09-29**, but only against a public repo (see the "rootless
+BuildKit runs here" bullet above); building this actual Dockerfile is a
+separate, still-open item because it additionally needs the
+GitHub-App-token/Secrets-RBAC path below, which is not yet live.
 
 `Dockerfile.engineering`'s `COPY --from=shared .agents/agent-manager.md ...`
 step (see "Build context" above) depends on a **named additional build
-context** — a `docker buildx`-only feature (`--build-context
-shared=<url>`). Kaniko (what `builder_build_and_push` actually runs, see
-`scripts/builder-manager-mcp.js`) accepts exactly one `--context` and has
-no equivalent for a second, separately-authenticated named context. Point
-`builder_build_and_push` at `dockerfile_path: Dockerfile.engineering`
-today and the build will fail at that `COPY` step — there is no `shared`
-context inside a single-context Kaniko build.
+context** — the same primitive `docker buildx build --build-context
+shared=<url>` uses. The previous Kaniko-based builder accepted exactly one
+`--context` and had no equivalent for a second, separately-authenticated
+named context. The current rootless-BuildKit-based builder
+(`scripts/builder-manager-mcp.js`) natively supports this via
+`buildctl`'s own `--opt context:<name>=<url>` — no buildx wrapper needed,
+it's a plain BuildKit dockerfile.v0 frontend feature. Once the Secrets RBAC
+below is applied, the call shape will be:
 
-This is a real, currently-open gap, not something this change works
-around — working around it blind (e.g. baking a credential into the
-Dockerfile, or silently switching to an unpinned public fetch of a repo
-that is intentionally **private**) would be worse than leaving it
-documented. Until it's resolved:
+```json
+{
+  "context_ref": "https://github.com/BuildMy-house/company-os.git#<40-hex-sha>",
+  "dockerfile_path": "Dockerfile.engineering",
+  "contexts": { "shared": "https://github.com/BuildMy-house/workspace.git#<40-hex-sha>" },
+  "image_repo": "company-os-engineering",
+  "image_tag": "<tag>"
+}
+```
 
-- **`Dockerfile.engineering` can only be built from a docker-capable host**
-  via the `docker buildx build --build-context shared=...` command in
-  "Build context" above — never via `builder_build_and_push`.
-- **`builder_build_and_push` works today for any Dockerfile that needs
-  only its own repo as context** — e.g. this repo's plain `Dockerfile`
-  (Hermes) or `Dockerfile.browser-adversary`, or a future
-  `Dockerfile.engineering` that no longer needs a second context (see
-  next paragraph).
-- **Recommended direction for actually closing this gap** (not
-  implemented here — needs its own ticket, a live test-build, and a
-  decision from whoever owns the `workspace` repo, since it's cross-repo):
-  move the canonical `agent-manager.md` pull from *build time* (needing a
-  second authenticated git context) to *container start time*, reusing
-  the GitHub-App-token-minting mechanism `scripts/sync-repo.sh` and
-  `scripts/github-app-token.js` already use to clone the other five
-  private BuildMy-house repos. That removes `Dockerfile.engineering`'s
-  second-context dependency entirely, making it buildable by Kaniko (and
-  by plain `docker build`, no `buildx` required) with just its own
-  single-repo context. Do not attempt this by guessing at Dockerfile
-  syntax changes without a real build to test against — there is no
-  docker daemon inside the `engineering-agent`/`hermes-gateway` pods to
-  verify a change here from inside the cluster (see "Agent-triggered
-  build+push" above: build+push is deliberately host-only).
+The tool is designed to auto-mint and inject the GitHub App token needed
+for both private `BuildMy-house/*` repos (`company-os` and `workspace`
+share one installation) — see "Named build contexts and git credential
+handling" above. Do not pass credentials in either URL yourself.
+
+**Precise current blocker**: this depends on `builder-manager-mcp.js`
+creating a per-build Kubernetes Secret to deliver that token to the Job
+pod, which needs `create`/`delete` on `secrets` in `company-ops` for the
+`builder-manager` ServiceAccount. That RBAC addition
+(`k8s/builder-rbac.yaml`, this change) is **not yet applied to the live
+cluster** — confirmed via `SelfSubjectAccessReview` (see above). This pod
+cannot apply it itself (no `kubectl`, no RBAC-admin permission on any SA it
+holds a token for — a pod being unable to grant itself more permission is
+the intended security boundary, not a bug to route around). **Minimal
+secure next step**: apply the already-narrowly-scoped
+`k8s/builder-rbac.yaml` `secrets: ["create", "delete"]` addition to the
+live cluster from a host with `kubectl`/cluster-admin access; do not
+substitute a broader grant, and do not fall back to Kaniko or a
+privileged/root build as a workaround. Once applied, this Dockerfile
+(and any other private-repo build) can be exercised end-to-end and this
+section updated with real evidence — not before.
 
 ### Cross-repo note: canonical agent-manager instructions are stale on this point
 
@@ -340,7 +420,7 @@ The canonical `.agents/agent-manager.md` (in the separate, private
 `BuildMy-house/workspace` repo — company-os cannot edit it) states flatly
 that in-pod builds are impossible and that OpenCode workers never get a
 builder capability. Both statements predate `builder-manager-mcp.js`'s
-Kaniko-Job design, which was built specifically to make a safe in-pod
+BuildKit-Job design, which was built specifically to make a safe in-pod
 build+push possible without a docker socket, and which is deliberately
 **not** on the OpenCode skip-list (see above) because its RBAC is already
 narrow enough to be safe there. Flag this to whoever next edits the
@@ -351,12 +431,15 @@ canonical file upstream; it is out of scope for this repo to fix.
 - **Only from an approved, immutable Git revision** — pin `context_ref`
   to a specific commit SHA (`https://github.com/BuildMy-house/company-os.git#<sha>`),
   never a mutable branch name like `#main` or `#prod`. A branch ref can
-  move between the moment it's reviewed/approved and the moment Kaniko
+  move between the moment it's reviewed/approved and the moment BuildKit
   actually clones it; a SHA can't. Resolve the SHA you intend to build
   (`git rev-parse HEAD` on the checkout you just verified) and use that.
 - **`dockerfile_path`** is relative to that same context — `Dockerfile`
-  for the Hermes image, `Dockerfile.engineering` for this one (subject to
-  the Kaniko single-context gap above until it's closed).
+  for the Hermes image, `Dockerfile.engineering` for this one (pass
+  `contexts: { shared: "...#<sha>" }` alongside it — see "Named build
+  contexts" above).
+- **`contexts`/`build_args`** are optional; every `contexts` value follows
+  the same immutable-SHA-pinning rule as `context_ref`.
 - **`image_repo`/`image_tag`**: pick something unique and traceable (a
   date or the short SHA you built from), same convention as the manual
   `docker build` path above — there is no fixed `:candidate`/`:latest`
@@ -392,11 +475,13 @@ canonical file upstream; it is out of scope for this repo to fix.
 ### `builder-manager` cannot mutate any deployment
 
 `builder-manager`'s RBAC (`k8s/builder-rbac.yaml`) grants
-`create`/`get`/`list`/`watch`/`delete` on `jobs.batch` and `get`/`list`/
-`watch` on `pods`/`pods/log` in `company-ops` only — no verbs on
-`deployments.apps`, no access to `Secrets` beyond its own bound token, and
-the Kaniko Job pod itself runs with `automountServiceAccountToken: false`
-(zero Kubernetes API access of its own). `builder_build_and_push` can
+`create`/`get`/`list`/`watch`/`delete` on `jobs.batch`, `get`/`list`/
+`watch` on `pods`/`pods/log`, and `create`/`delete` (never `get`/`list`/
+`watch`/`patch`) on `secrets` in `company-ops` only — no verbs on
+`deployments.apps`, and no ability to read back any Secret including the
+ephemeral per-build git-token one it creates itself. The BuildKit Job pod
+itself runs with `automountServiceAccountToken: false` (zero Kubernetes
+API access of its own). `builder_build_and_push` can
 build and push an image; it has no way to point any Deployment at that
 image or otherwise change what is currently running — that is exclusively
 `container_upgrade`'s job, via the separate `container-manager` MCP server
