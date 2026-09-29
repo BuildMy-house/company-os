@@ -101,7 +101,9 @@ function buildServers() {
   };
 
   // Claude's manager may request safe local deployment operations. OpenCode
-  // workers deliberately do not receive this capability.
+  // workers deliberately do not receive this capability. Gated on the
+  // pod's default in-cluster ServiceAccount token, which is what these two
+  // scripts actually authenticate with.
   if (fs.existsSync('/var/run/secrets/kubernetes.io/serviceaccount/token')) {
     servers['container-manager'] = {
       kind: 'stdio',
@@ -124,17 +126,37 @@ function buildServers() {
       command: ['node', '/opt/company-ops/scripts/hermes-messenger-mcp.js'],
       environment: null,
     };
-    // Kaniko-based ephemeral build+push (k8s/builder-rbac.yaml). Unlike
-    // container-manager/registry-manager/hermes-messenger above, this one
-    // is deliberately NOT added to the OpenCode skip-list below — the
-    // Kaniko Job's own RBAC is already narrowly scoped (create/watch/delete
-    // Jobs it owns only, no Deployment/Secret access), so OpenCode workers
-    // dispatched from engineering-manager can trigger builds directly too.
+  }
+
+  // Kaniko-based ephemeral build+push (k8s/builder-rbac.yaml). Unlike
+  // container-manager/registry-manager/hermes-messenger above, this one is
+  // deliberately NOT added to the OpenCode skip-list below — the Kaniko
+  // Job's own RBAC is already narrowly scoped (create/watch/delete Jobs it
+  // owns only, no Deployment/Secret access), so OpenCode workers dispatched
+  // from engineering-manager can trigger builds directly too.
+  //
+  // Gated on its OWN two prerequisites, not the generic in-cluster SA check
+  // above: builder-manager-mcp.js authenticates with a distinct bound token
+  // at BUILDER_MANAGER_TOKEN_PATH (k8s/builder-rbac.yaml's
+  // "builder-manager-token" Secret, mounted separately from the default SA
+  // token — see that script's header), and it must actually be present in
+  // this image (COPY'd by Dockerfile.engineering) to be launchable at all.
+  // A runner should never advertise a tool it cannot launch — checking both
+  // here, at generation time, is the structural fix; scripts/
+  // check-advertised-mcp-tools.js is the runnable check that catches it if
+  // this guard is ever bypassed or a similar gap is introduced elsewhere.
+  const BUILDER_MANAGER_TOKEN_PATH = process.env.BUILDER_MANAGER_TOKEN_PATH || '/var/run/secrets/builder-manager/token';
+  const BUILDER_MANAGER_SCRIPT_PATH = '/opt/company-ops/scripts/builder-manager-mcp.js';
+  const hasBuilderManagerToken = fs.existsSync(BUILDER_MANAGER_TOKEN_PATH);
+  const hasBuilderManagerScript = fs.existsSync(BUILDER_MANAGER_SCRIPT_PATH);
+  if (hasBuilderManagerToken && hasBuilderManagerScript) {
     servers['builder-manager'] = {
       kind: 'stdio',
-      command: ['node', '/opt/company-ops/scripts/builder-manager-mcp.js'],
+      command: ['node', BUILDER_MANAGER_SCRIPT_PATH],
       environment: null,
     };
+  } else if (hasBuilderManagerToken && !hasBuilderManagerScript) {
+    console.error(`[generate-agent-mcp-config] WARN: builder-manager-token present but ${BUILDER_MANAGER_SCRIPT_PATH} is missing from this image; not advertising builder-manager`);
   }
 
   return servers;

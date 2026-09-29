@@ -68,6 +68,14 @@ fi
 echo "[mcp-config] Generating agent MCP config for Claude and OpenCode..."
 node "$SCRIPT_DIR/generate-agent-mcp-config.js"
 
+# Catch the class of bug where a server got added to buildServers() above
+# (or to hermes/config.yaml) but its script was never COPYed into
+# Dockerfile.engineering — the tool would show up in tools/list and only
+# fail once something actually tries to call it. Non-fatal: a broken tool
+# shouldn't take down every other agent capability in the pod, but it must
+# be loud in the boot log.
+node "$SCRIPT_DIR/check-advertised-mcp-tools.js" || echo "[mcp-config] WARN: see check-advertised-mcp-tools output above — some advertised MCP tool(s) will fail when called" >&2
+
 if [ -n "${AXIOM_TOKEN:-}" ] && command -v codex >/dev/null 2>&1; then
   codex mcp add axiom \
     --env AXIOM_TOKEN="$AXIOM_TOKEN" \

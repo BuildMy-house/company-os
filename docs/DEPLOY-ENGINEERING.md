@@ -204,13 +204,45 @@ pipeline exists to keep:
   registry (`GET /v2/<repo>/tags/list`) before reporting success — it does
   not just trust Kaniko's own exit status.
 - Wired into `scripts/generate-agent-mcp-config.js` for both Hermes and
-  Claude's engineering-manager (same `fs.existsSync(serviceaccount token)`
-  gate as `container-manager`/`registry-manager`), and registered directly
-  in `hermes/config.yaml` as `builder_manager`. Unlike
+  Claude's engineering-manager, and registered directly in
+  `hermes/config.yaml` as `builder_manager`. It has its own gate, separate
+  from `container-manager`/`registry-manager`/`hermes-messenger`'s generic
+  "are we running in this k3s Deployment at all" check: it only gets
+  advertised when **both** `/var/run/secrets/builder-manager/token` exists
+  **and** `scripts/builder-manager-mcp.js` is actually present in the
+  image. A runner must never advertise a tool it cannot launch — see
+  "Each runner only advertises tools it can launch" below for why that
+  second half of the check exists. Unlike
   `container-manager`/`registry-manager`/`hermes-messenger`, it is **not**
   added to the OpenCode skip-list in `generate-agent-mcp-config.js` — its
   own RBAC is already narrow enough that OpenCode workers dispatched from
   engineering-manager can safely trigger builds too.
+
+### Each runner only advertises tools it can launch
+
+A server showing up in `tools/list` is not proof it works — if its script
+was never `COPY`'d into `Dockerfile.engineering`, the tool spawn fails the
+moment something actually calls it, and that failure surfaces far from
+the real cause (a missing `COPY` line landed and shipped unnoticed
+because nothing checked the two facts against each other). Two
+independent defenses now cover this:
+
+1. **Structural, at config-generation time**: `generate-agent-mcp-config.js`
+   only adds `builder-manager` to the servers list when its script file
+   exists on disk in addition to its token being mounted (see above) —
+   the same principle should be applied to any future MCP server this
+   file adds.
+2. **Runnable check**: `scripts/check-advertised-mcp-tools.js` reads the
+   generated `~/.claude.json`/`~/.config/opencode/opencode.json` and
+   confirms every local (`node <path>`) server's script actually exists.
+   `scripts/engineering-entrypoint.sh` runs it (non-fatal, logs a WARN)
+   right after `generate-agent-mcp-config.js` on every container boot. Run
+   it by hand inside a live pod to diagnose a suspected advertised-but-
+   broken tool:
+
+   ```bash
+   node /opt/company-ops/scripts/check-advertised-mcp-tools.js
+   ```
 
 ### Required live setup before this can actually build anything
 
@@ -229,12 +261,133 @@ kubectl -n company-ops rollout status deployment hermes-gateway
 kubectl -n company-ops rollout status deployment engineering-agent
 ```
 
-This has not been applied or live-tested as of this doc's last edit — see
-the repo's Steward task history / the agent-manager session report for the
-current status. Verify before trusting `builder_build_and_push` to work:
+**Partially confirmed live 2026-09-29** (from inside the running
+`engineering-agent` pod, no `kubectl` available there to check RBAC
+objects directly): `/var/run/secrets/builder-manager/token` **is** mounted
+in this pod, so the Secret + volume-mount portion of the rollout above has
+already happened — this doc's earlier "has not been applied" note is
+stale for that part. Still unverified: the Role/RoleBinding themselves
+(`kubectl -n company-ops auth can-i create jobs.batch
+--as=system:serviceaccount:company-ops:builder-manager` needs to be run
+from a host with `kubectl`), and the tool end-to-end, since
+`scripts/builder-manager-mcp.js` was missing from the image running in
+this pod at the time of writing (now fixed in source — see "Known gap"
+below and the commit this doc change ships with; requires a new image
+build+push+`container_upgrade` to actually take effect).
 
 ```bash
 kubectl -n company-ops auth can-i create jobs.batch \
   --as=system:serviceaccount:company-ops:builder-manager   # expect yes
 kubectl -n company-ops get secret builder-manager-token     # expect a populated token key
 ```
+
+### Known gap: `Dockerfile.engineering` is not yet buildable via `builder_build_and_push`
+
+`Dockerfile.engineering`'s `COPY --from=shared .agents/agent-manager.md ...`
+step (see "Build context" above) depends on a **named additional build
+context** — a `docker buildx`-only feature (`--build-context
+shared=<url>`). Kaniko (what `builder_build_and_push` actually runs, see
+`scripts/builder-manager-mcp.js`) accepts exactly one `--context` and has
+no equivalent for a second, separately-authenticated named context. Point
+`builder_build_and_push` at `dockerfile_path: Dockerfile.engineering`
+today and the build will fail at that `COPY` step — there is no `shared`
+context inside a single-context Kaniko build.
+
+This is a real, currently-open gap, not something this change works
+around — working around it blind (e.g. baking a credential into the
+Dockerfile, or silently switching to an unpinned public fetch of a repo
+that is intentionally **private**) would be worse than leaving it
+documented. Until it's resolved:
+
+- **`Dockerfile.engineering` can only be built from a docker-capable host**
+  via the `docker buildx build --build-context shared=...` command in
+  "Build context" above — never via `builder_build_and_push`.
+- **`builder_build_and_push` works today for any Dockerfile that needs
+  only its own repo as context** — e.g. this repo's plain `Dockerfile`
+  (Hermes) or `Dockerfile.browser-adversary`, or a future
+  `Dockerfile.engineering` that no longer needs a second context (see
+  next paragraph).
+- **Recommended direction for actually closing this gap** (not
+  implemented here — needs its own ticket, a live test-build, and a
+  decision from whoever owns the `workspace` repo, since it's cross-repo):
+  move the canonical `agent-manager.md` pull from *build time* (needing a
+  second authenticated git context) to *container start time*, reusing
+  the GitHub-App-token-minting mechanism `scripts/sync-repo.sh` and
+  `scripts/github-app-token.js` already use to clone the other five
+  private BuildMy-house repos. That removes `Dockerfile.engineering`'s
+  second-context dependency entirely, making it buildable by Kaniko (and
+  by plain `docker build`, no `buildx` required) with just its own
+  single-repo context. Do not attempt this by guessing at Dockerfile
+  syntax changes without a real build to test against — there is no
+  docker daemon inside the `engineering-agent`/`hermes-gateway` pods to
+  verify a change here from inside the cluster (see "Agent-triggered
+  build+push" above: build+push is deliberately host-only).
+
+### Cross-repo note: canonical agent-manager instructions are stale on this point
+
+The canonical `.agents/agent-manager.md` (in the separate, private
+`BuildMy-house/workspace` repo — company-os cannot edit it) states flatly
+that in-pod builds are impossible and that OpenCode workers never get a
+builder capability. Both statements predate `builder-manager-mcp.js`'s
+Kaniko-Job design, which was built specifically to make a safe in-pod
+build+push possible without a docker socket, and which is deliberately
+**not** on the OpenCode skip-list (see above) because its RBAC is already
+narrow enough to be safe there. Flag this to whoever next edits the
+canonical file upstream; it is out of scope for this repo to fix.
+
+### When/how to call `builder_build_and_push`
+
+- **Only from an approved, immutable Git revision** — pin `context_ref`
+  to a specific commit SHA (`https://github.com/BuildMy-house/company-os.git#<sha>`),
+  never a mutable branch name like `#main` or `#prod`. A branch ref can
+  move between the moment it's reviewed/approved and the moment Kaniko
+  actually clones it; a SHA can't. Resolve the SHA you intend to build
+  (`git rev-parse HEAD` on the checkout you just verified) and use that.
+- **`dockerfile_path`** is relative to that same context — `Dockerfile`
+  for the Hermes image, `Dockerfile.engineering` for this one (subject to
+  the Kaniko single-context gap above until it's closed).
+- **`image_repo`/`image_tag`**: pick something unique and traceable (a
+  date or the short SHA you built from), same convention as the manual
+  `docker build` path above — there is no fixed `:candidate`/`:latest`
+  alias.
+- The call blocks until the Job finishes (or `timeout_seconds` elapses)
+  and independently re-confirms the tag landed in the registry before
+  reporting success — but still treat a "success" response as a claim to
+  verify, same as any other worker self-report: check
+  `registry_list_tags`/`container_status` yourself before trusting it.
+
+### When/how to call `container_upgrade`
+
+- **Only after** a `builder_build_and_push` (or manual `docker push`) call
+  has already independently confirmed the target tag exists in the
+  registry — never point a Deployment at a tag you haven't confirmed was
+  actually pushed.
+- **Check `container_status`/`container_health` before** upgrading, so you
+  have a known-good baseline to compare against and, for a self-upgrade,
+  the previous-image annotation `container_rollback` depends on.
+- **Check `container_health` again after** the rollout — `container_upgrade`
+  starts a rollout, it does not wait for it to finish being healthy.
+- **If the new image is unhealthy, `container_rollback` immediately** —
+  it reverts to the image `container_upgrade` recorded as
+  `container-manager/previous-image`, no need to remember the old tag
+  yourself.
+- For company-os's own self-modification (the `engineering-agent`/
+  `engineering-opencode`/`engineering-opencode-direct` Deployments), this
+  is still subject to the higher bar in `hermes/SOUL.md`: build to a
+  distinctly-tagged candidate, pass `scripts/test-engineering-container.sh`,
+  and only then promote — `container_upgrade`/`container_rollback` are the
+  mechanism, not a bypass of that discipline.
+
+### `builder-manager` cannot mutate any deployment
+
+`builder-manager`'s RBAC (`k8s/builder-rbac.yaml`) grants
+`create`/`get`/`list`/`watch`/`delete` on `jobs.batch` and `get`/`list`/
+`watch` on `pods`/`pods/log` in `company-ops` only — no verbs on
+`deployments.apps`, no access to `Secrets` beyond its own bound token, and
+the Kaniko Job pod itself runs with `automountServiceAccountToken: false`
+(zero Kubernetes API access of its own). `builder_build_and_push` can
+build and push an image; it has no way to point any Deployment at that
+image or otherwise change what is currently running — that is exclusively
+`container_upgrade`'s job, via the separate `container-manager` MCP server
+authenticating as the different `company-ops` ServiceAccount. A
+successful build never causes a live change by itself.
