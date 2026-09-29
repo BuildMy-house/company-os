@@ -244,6 +244,17 @@ independent defenses now cover this:
    node /opt/company-ops/scripts/check-advertised-mcp-tools.js
    ```
 
+**Same class of gap found again, 2026-09-29**: this session's own live MCP
+connection list showed `hermes-messenger` as `CONNECTION_CLOSED` —
+`scripts/hermes-messenger-mcp.js` is on disk and correctly gated in
+`generate-agent-mcp-config.js` (same generic in-cluster-SA check as
+`container-manager`/`registry-manager`), but was never added to
+`Dockerfile.engineering`'s `COPY scripts/...` list, so the running image
+never had the script to launch. Fixed by adding the missing `COPY` line.
+Cross-checked every other script `generate-agent-mcp-config.js` and
+`hermes/config.yaml` reference against `Dockerfile.engineering`'s `COPY`
+list after this fix — no further gaps found as of this commit.
+
 ### Required live setup before this can actually build anything
 
 `k8s/builder-rbac.yaml` (the ServiceAccount/Role/RoleBinding/token Secret)
