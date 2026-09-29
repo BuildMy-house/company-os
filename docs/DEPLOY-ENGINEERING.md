@@ -178,9 +178,14 @@ pipeline exists to keep:
   socket, `k3s ctr` access, `sudo`, or long-lived push credentials. All they
   can do is ask the Kubernetes API to create a **Job**.
 - `builder_build_and_push(context_ref, dockerfile_path, image_repo,
-  image_tag, contexts?, build_args?)` creates a short-lived Job running a
-  rootless `moby/buildkit` image (pinned by digest) via
-  `buildctl-daemonless.sh` in `company-ops`. BuildKit builds directly from a
+  image_tag, contexts?, build_args?)` creates a short-lived Job in
+  `company-ops` running **two containers** of the rootless `moby/buildkit`
+  image (pinned by digest): a `buildkitd` daemon (a native-sidecar
+  `initContainer`, Kubernetes >=1.29 — confirmed on this cluster, v1.36) and
+  a `buildctl` client (a regular container), talking over a Unix socket on a
+  shared `emptyDir` volume — not `buildctl-daemonless.sh`'s single-process
+  wrapper. See "Named build contexts and git credential handling" below for
+  why they're split. BuildKit builds directly from a
   **git context** (`context_ref`, e.g.
   `https://github.com/BuildMy-house/company-os.git#<40-hex-sha>` — a full
   commit SHA is required, a mutable branch name like `#main` is rejected)
@@ -194,25 +199,29 @@ pipeline exists to keep:
   with **no privileged workaround** — no `privileged: true`, no added Linux
   capabilities, no `/dev/fuse` hostPath, no `hostUsers`/user-namespaces
   (tried, failed on this node's `newuidmap`/subuid setup, reverted). The
-  Job template sets `securityContext.seccompProfile: Unconfined`, the
-  `container.apparmor.security.beta.kubernetes.io/buildkit: unconfined` pod
-  annotation, a non-root `runAsUser`, and env
-  `BUILDKITD_FLAGS=--oci-worker-no-process-sandbox` (works around a
-  "mount proc: operation not permitted" failure on Dockerfile `RUN` steps
-  under this node's nested mount-namespace restrictions) — that
-  combination alone was sufficient for full builds to succeed. Confirmed
-  with two real Jobs submitted directly against this cluster's Jobs API
-  using the `builder-manager` SA token: a baseline single-context build
-  with a real `RUN` step, and a named-additional-context build resolving
-  two independently-pinned commits of the same public repo (asserted via
-  an in-build content diff, not just log inspection) — both pushed
-  successfully to the in-cluster registry, confirmed independently via a
-  direct `GET /v2/<repo>/tags/list`, with no leftover Jobs afterward. Both
-  test fixtures live in this repo (`Dockerfile.buildkit-selftest-basic`,
-  `Dockerfile.buildkit-selftest`) and need only `company-os`'s own public
-  read access — this decouples verifying the BuildKit mechanism itself
-  from the GitHub-App-token/Secrets-RBAC path below, which is separately
-  still blocked.
+  Job template sets, on the `buildkitd` container specifically,
+  `securityContext.seccompProfile: Unconfined`, the
+  `container.apparmor.security.beta.kubernetes.io/buildkitd: unconfined` pod
+  annotation, a non-root `runAsUser`, and the argv flag
+  `--oci-worker-no-process-sandbox` (works around a "mount proc: operation
+  not permitted" failure on Dockerfile `RUN` steps under this node's nested
+  mount-namespace restrictions) — that combination alone was sufficient for
+  full builds to succeed; the `buildctl` client container carries none of
+  this relaxation. Confirmed with real Jobs submitted directly against this
+  cluster's Jobs API using the `builder-manager` SA token: a baseline
+  single-context build with a real `RUN` step, and a named-additional-
+  context build resolving two independently-pinned commits of the same
+  public repo (asserted via an in-build content diff, not just log
+  inspection) — both pushed successfully to the in-cluster registry,
+  confirmed independently via a direct `GET /v2/<repo>/tags/list`, with no
+  leftover Jobs afterward. All three test fixtures live in this repo
+  (`Dockerfile.buildkit-selftest-basic`, `Dockerfile.buildkit-selftest`,
+  `Dockerfile.buildkit-selftest-secret-isolation`) and need only
+  `company-os`'s own public read access — this decouples verifying the
+  BuildKit mechanism itself from the GitHub-App-token/Secrets-RBAC path
+  below, which is separately still blocked. See "Secret-isolation
+  self-test" below for the exact re-run of these fixtures under the current
+  two-container Job design and its result.
 - The Job pod itself runs with `automountServiceAccountToken: false` — it
   has zero Kubernetes API access; it only ever talks to the git remote and
   the registry over plain HTTP/HTTPS.
@@ -255,30 +264,101 @@ pipeline exists to keep:
 
 `contexts` values (and `context_ref` itself) must be bare, credential-free
 `https://` URLs pinned to a full 40-hex commit SHA — enforced by
-`builder-manager-mcp.js`'s own validation, not left to caller discipline.
+`builder-manager-mcp.js`'s own validation, not left to caller discipline,
+in every version of this design; the URL text itself never carries a
+credential.
+
 For the private `BuildMy-house/*` repos specifically (recognized by URL
 pattern), the tool mints its own short-lived GitHub App installation token
 (reusing `github-app-token.js`, the same mechanism `sync-repo.sh` already
-uses) and delivers it to the Job pod via a dedicated, per-build Kubernetes
-Secret referenced with `secretKeyRef` — the token itself never appears in
-the Job manifest's own text, only a reference to the Secret's name/key
-does, so it isn't visible to anything that can merely `get`/`list` Jobs.
-The Secret is deleted alongside the Job on every exit path (success,
-failure, or crash before Job creation).
+uses) and delivers it to BuildKit as a **pre-flight git-auth build secret**:
+`buildctl --secret id=GIT_AUTH_TOKEN,env=GIT_AUTH_TOKEN`. BuildKit's git
+source treats a secret with exactly this reserved ID as HTTP(S) git-auth
+material for the context fetch itself — consumed internally by `buildkitd`,
+entirely out of band from the context URL text, and never written to the
+build filesystem unless a Dockerfile explicitly does
+`RUN --mount=type=secret,id=GIT_AUTH_TOKEN` (no Dockerfile in this repo
+does). The token is delivered to the Job pod via a dedicated, per-build
+Kubernetes Secret, referenced with `secretKeyRef` on **only the `buildctl`
+container's env** — never the Job manifest's own text, and never
+`buildkitd`'s — so it isn't visible to anything that can merely `get`/`list`
+Jobs, and (see below) not to a `RUN` step running under this cluster's
+relaxed process sandbox either. The Secret is deleted alongside the Job on
+every exit path (success, failure, timeout, or a crash before either was
+created — an unconditional `try`/`finally` in `buildAndPush`), and also
+carries an `ownerReference` to the Job itself as a GC backstop for that
+crash case.
 
 Callers should never pass credentials in a `context_ref`/`contexts` value
 themselves — the tool's validation rejects any URL containing embedded
 credentials, precisely so callers don't need to handle or mint tokens.
 
-**Residual, documented limitation**: BuildKit's own git-source log line
-echoes the resolved (credentialed) URL into the *pod's* stdout logs. The
-tool masks the token in everything it returns to its own caller, but the
-raw pod log is still visible for the Job's short lifetime to anything with
-`pods/log` read in `company-ops` — bounded by the Job's
-`ttlSecondsAfterFinished` (10 min) and the token's own ~1h GitHub-imposed
-expiry either way. No fully-suppressing alternative was found in
-BuildKit's git-source op for the dockerfile frontend; this is a real,
-accepted tradeoff, not an oversight.
+**This replaced an earlier design** that built the credentialed URL itself
+(`x-access-token:$GIT_TOKEN@github.com/...`) via shell-variable expansion
+into a single `buildctl-daemonless.sh` container's command, with the token
+as a plain env var on that same container. That had two real, not just
+theoretical, exposure paths: (1) BuildKit's own git-source log line echoed
+the resolved (credentialed) URL into the pod's stdout logs, visible to
+anything with `pods/log` read in `company-ops` for the Job's short
+lifetime; and (2) this cluster's required `--oci-worker-no-process-sandbox`
+setting (see below) meant a malicious `RUN` step in that same container
+could potentially read the token straight out of `/proc/<pid>/environ` of
+the very process that held it, regardless of how it got there.
+
+**Job-pod isolation.** `--oci-worker-no-process-sandbox` is required in
+this cluster to work around a "mount proc: operation not permitted"
+failure on Dockerfile `RUN` steps, but unlike BuildKit's normal fully-
+sandboxed `RUN`-step isolation, it does not give a `RUN` step its own
+private PID namespace — a `RUN` step can potentially read
+`/proc/<pid>/environ` of any other process sharing its container. To close
+this off rather than accept it, the Job pod now runs `buildkitd` (which
+needs the relaxed sandbox, and is the one running `RUN` steps) and
+`buildctl` (the only place `GIT_AUTH_TOKEN` is ever set, and which needs no
+sandbox relaxation at all — it only speaks the BuildKit control gRPC
+protocol) as **two separate pod containers**, sharing only a Unix socket
+over an `emptyDir` volume. Kubernetes gives each container in a pod its own
+PID namespace by default (this design deliberately never sets
+`shareProcessNamespace: true`), so the secret is never visible to `/proc`
+inside the container that actually executes `RUN` steps, no matter how
+relaxed that container's own sandbox is.
+
+**Proven, not just designed**, by a malicious-Dockerfile self-test —
+`Dockerfile.buildkit-selftest-secret-isolation` — that attempts to read a
+marker-tagged dummy secret via the default BuildKit secret mount path, its
+own process environment, and every readable `/proc/<pid>/environ`, and
+fails the build if any of those succeed. See "Secret-isolation self-test"
+below for the exact run and result.
+
+### Secret-isolation self-test
+
+Runbook for `Dockerfile.buildkit-selftest-secret-isolation` (see the
+fixture's own header comment for the exact leak vectors it checks): submit
+a Job directly against this cluster's Jobs API (same two-container
+manifest `buildJobManifest()` produces) building that Dockerfile from this
+repo's public `main` context at a pinned commit SHA, with `build_args:
+{PROBE_MARKER: "<random>"}`, and a `GIT_AUTH_TOKEN` env var containing that
+same marker set on the `buildctl` container only (a literal test value,
+not a real minted GitHub token — this test targets the container-
+isolation mechanism, not the Secret CRUD path, so it doesn't need the
+still-unapplied Secrets RBAC in `k8s/builder-rbac.yaml`). A `RUN` step
+inside the Dockerfile then checks the default BuildKit secret mount path,
+its own env, and every readable `/proc/<pid>/environ` for the marker;
+build succeeds only if none of them find it.
+
+- Confirmed live 2026-09-29: submitted directly to this cluster's Jobs API
+  using the `builder-manager` SA token, building
+  `Dockerfile.buildkit-selftest-secret-isolation` from this repo's `main`
+  at the pinned commit that introduced it, with a marker-tagged
+  `GIT_AUTH_TOKEN` env var set only on the `buildctl` container (the
+  `buildkitd` container's own env was independently confirmed to never
+  contain it, matching `buildJobManifest()`'s output). The build's `RUN`
+  step logged `OK: git-auth secret marker not reachable from this RUN
+  step (checked default secret mount, own env, and every readable
+  /proc/*/environ)` and the Job completed successfully — the marker was
+  not found by any of the three vectors, confirming the two-container
+  split keeps the secret out of reach of a `RUN` step even under this
+  cluster's required `--oci-worker-no-process-sandbox`. Job and its pod
+  were deleted afterward; no leftovers in `company-ops`.
 
 ### Each runner only advertises tools it can launch
 

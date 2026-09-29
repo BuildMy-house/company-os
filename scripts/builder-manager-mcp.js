@@ -3,11 +3,14 @@
 // Ephemeral, rootless-BuildKit-based build+push, without ever giving the
 // calling pod (hermes-gateway or engineering-agent) a docker socket or
 // persistent build credentials. Instead of building locally, this creates a
-// short-lived Kubernetes Job in company-ops running the rootless
-// `moby/buildkit` image via `buildctl-daemonless.sh` (starts an unprivileged
-// buildkitd and runs a single build in one process, no persistent daemon),
-// which builds a git-context Dockerfile and pushes the result straight to
-// the in-cluster registry (registry.company-ops.svc.cluster.local:5000).
+// short-lived Kubernetes Job in company-ops running two containers of the
+// rootless `moby/buildkit` image — a `buildkitd` daemon (native-sidecar
+// initContainer) and a `buildctl` client (regular container), talking over
+// a Unix socket on a shared `emptyDir` volume, never `buildctl-daemonless.sh`'s
+// single-process wrapper (see "Job-pod isolation" below for why they are
+// split) — which builds a git-context Dockerfile and pushes the result
+// straight to the in-cluster registry
+// (registry.company-ops.svc.cluster.local:5000).
 //
 // Replaces the previous Kaniko-based design (gcr.io/kaniko-project/executor)
 // for two reasons, both verified live in this cluster on 2026-09-29:
@@ -24,16 +27,25 @@
 //      the `unshare` syscalls rootlesskit uses) plus the
 //      `container.apparmor.security.beta.kubernetes.io/<container>: unconfined`
 //      pod annotation, a non-root `runAsUser`, and
-//      `BUILDKITD_FLAGS=--oci-worker-no-process-sandbox` (works around a
-//      "mount proc: operation not permitted" failure on RUN steps when
-//      nested under the pod's own mount-namespace restrictions) are
-//      sufficient — no `privileged: true`, no added Linux capabilities, no
-//      `/dev/fuse` hostPath, no experimental `hostUsers` pod-level user
-//      namespaces (`hostUsers: false` was tried and failed on this node's
-//      newuidmap/subuid setup — not needed once the above three settings are
-//      in place). All four confirmed with a real end-to-end build+push,
-//      including a full `Dockerfile.engineering` build exercising the named
-//      `shared` context against the private `workspace` repo.
+//      `--oci-worker-no-process-sandbox` (an argv flag on the `buildkitd`
+//      container's own command, works around a "mount proc: operation not
+//      permitted" failure on RUN steps when nested under the pod's own
+//      mount-namespace restrictions) are sufficient — no `privileged: true`,
+//      no added Linux capabilities, no `/dev/fuse` hostPath, no experimental
+//      `hostUsers` pod-level user namespaces (`hostUsers: false` was tried
+//      and failed on this node's newuidmap/subuid setup — not needed once
+//      the above three settings are in place). All four confirmed with two
+//      real end-to-end build+push Jobs against **public** repos (a baseline
+//      single-context build with a real `RUN` step, and a named-additional-
+//      context build) — see docs/DEPLOY-ENGINEERING.md for exact evidence.
+//      A full `Dockerfile.engineering` build (which additionally needs the
+//      private-repo GitHub-App-token path below) has NOT been exercised
+//      end-to-end: the Secrets RBAC it depends on
+//      (`k8s/builder-rbac.yaml`) is still not applied to the live cluster
+//      as of this writing — see docs/DEPLOY-ENGINEERING.md's "Mechanism
+//      resolved, Dockerfile.engineering itself still blocked on Secrets
+//      RBAC" section. Do not restate this as verified until that
+//      section is updated with real end-to-end evidence.
 //
 // Authenticates to the Kubernetes API as the dedicated "builder-manager"
 // ServiceAccount (k8s/builder-rbac.yaml) via a bound token mounted at
@@ -52,22 +64,52 @@
 //
 // Git credential handling: `context_ref`/`contexts` values must be bare,
 // credential-free `https://` URLs pinned to a full 40-hex-character commit
-// SHA (immutable ref requirement — enforced here, not just by convention).
-// For the private `BuildMy-house/*` repos specifically, this script mints a
-// short-lived GitHub App installation token itself (reusing
+// SHA (immutable ref requirement — enforced here, not just by convention;
+// the URL text itself never carries a credential, in any version of this
+// design). For the private `BuildMy-house/*` repos specifically, this
+// script mints a short-lived GitHub App installation token itself (reusing
 // `github-app-token.js`, the same mechanism `sync-repo.sh` already uses) and
-// delivers it to the Job pod via a dedicated, per-build Kubernetes Secret
-// referenced with `secretKeyRef` — the token never appears in the Job
-// manifest's own text (only a reference to the Secret's name/key does), so
-// it is not visible to anything that can merely `get`/`list` Jobs in this
-// namespace. The Secret is deleted alongside the Job on every exit path.
-// Residual, documented limitation: BuildKit's own git-source log line
-// echoes the resolved (credentialed) URL into the *pod's* stdout logs —
-// this script masks the token in everything it returns to its caller, but
-// the raw pod log is still visible for the Job's short lifetime to anything
-// with `pods/log` read in company-ops. Bounded by the Job's
-// `ttlSecondsAfterFinished` (10 min) and the token's own ~1h GitHub-imposed
-// expiry either way.
+// delivers it to BuildKit as a **pre-flight git-auth build secret**
+// (`buildctl --secret id=GIT_AUTH_TOKEN,env=GIT_AUTH_TOKEN`) — BuildKit's
+// git source consumes a secret with exactly this reserved ID to
+// authenticate the context fetch itself, entirely out of band from the
+// context URL text. This replaced an earlier design that embedded
+// `x-access-token:$GIT_TOKEN@` into the context URL via shell expansion:
+// that put the token in a Job-pod env var AND meant BuildKit's own
+// git-source log line echoed the resolved (credentialed) URL into the pod's
+// stdout logs, both real exposure paths, not just theoretical ones — see
+// the "Job-pod isolation" note below for why the replacement actually
+// closes the gap rather than just moving it, verified with a real
+// malicious-Dockerfile self-test (`Dockerfile.buildkit-selftest-secret-isolation`).
+// Callers should never pass credentials in a `context_ref`/`contexts` value
+// themselves — `validateContextRef` rejects any URL containing one.
+//
+// Job-pod isolation: this cluster's rootless-BuildKit workaround requires
+// `--oci-worker-no-process-sandbox` on the `buildkitd` container (see below)
+// — which, unlike BuildKit's normal fully-sandboxed RUN-step isolation,
+// does NOT give a `RUN` step its own private PID namespace. A `RUN` step in
+// that container can potentially read `/proc/<pid>/environ` of *any other
+// process in the same container*, including `buildkitd`/`buildctl`'s own,
+// if either process ever held the token as an env var. Rather than accept
+// that as a residual risk, the Job pod runs `buildkitd` and `buildctl` as
+// **two separate containers** (native-sidecar `initContainer` +
+// `container`, sharing only a Unix socket over an `emptyDir` volume — see
+// `buildJobManifest`). Kubernetes gives each container in a pod its own PID
+// namespace by default (this script never sets `shareProcessNamespace:
+// true` — do not add it), so `GIT_AUTH_TOKEN` — set only on the `buildctl`
+// container's env, sourced from a per-build Secret — is never visible to
+// `/proc` inside the `buildkitd` container, which is the one running with
+// the relaxed process sandbox and the one actually executing `RUN` steps.
+// `buildctl` itself needs no relaxed sandbox at all; it only speaks the
+// BuildKit control gRPC protocol over the shared socket.
+//
+// The per-build git-token Secret is deleted alongside the Job on every exit
+// path (success, failure, timeout, or a crash before either was created —
+// see the `try`/`finally` in `buildAndPush`), and additionally carries an
+// `ownerReference` to the Job itself, so Kubernetes' own garbage collector
+// deletes it if this script's own process dies before its `finally` runs
+// (the Job's `ttlSecondsAfterFinished` bounds the same crash case for the
+// Job object).
 import https from "node:https";
 import http from "node:http";
 import fs from "node:fs";
@@ -240,17 +282,16 @@ function maskToken(str, token) {
   return str.split(token).join("ghs_****");
 }
 
-// Embeds `$GIT_TOKEN` (a literal shell variable reference, not the token
-// itself) into the URL for BuildMy-house refs — the actual value only ever
-// exists as a Secret-backed env var inside the Job pod, never in the Job
-// manifest text. Wrapped in double quotes by the caller so the shell
-// expands it; the validated character set for `ref` excludes `"`/`$`, so
-// this is the only variable expansion that can occur.
-function resolveContextForShell(ref) {
-  if (needsGithubAppToken(ref)) {
-    return ref.replace("https://github.com/", "https://x-access-token:$GIT_TOKEN@github.com/");
+function validateTimeoutSeconds(value) {
+  if (value === undefined) return 900;
+  // Re-validated here, not just declared in inputSchema: this is called
+  // directly (self-test/manual invocation) as well as via tools/call, and
+  // an MCP client is not guaranteed to enforce a tool's declared
+  // minimum/maximum before sending arguments.
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 30 || value > 3600) {
+    throw new Error(`invalid timeout_seconds (must be a number in [30, 3600]): ${value}`);
   }
-  return ref;
+  return value;
 }
 
 const tools = [
@@ -283,26 +324,50 @@ const tools = [
   },
 ];
 
-function buildJobManifest({ jobName, contextRef, namedContexts, dockerfilePath, destination, buildArgs, secretName }) {
-  const optParts = [
-    `--opt context="${resolveContextForShell(contextRef)}"`,
-    ...Object.entries(namedContexts).map(([name, ref]) => `--opt context:${name}="${resolveContextForShell(ref)}"`),
-    `--opt filename="${dockerfilePath}"`,
-    ...Object.entries(buildArgs).map(([key, value]) => `--opt build-arg:${key}="${value}"`),
-    `--output type=image,name="${REGISTRY_HOST}:${REGISTRY_PORT}/${destination}",push=true,registry.insecure=true`,
-  ];
-  const command = `buildctl-daemonless.sh build --frontend dockerfile.v0 ${optParts.join(" ")}`;
+// Unix socket shared between the two containers below via an emptyDir
+// volume — never a host path, never TCP.
+const SOCKET_DIR = "/run/buildkit";
+const SOCKET_ADDR = `unix://${SOCKET_DIR}/buildkitd.sock`;
 
-  const env = [
-    // Works around a rootless-BuildKit-in-k8s "mount proc: operation not
-    // permitted" failure on Dockerfile RUN steps — verified necessary and
-    // sufficient live in this cluster on 2026-09-29, no broader privileged
-    // workaround needed alongside it.
-    { name: "BUILDKITD_FLAGS", value: "--oci-worker-no-process-sandbox" },
+// Two-container Job: `buildkitd` (a native-sidecar initContainer, i.e.
+// `restartPolicy: "Always"` — starts before, and keeps running alongside,
+// the regular container below; Kubernetes does not wait for it to exit
+// before considering the Job's pod — and therefore the Job itself —
+// complete, and terminates it automatically once the regular container(s)
+// finish; requires Kubernetes >=1.29, confirmed available here: this
+// cluster runs v1.36) runs the actual daemon with the relaxed process
+// sandbox this cluster needs; `buildctl` (a plain container) is the only
+// place `GIT_AUTH_TOKEN` is ever set. See the "Job-pod isolation" header
+// comment above for why this split (rather than one container running
+// both) is what actually keeps the token out of reach of a RUN step, given
+// `--oci-worker-no-process-sandbox`. Every argv array below is passed
+// directly to execve (no `sh -c`), so no value — however it was validated —
+// ever goes through shell parsing/expansion.
+function buildJobManifest({ jobName, contextRef, namedContexts, dockerfilePath, destination, buildArgs, secretName }) {
+  const buildctlArgs = [
+    "build",
+    "--frontend", "dockerfile.v0",
+    "--opt", `context=${contextRef}`,
+    ...Object.entries(namedContexts).flatMap(([name, ref]) => ["--opt", `context:${name}=${ref}`]),
+    "--opt", `filename=${dockerfilePath}`,
+    ...Object.entries(buildArgs).flatMap(([key, value]) => ["--opt", `build-arg:${key}=${value}`]),
+    "--output", `type=image,name=${REGISTRY_HOST}:${REGISTRY_PORT}/${destination},push=true,registry.insecure=true`,
   ];
   if (secretName) {
-    env.push({ name: "GIT_TOKEN", valueFrom: { secretKeyRef: { name: secretName, key: "token" } } });
+    // BuildKit's git source treats a secret with exactly this reserved ID
+    // as pre-flight HTTP(S) git-auth material for the context fetch itself
+    // — consumed internally by buildkitd's git source, never written to
+    // the build filesystem unless a Dockerfile explicitly does
+    // `RUN --mount=type=secret,id=GIT_AUTH_TOKEN` (neither self-test
+    // Dockerfile in this repo does). `env=GIT_AUTH_TOKEN` tells buildctl to
+    // read the value from its own process's environment (set below via
+    // secretKeyRef) and ship it to buildkitd over the control connection —
+    // the value itself never appears in this argv.
+    buildctlArgs.push("--secret", "id=GIT_AUTH_TOKEN,env=GIT_AUTH_TOKEN");
   }
+
+  const sharedVolume = { name: "buildkit-socket", emptyDir: {} };
+  const sharedVolumeMount = { name: "buildkit-socket", mountPath: SOCKET_DIR };
 
   return {
     apiVersion: "batch/v1",
@@ -314,25 +379,72 @@ function buildJobManifest({ jobName, contextRef, namedContexts, dockerfilePath, 
       template: {
         metadata: {
           labels: { "builder-manager/job": "true" },
-          annotations: { "container.apparmor.security.beta.kubernetes.io/buildkit": "unconfined" },
+          // Keyed to the buildkitd container specifically — the only one
+          // that needs the relaxed AppArmor profile to run RUN steps.
+          annotations: { "container.apparmor.security.beta.kubernetes.io/buildkitd": "unconfined" },
         },
         spec: {
           restartPolicy: "Never",
           automountServiceAccountToken: false,
-          containers: [
+          // Deliberately absent (defaults to false): each container in
+          // this pod must keep its own PID namespace, or `buildkitd`'s
+          // relaxed process sandbox could see `buildctl`'s env — see the
+          // "Job-pod isolation" header comment.
+          volumes: [sharedVolume],
+          initContainers: [
             {
-              name: "buildkit",
+              name: "buildkitd",
+              restartPolicy: "Always", // native sidecar; does not block Job completion
               image: BUILDKIT_IMAGE,
-              command: ["sh", "-c", command],
-              env,
+              command: [
+                "rootlesskit", "buildkitd",
+                // Works around a rootless-BuildKit-in-k8s "mount proc:
+                // operation not permitted" failure on Dockerfile RUN
+                // steps — verified necessary and sufficient live in this
+                // cluster on 2026-09-29, no broader privileged workaround
+                // needed alongside it. This is also precisely the setting
+                // that makes the two-container split above load-bearing
+                // rather than defense-in-depth-only.
+                "--oci-worker-no-process-sandbox",
+                "--addr", SOCKET_ADDR,
+              ],
               securityContext: {
                 seccompProfile: { type: "Unconfined" },
                 runAsUser: 1000,
                 runAsGroup: 1000,
               },
+              volumeMounts: [sharedVolumeMount],
+              // Gates startup of the `buildctl` container below on the
+              // socket actually existing — native sidecars only block
+              // regular-container start on Startedness (startupProbe
+              // success), not plain process liveness.
+              startupProbe: {
+                exec: { command: ["sh", "-c", `test -S ${SOCKET_DIR}/buildkitd.sock`] },
+                periodSeconds: 1,
+                failureThreshold: 60,
+              },
               resources: {
                 requests: { cpu: "500m", memory: "1Gi" },
                 limits: { cpu: "2", memory: "3Gi" },
+              },
+            },
+          ],
+          containers: [
+            {
+              name: "buildctl",
+              image: BUILDKIT_IMAGE,
+              command: ["buildctl", "--addr", SOCKET_ADDR, ...buildctlArgs],
+              // GIT_AUTH_TOKEN is set ONLY here, never on buildkitd above —
+              // this is the entire point of the split. Absent when no
+              // private-repo ref is in play.
+              env: secretName
+                ? [{ name: "GIT_AUTH_TOKEN", valueFrom: { secretKeyRef: { name: secretName, key: "token" } } }]
+                : [],
+              securityContext: { runAsUser: 1000, runAsGroup: 1000 },
+              volumeMounts: [sharedVolumeMount],
+              resources: {
+                requests: { cpu: "100m", memory: "128Mi" },
+                limits: { cpu: "500m", memory: "256Mi" },
               },
             },
           ],
@@ -356,16 +468,24 @@ async function waitForJob(jobName, deadlineMs) {
   return { succeeded: false, timedOut: true };
 }
 
+async function fetchContainerLog(podName, container) {
+  try {
+    const logs = await k8sRequest("GET", `/api/v1/namespaces/${NAMESPACE}/pods/${podName}/log?container=${container}&tailLines=200`);
+    return typeof logs === "string" ? logs : JSON.stringify(logs);
+  } catch (error) {
+    return `(could not fetch ${container} logs: ${error.message})`;
+  }
+}
+
 async function fetchJobPodLogs(jobName) {
   const pods = await k8sRequest("GET", `/api/v1/namespaces/${NAMESPACE}/pods?labelSelector=job-name=${jobName}`);
   const podName = pods.items?.[0]?.metadata?.name;
   if (!podName) return "(no pod found for job)";
-  try {
-    const logs = await k8sRequest("GET", `/api/v1/namespaces/${NAMESPACE}/pods/${podName}/log?container=buildkit&tailLines=200`);
-    return typeof logs === "string" ? logs : JSON.stringify(logs);
-  } catch (error) {
-    return `(could not fetch logs: ${error.message})`;
-  }
+  const [buildctlLog, buildkitdLog] = await Promise.all([
+    fetchContainerLog(podName, "buildctl"),
+    fetchContainerLog(podName, "buildkitd"),
+  ]);
+  return `--- buildctl (client) ---\n${buildctlLog}\n--- buildkitd (daemon) ---\n${buildkitdLog}`;
 }
 
 async function deleteJob(jobName) {
@@ -376,12 +496,24 @@ async function deleteJob(jobName) {
   }
 }
 
-async function createGitTokenSecret(jobName, token) {
+// Called AFTER the Job is created (needs the Job's own UID), so the Secret
+// can carry an ownerReference to it — this Role has no `patch` on Secrets
+// (see k8s/builder-rbac.yaml), so the ownerReference must be set at create
+// time, not added later. Kubernetes' garbage collector will then delete
+// this Secret on its own if this script's own process dies before its
+// `finally` block runs `deleteSecret` — the Job's own
+// `ttlSecondsAfterFinished` is the equivalent backstop for the Job object.
+async function createGitTokenSecret(jobName, jobUid, token) {
   const secretName = `${jobName}-git-token`;
   const manifest = {
     apiVersion: "v1",
     kind: "Secret",
-    metadata: { name: secretName, namespace: NAMESPACE, labels: { "builder-manager/job": "true" } },
+    metadata: {
+      name: secretName,
+      namespace: NAMESPACE,
+      labels: { "builder-manager/job": "true" },
+      ownerReferences: [{ apiVersion: "batch/v1", kind: "Job", name: jobName, uid: jobUid, blockOwnerDeletion: false }],
+    },
     type: "Opaque",
     data: { token: Buffer.from(token, "utf8").toString("base64") },
   };
@@ -406,47 +538,70 @@ async function buildAndPush(args) {
   const dockerfilePath = validateDockerfilePath(args.dockerfile_path);
   const namedContexts = validateContexts(args.contexts);
   const buildArgs = validateBuildArgs(args.build_args);
-  const timeoutSeconds = args.timeout_seconds ?? 900;
+  const timeoutSeconds = validateTimeoutSeconds(args.timeout_seconds);
 
   const allRefs = [contextRef, ...Object.values(namedContexts)];
   const needsToken = allRefs.some(needsGithubAppToken);
+  // Secure secret isolation for this path (GIT_AUTH_TOKEN confined to the
+  // buildctl container, never buildkitd) is proven by
+  // Dockerfile.buildkit-selftest-secret-isolation — see
+  // docs/DEPLOY-ENGINEERING.md. The live Secrets RBAC this path also needs
+  // (create/delete on secrets for the builder-manager ServiceAccount) is a
+  // separate, still-open item — not applied by this change, not something
+  // this script can grant itself — so createGitTokenSecret below will
+  // currently fail with a 403 from the k8s API for any real private-repo
+  // build, which is the correct, honest failure mode until that RBAC
+  // lands; see docs/DEPLOY-ENGINEERING.md's "Mechanism resolved,
+  // Dockerfile.engineering itself still blocked on Secrets RBAC".
 
   const jobName = `builder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  let token = null;
-  let secretName = null;
-  if (needsToken) {
-    token = await mintGithubAppToken();
-    secretName = await createGitTokenSecret(jobName, token);
-  }
-
   const destination = `${imageRepo}:${imageTag}`;
-  const manifest = buildJobManifest({ jobName, contextRef, namedContexts, dockerfilePath, destination, buildArgs, secretName });
 
+  let jobCreated = false;
+  let secretName = null;
+  let token = null;
   try {
-    await k8sRequest("POST", `/apis/batch/v1/namespaces/${NAMESPACE}/jobs`, manifest);
-  } catch (error) {
+    // Job created first (without a Secret to reference yet — the pod
+    // simply stays Pending on that container until the Secret referenced
+    // by name below shows up) so the Secret can carry the Job's real UID
+    // as its ownerReference; see createGitTokenSecret.
+    const manifest = buildJobManifest({
+      jobName, contextRef, namedContexts, dockerfilePath, destination, buildArgs,
+      secretName: needsToken ? `${jobName}-git-token` : null,
+    });
+    const jobResp = await k8sRequest("POST", `/apis/batch/v1/namespaces/${NAMESPACE}/jobs`, manifest);
+    jobCreated = true;
+
+    if (needsToken) {
+      token = await mintGithubAppToken();
+      secretName = await createGitTokenSecret(jobName, jobResp.metadata.uid, token);
+    }
+
+    const timeoutMs = Math.round(timeoutSeconds * 1000);
+    const result = await waitForJob(jobName, timeoutMs);
+    const rawLogs = await fetchJobPodLogs(jobName);
+    const logs = maskToken(rawLogs, token);
+
+    if (!result.succeeded) {
+      const reason = result.timedOut ? `timed out after ${timeoutSeconds}s` : `${result.reason}: ${maskToken(result.message, token)}`;
+      throw new Error(`builder Job ${jobName} did not succeed (${reason}). Logs:\n${logs}`);
+    }
+
+    const pushed = await registryHasTag(imageRepo, imageTag);
+    if (!pushed) {
+      throw new Error(`builder Job ${jobName} reported success but ${destination} is not visible in the registry yet. Logs:\n${logs}`);
+    }
+
+    return { job: jobName, image: `${REGISTRY_HOST}:${REGISTRY_PORT}/${destination}`, pushed: true };
+  } finally {
+    // Unconditional: runs on every exit path, including a k8sRequest
+    // rejection from waitForJob/mintGithubAppToken/registryHasTag, not just
+    // the success/expected-failure paths above. deleteJob/deleteSecret are
+    // themselves already best-effort (internal try/catch), so this can
+    // never throw over whatever error is already propagating.
+    if (jobCreated) await deleteJob(jobName);
     await deleteSecret(secretName);
-    throw error;
   }
-
-  const timeoutMs = Math.round(timeoutSeconds * 1000);
-  const result = await waitForJob(jobName, timeoutMs);
-  const rawLogs = await fetchJobPodLogs(jobName);
-  const logs = maskToken(rawLogs, token);
-  await deleteJob(jobName);
-  await deleteSecret(secretName);
-
-  if (!result.succeeded) {
-    const reason = result.timedOut ? `timed out after ${timeoutSeconds}s` : `${result.reason}: ${maskToken(result.message, token)}`;
-    throw new Error(`builder Job ${jobName} did not succeed (${reason}). Last 200 log lines:\n${logs}`);
-  }
-
-  const pushed = await registryHasTag(imageRepo, imageTag);
-  if (!pushed) {
-    throw new Error(`builder Job ${jobName} reported success but ${destination} is not visible in the registry yet. BuildKit logs:\n${logs}`);
-  }
-
-  return { job: jobName, image: `${REGISTRY_HOST}:${REGISTRY_PORT}/${destination}`, pushed: true };
 }
 
 async function call(name, args) {
