@@ -362,12 +362,23 @@ value was still threaded through as build-arg). Build succeeds only if the
 - Confirmed live 2026-09-29: submitted directly to this cluster's Jobs API
   using the `builder-manager` SA token, building
   `Dockerfile.buildkit-selftest-secret-isolation` from this repo's `main`
-  at the pinned commit that fixed the two ARG false-positives above, with a
-  real freshly-minted GitHub App installation token set only on the
-  `buildctl` container's env (the `buildkitd` container's own env was
-  independently confirmed to never contain it, matching
-  `buildJobManifest()`'s output), no build ARG involved. `<RESULT: fill in
-  after running>`
+  at the pinned commit that fixed the two ARG false-positives above
+  (`1775178207f6ed37c424edd7a0dd7d974218df74`), with a real freshly-minted
+  GitHub App installation token set only on the `buildctl` container's env
+  (the `buildkitd` container's own env was independently confirmed to
+  never contain it, matching `buildJobManifest()`'s output), no build ARG
+  involved. **Result: Job succeeded; the `RUN` step's own log line read
+  `OK: git-auth secret canary not reachable from this RUN step (checked
+  default secret mount, own env, and every readable /proc/*/environ)`** —
+  none of the three leak vectors fired. The Job and its pod were both gone
+  immediately after completion, confirmed via a direct list against the
+  cluster (`leftover jobs: []`, `leftover pods: []`). The same run also
+  re-confirmed the two public-build fixtures
+  (`Dockerfile.buildkit-selftest-basic`,
+  `Dockerfile.buildkit-selftest` with named context pinned at
+  `419566f3ade7e69b64e9149a4e739bbf6603c818`) succeed under this same
+  two-container manifest, each independently confirmed pushed via
+  `GET /v2/<repo>/tags/list`, with no leftover Jobs/pods afterward either.
 
 ### Each runner only advertises tools it can launch
 
