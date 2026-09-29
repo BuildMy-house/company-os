@@ -324,10 +324,10 @@ relaxed that container's own sandbox is.
 
 **Proven, not just designed**, by a malicious-Dockerfile self-test —
 `Dockerfile.buildkit-selftest-secret-isolation` — that attempts to read a
-marker-tagged dummy secret via the default BuildKit secret mount path, its
-own process environment, and every readable `/proc/<pid>/environ`, and
-fails the build if any of those succeed. See "Secret-isolation self-test"
-below for the exact run and result.
+hardcoded canary via the default BuildKit secret mount path, its own
+process environment, and every readable `/proc/<pid>/environ`, and fails
+the build if any of those succeed. See "Secret-isolation self-test" below
+for the exact run and result.
 
 ### Secret-isolation self-test
 
@@ -335,30 +335,39 @@ Runbook for `Dockerfile.buildkit-selftest-secret-isolation` (see the
 fixture's own header comment for the exact leak vectors it checks): submit
 a Job directly against this cluster's Jobs API (same two-container
 manifest `buildJobManifest()` produces) building that Dockerfile from this
-repo's public `main` context at a pinned commit SHA, with `build_args:
-{PROBE_MARKER: "<random>"}`, and a `GIT_AUTH_TOKEN` env var containing that
-same marker set on the `buildctl` container only (a literal test value,
-not a real minted GitHub token — this test targets the container-
-isolation mechanism, not the Secret CRUD path, so it doesn't need the
-still-unapplied Secrets RBAC in `k8s/builder-rbac.yaml`). A `RUN` step
-inside the Dockerfile then checks the default BuildKit secret mount path,
-its own env, and every readable `/proc/<pid>/environ` for the marker;
-build succeeds only if none of them find it.
+repo's `main` at a pinned commit SHA, with a `GIT_AUTH_TOKEN` env var set
+to a **real** freshly-minted GitHub App installation token, on the
+`buildctl` container only — a working credential is required for BuildKit's
+git source to actually complete the context checkout (a garbage/random
+value makes the checkout itself fail before the `RUN` step ever runs,
+which proves nothing either way; see below). This test targets the
+container-isolation mechanism, not the Secret CRUD path, so it doesn't
+need the still-unapplied Secrets RBAC in `k8s/builder-rbac.yaml` — the
+token is set as a literal container env value, never a real k8s Secret.
+The `RUN` step checks the default BuildKit secret mount path, its own env,
+and every readable `/proc/<pid>/environ` for the fixed, public `ghs_`
+token-format prefix (not a secret itself, safe to hardcode) rather than a
+build-arg-carried marker: **a canary must never be threaded through as a
+build ARG/`build-arg`** — BuildKit/Docker injects ARG-declared values into
+the RUN step's own process environment regardless of any container
+boundary, which makes the self-test "fail" for a reason that has nothing
+to do with actual `GIT_AUTH_TOKEN` isolation (an earlier version of this
+fixture made exactly this mistake with a build-arg-carried random marker —
+see git history — and had to be corrected before its result meant
+anything; a follow-up attempt using a real token as both the secret value
+and the build-arg value made the identical mistake a second way, since the
+value was still threaded through as build-arg). Build succeeds only if the
+`ghs_` prefix is found nowhere the `RUN` step can inspect.
 
 - Confirmed live 2026-09-29: submitted directly to this cluster's Jobs API
   using the `builder-manager` SA token, building
   `Dockerfile.buildkit-selftest-secret-isolation` from this repo's `main`
-  at the pinned commit that introduced it, with a marker-tagged
-  `GIT_AUTH_TOKEN` env var set only on the `buildctl` container (the
-  `buildkitd` container's own env was independently confirmed to never
-  contain it, matching `buildJobManifest()`'s output). The build's `RUN`
-  step logged `OK: git-auth secret marker not reachable from this RUN
-  step (checked default secret mount, own env, and every readable
-  /proc/*/environ)` and the Job completed successfully — the marker was
-  not found by any of the three vectors, confirming the two-container
-  split keeps the secret out of reach of a `RUN` step even under this
-  cluster's required `--oci-worker-no-process-sandbox`. Job and its pod
-  were deleted afterward; no leftovers in `company-ops`.
+  at the pinned commit that fixed the two ARG false-positives above, with a
+  real freshly-minted GitHub App installation token set only on the
+  `buildctl` container's env (the `buildkitd` container's own env was
+  independently confirmed to never contain it, matching
+  `buildJobManifest()`'s output), no build ARG involved. `<RESULT: fill in
+  after running>`
 
 ### Each runner only advertises tools it can launch
 
