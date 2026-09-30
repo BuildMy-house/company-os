@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Hermes only needs its dedicated memory/config content. It must not inherit
+# the broad engineering GitHub App credential from the shared Secret.
+unset GITHUB_APP_PRIVATE_KEY GITHUB_APP_PRIVATE_KEY_PATH GITHUB_APP_ID \
+  GITHUB_APP_INSTALLATION_ID GITHUB_TOKEN GH_TOKEN
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Infisical Secrets Injection ─────────────────────────────────────────────
@@ -51,53 +56,10 @@ if [ -f /opt/company-ops/hermes/config.yaml ]; then
   cp /opt/company-ops/hermes/config.yaml /opt/data/config.yaml
 fi
 
-# SOUL.md: prefer a live override from the hermees-memory repo over the copy
-# baked into the image, so day-to-day operational guidance (which agent to
-# dispatch with, current known-broken tools, etc.) can be updated by pushing
-# to hermees-memory + restarting this pod — no image rebuild required. Only
-# rarer, structural changes to Hermes's actual identity/mandate still need a
-# real rebuild. Falls back to the baked-in copy if the memory repo isn't
-# reachable or has no override yet (e.g. first-ever boot). hermes-agent's own
-# memory plugin also clones hermees-memory, but only after `hermes` itself
-# starts (a few seconds into `exec hermes`, confirmed via /opt/hermees-memory's
-# birth time vs PID 1's start time) — too late to matter here, so this clones
-# its own copy early instead of waiting on/reusing that one.
-MEMORY_REPO_DIR="/opt/hermees-memory"
-MEMORY_TOKEN=""
-# github-app-token.js only reads the private key from a file (checked paths
-# include /etc/github/buildmyhouse-engineering-app.pem), never from the raw
-# GITHUB_APP_PRIVATE_KEY env var directly. The engineering container gets
-# this file written for it as a side effect of ai-cli-mcp's own setup; this
-# container runs `hermes gateway run` instead, which never does that step —
-# so without this, minting silently fails every time (caught live: the very
-# first deploy of this feature logged "could not mint GitHub App token" on
-# every boot). Write it ourselves from the env var if the file isn't already
-# there.
-if [ -n "${GITHUB_APP_PRIVATE_KEY:-}" ] && [ ! -f /etc/github/buildmyhouse-engineering-app.pem ]; then
-  mkdir -p /etc/github
-  printf '%s\n' "$GITHUB_APP_PRIVATE_KEY" > /etc/github/buildmyhouse-engineering-app.pem
-  chmod 600 /etc/github/buildmyhouse-engineering-app.pem
-fi
-if [ -f "$SCRIPT_DIR/github-app-token.js" ]; then
-  MEMORY_TOKEN=$(node "$SCRIPT_DIR/github-app-token.js" 2>/dev/null || true)
-fi
-if [ -n "$MEMORY_TOKEN" ]; then
-  MEMORY_URL="https://x-access-token:${MEMORY_TOKEN}@github.com/BuildMy-house/hermees-memory.git"
-  if [ -d "$MEMORY_REPO_DIR/.git" ]; then
-    git -C "$MEMORY_REPO_DIR" remote set-url origin "$MEMORY_URL" 2>/dev/null || true
-    git -C "$MEMORY_REPO_DIR" pull --ff-only 2>/dev/null || true
-  else
-    git clone "$MEMORY_URL" "$MEMORY_REPO_DIR" 2>/dev/null || true
-  fi
-else
-  echo "[soul] WARN: could not mint GitHub App token; skipping hermees-memory pull, using baked-in SOUL.md" >&2
-fi
-
-if [ -f "$MEMORY_REPO_DIR/hermes/SOUL.md" ]; then
-  echo "[soul] Using SOUL.md override from hermees-memory (no rebuild needed to update this)"
-  cp "$MEMORY_REPO_DIR/hermes/SOUL.md" "${HERMES_HOME:-/opt/data}/SOUL.md"
-elif [ -f /opt/company-ops/hermes/SOUL.md ]; then
-  echo "[soul] No override in hermees-memory yet; using SOUL.md baked into the image"
+# SOUL.md is baked into the image so Hermes does not need GitHub credentials
+# or a runtime repository checkout.
+if [ -f /opt/company-ops/hermes/SOUL.md ]; then
+  echo "[soul] Using SOUL.md baked into the image"
   cp /opt/company-ops/hermes/SOUL.md "${HERMES_HOME:-/opt/data}/SOUL.md"
 fi
 

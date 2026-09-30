@@ -1,0 +1,86 @@
+# Hermes receives only the fixed company-os image build tool. This workload
+# has no engineering workspace, no company-ops ServiceAccount token, and no
+# deployment permissions; the mounted builder token has BuildKit Job/ephemeral
+# Secret permissions only (k8s/builder-rbac.yaml).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-build-dispatcher
+  namespace: company-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-build-dispatcher
+  template:
+    metadata:
+      labels:
+        app: hermes-build-dispatcher
+    spec:
+      serviceAccountName: builder-manager
+      automountServiceAccountToken: false
+      containers:
+        - name: hermes-build-dispatcher
+          image: localhost:30500/company-os-engineering:buildkit-ffd6664
+          imagePullPolicy: Always
+          command: ["npx", "-y", "mcp-proxy", "--host", "0.0.0.0", "--port", "8000", "--", "env", "BUILDER_SCOPE=company-os", "node", "/opt/company-ops/scripts/builder-manager-mcp.js"]
+          env:
+            - name: BUILDER_MANAGER_CA_PATH
+              value: /var/run/secrets/builder-manager/ca.crt
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: company-ops-secrets
+                  key: GITHUB_APP_ID
+            - name: GITHUB_APP_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: company-ops-secrets
+                  key: GITHUB_APP_INSTALLATION_ID
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: company-ops-secrets
+                  key: GITHUB_APP_PRIVATE_KEY
+          ports:
+            - name: mcp
+              containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: builder-manager-token
+              mountPath: /var/run/secrets/builder-manager
+              readOnly: true
+      volumes:
+        - name: builder-manager-token
+          secret:
+            secretName: builder-manager-token
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-build-dispatcher
+  namespace: company-ops
+spec:
+  type: ClusterIP
+  selector:
+    app: hermes-build-dispatcher
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: mcp

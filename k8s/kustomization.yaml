@@ -4,10 +4,12 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - rbac.yaml
+  - builder-rbac.yaml
   - postgres.yaml
   - registry.yaml
   - browser-adversary.yaml
   - company-ops.yaml
+  - hermes-build-dispatcher.yaml
   - engineering.yaml
   - engineering-opencode.yaml
   - engineering-opencode-direct.yaml

@@ -147,20 +147,8 @@ mcp_servers:
       POSTGRES_MCP_CONNECTION_STRING: "${ANALYTICS_DATABASE_URL}"
     connect_timeout: 60
     timeout: 900
-  # opencode_manager removed: it never worked (pointed at nonexistent
-  # /opt/homely-ceo/* config dirs) and per SOUL.md was only ever "the
-  # older" fallback for when engineering_manager is down — not something
-  # Hermes should reach for directly. opencode/claude/codex only run
-  # inside the engineering container, dispatched via engineering_manager.
-  # Fixed 2026-09-19: repo manifests (k8s/company-ops.yaml, k8s/engineering.yaml)
-  # were out of sync with the live k3s cluster's actual resource names
-  # (Deployment/Service really named `hermes-gateway`/`engineering-agent`,
-  # not `company-ops`/`engineering`) — hostname "engineering" never
-  # resolved in-cluster (only in docker-compose's network, where the
-  # compose service alias happens to be literally "engineering"). Manifests
-  # renamed to match live reality; this URL now points at the real Service.
-  engineering_manager:
-    url: "http://engineering-agent:8000/mcp"
+  # Hermes has a narrow build dispatcher, not the engineering manager MCP;
+  # general repository work stays with engineering.
   browser_adversary:
     url: "http://browser-adversary:8000/mcp"
     connect_timeout: 30
@@ -191,17 +179,10 @@ mcp_servers:
     args: ["/opt/company-ops/scripts/container-manager-mcp.js"]
     connect_timeout: 30
     timeout: 300
-  # Ephemeral, rootless-BuildKit build+push — see k8s/builder-rbac.yaml for
-  # the dedicated ServiceAccount/Role this authenticates as (create/watch/
-  # delete Jobs, read pods/pods-log, create/delete only its own ephemeral
-  # git-token Secret — never Deployments, never reads back a Secret),
-  # distinct from the container_manager/k8s_deployment entries above which
-  # use the shared "company-ops" SA. connect/timeout are generous because a
-  # real build can run for several minutes; builder_build_and_push has its
-  # own internal timeout_seconds argument as the primary bound.
-  builder_manager:
-    command: "node"
-    args: ["/opt/company-ops/scripts/builder-manager-mcp.js"]
+  # Build requests go to a separate service that accepts only a pinned
+  # company-os source SHA; it has no workspace checkout or engineering tool.
+  hermes_build_dispatcher:
+    url: "http://hermes-build-dispatcher:8000/mcp"
     connect_timeout: 30
     timeout: 1800
   hive_member:
@@ -234,16 +215,16 @@ platforms:
 # inspection of the installed package + live evaluation against this exact
 # config on 2026-09-20) — a request through /v1/chat/completions otherwise
 # resolves to ONLY the static composite toolsets (browser, file, terminal,
-# memory, etc.), with none of container_manager/builder_manager/
+# memory, etc.), with none of container_manager/hermes_build_dispatcher/
 # k8s_deployment/browser_adversary reachable at all, regardless of RBAC or
 # MCP server health. This must be an explicit allowlist entry per platform;
 # "hermes-api-server" is the platform's own default composite and must stay
-# listed first so opting in these two MCP servers doesn't silently drop it.
-# Required for hermes-messenger-mcp.js's hermes_ask to be able to trigger
-# container_upgrade/builder_build_and_push at all.
+# listed first so opting in additional MCP servers doesn't silently drop it.
+# Explicitly expose a build-only dispatcher; the engineering manager remains
+# private to engineering and Hermes cannot dispatch general repository work.
 platform_toolsets:
   api_server:
     - hermes-api-server
     - container_manager
-    - builder_manager
+    - hermes_build_dispatcher
     - hive_member
