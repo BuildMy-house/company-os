@@ -1,3 +1,9 @@
+agent:
+  disabled_toolsets:
+    - code_execution
+    - file
+    - terminal
+
 model:
   # tencent/hy3:free (the original default) was discontinued by Nous
   # entirely ("This model's free period has ended") — confirmed live
