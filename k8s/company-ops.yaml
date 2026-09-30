@@ -18,7 +18,7 @@ spec:
       serviceAccountName: company-ops
       containers:
         - name: hermes-gateway
-          image: localhost:30500/company-os@sha256:cd30efaface35d067880c44fce64bf856953e730a059511d20a53b8a77e4ab45
+          image: localhost:30500/company-os@sha256:ff818b68388597e0b7118ade2a76c890fa1d5227f8c15f4e5fd508634e7c02bd
           imagePullPolicy: Always
           command: ["env", "-u", "GITHUB_APP_PRIVATE_KEY", "-u", "GITHUB_APP_PRIVATE_KEY_PATH", "-u", "GITHUB_APP_ID", "-u", "GITHUB_APP_INSTALLATION_ID", "-u", "GITHUB_TOKEN", "-u", "GH_TOKEN", "bash", "/opt/company-ops/scripts/entrypoint.sh", "hermes", "gateway", "run"]
           resources:
