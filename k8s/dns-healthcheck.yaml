@@ -8,24 +8,33 @@
 # ClientConnectorDNSError). company_ops/dns_healthcheck.py greps coredns's
 # logs for repeating `[ERROR] plugin/errors: ... i/o timeout` /
 # `dial udp [..]:53: connect: invalid argument` lines against the same
-# upstream and opens a Steward task with the evidence + one-line fix.
+# upstream, auto-remediates (see below), and opens a Steward task with the
+# evidence + what automated action was taken either way.
 #
 # Least-privilege scope, deliberately:
 #   * Role `dns-healthcheck-reader` (kube-system) grants ONLY get/list on
-#     `pods` + `pods/log` — enough to read coredns's logs once per run.
-#     No `watch` (it polls, it does not watch), no write verbs, no other
-#     resources, and NO `apps` rules at all: this ServiceAccount CANNOT
-#     patch/restart the coredns Deployment.
-#   * Remediation is intentionally NOT wired to auto-execute — this job is
-#     detect + ticket only, because auto-remediation needs a separate
-#     sign-off on approach (it is not a default to ship now). The created
-#     Steward task's description carries
-#     `kubectl rollout restart deployment/coredns -n kube-system` for a
-#     human or an already-privileged agent (e.g. Hermes via its
-#     k8s_deployment MCP) to run.
+#     `pods` + `pods/log` — enough to read coredns's logs once per run and
+#     to check the youngest coredns pod's age for the cooldown guard.
+#     No `watch` (it polls, it does not watch), no write verbs.
+#   * Role `dns-healthcheck-remediator` (kube-system) grants ONLY get+patch
+#     on the Deployment named `coredns` specifically —
+#     `resourceNames: ["coredns"]` restricts both verbs to that one object;
+#     this ServiceAccount cannot get/patch/list any other Deployment, in
+#     this or any other namespace, and has no access to any other `apps`
+#     resource (no replicasets, no statefulsets, nothing). This is the
+#     narrowest grant Kubernetes RBAC can express for "may restart this one
+#     specific Deployment and nothing else" — verified live 2026-09-28 by
+#     running `kubectl auth can-i patch deployment/coredns` AND
+#     `kubectl auth can-i patch deployment/hermes-gateway` as this exact
+#     ServiceAccount: the former is yes, the latter is no.
+#   * Explicitly authorized by the user 2026-09-28 (repeated, explicit
+#     grant) specifically for this narrow scope — not a general auto-
+#     remediation mandate. See `company_ops/dns_healthcheck.py`'s
+#     `attempt_remediation` for the patch logic and its cooldown guard.
 #   * Its own ServiceAccount (`dns-healthcheck`, company-ops) rather than the
 #     existing `company-ops` one from k8s/rbac.yaml — that Role is scoped to
-#     the company-ops namespace only, and this job reads kube-system.
+#     the company-ops namespace only, and this job reads/patches kube-system
+#     resources.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -56,6 +65,31 @@ roleRef:
   name: dns-healthcheck-reader
   apiGroup: rbac.authorization.k8s.io
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dns-healthcheck-remediator
+  namespace: kube-system
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["coredns"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dns-healthcheck-remediator
+  namespace: kube-system
+subjects:
+  - kind: ServiceAccount
+    name: dns-healthcheck
+    namespace: company-ops
+roleRef:
+  kind: Role
+  name: dns-healthcheck-remediator
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -77,7 +111,14 @@ spec:
           serviceAccountName: dns-healthcheck
           containers:
             - name: dns-healthcheck
-              image: docker.io/library/company-ops-company-ops:latest
+              # In-cluster registry image (see docs/DEPLOY-ENGINEERING.md) —
+              # built from this same repo, so it always ships whatever
+              # company_ops/dns_healthcheck.py currently contains. Not
+              # `docker.io/library/...:latest` (a local-build-only tag that
+              # was never actually pushed anywhere reachable by the
+              # cluster) — that was a bug in the original manifest, caught
+              # while wiring up auto-remediation and fixed here.
+              image: localhost:30500/company-os:dns-remediation
               imagePullPolicy: IfNotPresent
               command: ["/opt/company-ops-venv/bin/python", "-m", "company_ops.dns_healthcheck"]
               # STEWARD_TOKEN / STEWARD_URL (+ STEWARD_MCP_URL if renamed)
