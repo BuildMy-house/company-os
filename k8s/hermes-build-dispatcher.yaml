@@ -23,7 +23,7 @@ spec:
         - name: hermes-build-dispatcher
           image: localhost:30500/company-os-engineering@sha256:bfb11c5a7f782001e4a4ccd25fb7a99e31d15db02f3f89d055f5af52d528e119
           imagePullPolicy: Always
-          command: ["npx", "-y", "mcp-proxy", "--host", "0.0.0.0", "--port", "8000", "--", "env", "BUILDER_SCOPE=company-os", "node", "/opt/company-ops/scripts/builder-manager-mcp.js"]
+          command: ["npx", "-y", "mcp-proxy", "--host", "0.0.0.0", "--port", "8000", "--requestTimeout", "3600000", "--", "env", "BUILDER_SCOPE=company-os", "node", "/opt/company-ops/scripts/builder-manager-mcp.js"]
           env:
             - name: BUILDER_MANAGER_CA_PATH
               value: /var/run/secrets/builder-manager/ca.crt
