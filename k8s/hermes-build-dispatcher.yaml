@@ -21,7 +21,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: hermes-build-dispatcher
-          image: localhost:30500/company-os-engineering:buildkit-ffd6664
+          image: localhost:30500/company-os-engineering@sha256:45f164789c4fd4a2e0b0ce34833100794c8b30b868f25307f7a3f296c4bdd491
           imagePullPolicy: Always
           command: ["npx", "-y", "mcp-proxy", "--host", "0.0.0.0", "--port", "8000", "--", "env", "BUILDER_SCOPE=company-os", "node", "/opt/company-ops/scripts/builder-manager-mcp.js"]
           env:
