@@ -20,7 +20,7 @@ spec:
         - name: hermes-gateway
           image: localhost:30500/company-os:hive-member
           imagePullPolicy: Always
-          command: ["bash", "/opt/company-ops/scripts/entrypoint.sh", "hermes", "gateway", "run"]
+          command: ["env", "-u", "GITHUB_APP_PRIVATE_KEY", "-u", "GITHUB_APP_PRIVATE_KEY_PATH", "-u", "GITHUB_APP_ID", "-u", "GITHUB_APP_INSTALLATION_ID", "-u", "GITHUB_TOKEN", "-u", "GH_TOKEN", "bash", "/opt/company-ops/scripts/entrypoint.sh", "hermes", "gateway", "run"]
           resources:
             requests:
               cpu: 200m
@@ -43,9 +43,6 @@ spec:
           volumeMounts:
             - name: hermes-data
               mountPath: /opt/data
-            - name: builder-manager-token
-              mountPath: /var/run/secrets/builder-manager
-              readOnly: true
           readinessProbe:
             exec:
               command: ["pgrep", "-f", "hermes"]
@@ -61,9 +58,6 @@ spec:
         - name: hermes-data
           persistentVolumeClaim:
             claimName: hermes-data
-        - name: builder-manager-token
-          secret:
-            secretName: builder-manager-token
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

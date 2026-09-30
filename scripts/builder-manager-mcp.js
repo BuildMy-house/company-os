@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // Ephemeral, rootless-BuildKit-based build+push, without ever giving the
-// calling pod (hermes-gateway or engineering-agent) a docker socket or
-// persistent build credentials. Instead of building locally, this creates a
+// calling workload (engineering-agent, or Hermes's scoped dispatcher) a
+// docker socket or persistent registry credentials. Instead of building locally, this creates a
 // short-lived Kubernetes Job in company-ops running two containers of the
 // rootless `moby/buildkit` image — a `buildkitd` daemon (native-sidecar
 // initContainer) and a `buildctl` client (regular container), talking over
@@ -38,14 +38,10 @@
 //      real end-to-end build+push Jobs against **public** repos (a baseline
 //      single-context build with a real `RUN` step, and a named-additional-
 //      context build) — see docs/DEPLOY-ENGINEERING.md for exact evidence.
-//      A full `Dockerfile.engineering` build (which additionally needs the
-//      private-repo GitHub-App-token path below) has NOT been exercised
-//      end-to-end: the Secrets RBAC it depends on
-//      (`k8s/builder-rbac.yaml`) is still not applied to the live cluster
-//      as of this writing — see docs/DEPLOY-ENGINEERING.md's "Mechanism
-//      resolved, Dockerfile.engineering itself still blocked on Secrets
-//      RBAC" section. Do not restate this as verified until that
-//      section is updated with real end-to-end evidence.
+//      The private GitHub-App-token path has since been exercised by an
+//      in-cluster BuildKit build of the company-os image. Building
+//      Dockerfile.engineering with its private workspace named context
+//      remains a separate end-to-end verification item.
 //
 // Authenticates to the Kubernetes API as the dedicated "builder-manager"
 // ServiceAccount (k8s/builder-rbac.yaml) via a bound token mounted at
@@ -295,7 +291,19 @@ function validateTimeoutSeconds(value) {
 }
 
 const tools = [
-  {
+  process.env.BUILDER_SCOPE === "company-os" ? {
+    name: "build_company_os_image",
+    description: "Build and push the Hermes/company-os image from one immutable company-os commit using the isolated in-cluster BuildKit builder. Source repository, Dockerfile, image repository, and tag prefix are fixed by policy; this tool cannot build another repository or access an engineering workspace.",
+    inputSchema: {
+      type: "object",
+      required: ["source_sha"],
+      properties: {
+        source_sha: { type: "string", description: "Full lowercase 40-character commit SHA from BuildMy-house/company-os." },
+        timeout_seconds: { type: "number", minimum: 30, maximum: 3600, default: 900 },
+      },
+      additionalProperties: false,
+    },
+  } : {
     name: "builder_build_and_push",
     description:
       "Build a Dockerfile from a git context using an ephemeral, rootless BuildKit Job and push the result to the in-cluster registry. Never touches a docker socket, holds no persistent build credentials, and never mounts a Kubernetes API token into the build pod. Supports one or more additional NAMED build contexts (buildx's --build-context equivalent, native to plain BuildKit) — use this for Dockerfile.engineering's `COPY --from=shared ...` step, passing contexts: { shared: 'https://github.com/BuildMy-house/workspace.git#<40-hex-sha>' }. context_ref and every contexts[] value must be a bare (no embedded credentials) https:// URL pinned to a full 40-hex commit SHA, never a branch name — a moving ref can change between approval and the moment the build actually clones it. For the private BuildMy-house/* repos specifically, this tool mints its own short-lived GitHub App token and injects it via a per-build Kubernetes Secret; do not pass credentials in the URL yourself. Blocks until the build finishes (polling internally), then returns the pushed image repo:tag, or the build failure logs (secrets masked) on failure. A successful response is still a claim to verify like any other worker self-report — independently re-check the registry (e.g. registry_list_tags) before trusting it, exactly as this tool itself does internally before reporting success.",
@@ -323,6 +331,9 @@ const tools = [
     },
   },
 ];
+if (!new Set(["company-os", "engineering"]).has(process.env.BUILDER_SCOPE)) {
+  throw new Error("BUILDER_SCOPE must be explicitly set to company-os or engineering");
+}
 
 // Unix socket shared between the two containers below via an emptyDir
 // volume — never a host path, never TCP.
@@ -542,17 +553,11 @@ async function buildAndPush(args) {
 
   const allRefs = [contextRef, ...Object.values(namedContexts)];
   const needsToken = allRefs.some(needsGithubAppToken);
-  // Secure secret isolation for this path (GIT_AUTH_TOKEN confined to the
-  // buildctl container, never buildkitd) is proven by
-  // Dockerfile.buildkit-selftest-secret-isolation — see
-  // docs/DEPLOY-ENGINEERING.md. The live Secrets RBAC this path also needs
-  // (create/delete on secrets for the builder-manager ServiceAccount) is a
-  // separate, still-open item — not applied by this change, not something
-  // this script can grant itself — so createGitTokenSecret below will
-  // currently fail with a 403 from the k8s API for any real private-repo
-  // build, which is the correct, honest failure mode until that RBAC
-  // lands; see docs/DEPLOY-ENGINEERING.md's "Mechanism resolved,
-  // Dockerfile.engineering itself still blocked on Secrets RBAC".
+  // Secure secret isolation (GIT_AUTH_TOKEN confined to the buildctl
+  // container, never buildkitd) is covered by the malicious-Dockerfile
+  // self-test. The live builder-manager Role includes create/delete on
+  // ephemeral Secrets; a private company-os context build verified this
+  // path in-cluster.
 
   const jobName = `builder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const destination = `${imageRepo}:${imageTag}`;
@@ -605,7 +610,24 @@ async function buildAndPush(args) {
 }
 
 async function call(name, args) {
-  if (name === "builder_build_and_push") {
+  if (process.env.BUILDER_SCOPE === "company-os") {
+    if (name !== "build_company_os_image") throw new Error(`unknown tool: ${name}`);
+    if (Object.keys(args).some((key) => !["source_sha", "timeout_seconds"].includes(key))) {
+      throw new Error("only source_sha and timeout_seconds are accepted");
+    }
+    if (typeof args.source_sha !== "string" || !/^[0-9a-f]{40}$/.test(args.source_sha)) {
+      throw new Error("source_sha must be a full lowercase 40-character commit SHA");
+    }
+    const timeoutSeconds = args.timeout_seconds === undefined ? 900 : validateTimeoutSeconds(args.timeout_seconds);
+    return buildAndPush({
+      context_ref: `https://github.com/BuildMy-house/company-os.git#${args.source_sha}`,
+      dockerfile_path: "Dockerfile",
+      image_repo: "company-os",
+      image_tag: `hermes-${args.source_sha.slice(0, 12)}`,
+      timeout_seconds: timeoutSeconds,
+    });
+  }
+  if (process.env.BUILDER_SCOPE === "engineering" && name === "builder_build_and_push") {
     return buildAndPush(args);
   }
   throw new Error(`unknown tool: ${name}`);
@@ -615,7 +637,7 @@ const input = readline.createInterface({ input: process.stdin });
 for await (const line of input) {
   let request;
   try { request = JSON.parse(line); } catch { continue; }
-  if (request.method === "initialize") { send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: request.params?.protocolVersion || "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "builder-manager", version: "0.2.0" } } }); continue; }
+  if (request.method === "initialize") { send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: request.params?.protocolVersion || "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: process.env.BUILDER_SCOPE === "company-os" ? "hermes-build-dispatcher" : "builder-manager", version: "0.2.0" } } }); continue; }
   if (request.method === "notifications/initialized") continue;
   // See container-manager-mcp.js for the full explanation: MCP's optional "ping"
   // utility must get an immediate empty result or Hermes's keepalive probe hangs for

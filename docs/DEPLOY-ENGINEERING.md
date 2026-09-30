@@ -12,119 +12,57 @@ or Codex. It is defined by
 execs `mcp-proxy` serving the manager facade over `ai-cli-mcp`.
 
 The flavor is a build-time choice; manager versus worker is a runtime pattern,
-not a second codebase:
+not a second codebase.
 
-```bash
-# Current production flavor
-docker build -f Dockerfile.engineering --build-arg AGENT_FLAVOR=claude \
-  --build-context "shared=https://x-access-token:$(gh auth token)@github.com/BuildMy-house/workspace.git" \
-  -t localhost:30500/company-os-engineering:<tag> .
+## Production deployment
 
-# Slim OpenCode manager/workers flavor
-docker build -f Dockerfile.engineering --build-arg AGENT_FLAVOR=opencode \
-  --build-arg INSTALL_BROWSER=false \
-  --build-context "shared=https://x-access-token:$(gh auth token)@github.com/BuildMy-house/workspace.git" \
-  -t localhost:30500/company-os-engineering-opencode:<tag> .
-```
-
-Set `AGENT_FLAVOR=opencode`, `AGENT_ROLE=manager`, and
-`RUNNER_AGENT=opencode` on an OpenCode deployment. `ai-cli-mcp` remains the
-stable manager-facing dispatch service; it is not a separate worker runtime.
-
-## How it actually runs in production
-
-The container runs as a **Kubernetes Deployment** named `engineering-agent`
-in namespace `company-ops`, on a local **k3s** cluster. The kubeconfig is
-`~/.kube/config`. Set `KUBECONFIG=/home/nahar/.kube/config` explicitly before
-running `kubectl` — do not let it fall back to merging
-`/etc/rancher/k3s/k3s.yaml`, which requires root to read and produces
-permission warnings.
-
-```bash
-export KUBECONFIG=/home/nahar/.kube/config
-```
-
-Images are pulled from an **in-cluster registry** (`registry:2`), deployed
-via `k8s/registry.yaml` as a Deployment+PVC+NodePort Service in
-`company-ops`, exposed at `localhost:30500` on the node. `kubectl set image`
-triggers a normal kubelet pull from it — there is no host-level `k3s ctr`
-step and no `sudo` involved anywhere in this flow. k3s's containerd trusts
-`localhost` as insecure/loopback by default, so pushing/pulling
-`localhost:30500/...` needs no registries.yaml or containerd config either.
-
-There is **no fixed tag convention** (no `:candidate`/`:latest`/`:previous`
-alias enforced anywhere). A redeploy means building a new, uniquely-named
-tag and pointing the Deployment at it — not overwriting a shared tag. Check
-what tag is currently live at any time with:
+The container runs as the `engineering-agent` Deployment in namespace
+`company-ops`. Images come from the in-cluster registry at
+`localhost:30500`; updating a Deployment causes kubelet to pull the image.
+Check the currently deployed image with:
 
 ```bash
 kubectl get deployment engineering-agent -n company-ops \
   -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
-## Branch discipline: build from `prod`, not `main`
+## Branch discipline
 
-`main` is the integration branch — agents push verified work there directly,
-no approval needed. `prod` is the branch that represents what is actually
-allowed to run live; merging into it, and any action that deploys a new
-image from it, requires explicit user approval first. A real deploy
-therefore always builds from `prod`, never from whatever happens to be
-checked out on `main` at the moment:
+`main` is the integration branch. `prod` is the branch approved for live
+images; merging to `prod` requires explicit user approval. Build live images
+from an immutable commit on `prod`, never from an unapproved `main` commit.
 
-```bash
-git checkout prod
-# or, if staying on another branch, confirm it matches prod's tip first:
-git rev-parse HEAD
-git rev-parse origin/prod
+## Build images through BuildKit
+
+Every ongoing image build uses `builder_build_and_push` from the engineering
+manager. It starts a rootless BuildKit Job in k3s outside the agent container;
+never run a build inside an agent container or use a host Docker build as the
+routine path. For `Dockerfile.engineering`, pin both the company-os source and
+the private workspace named context:
+
+```json
+{
+  "context_ref": "https://github.com/BuildMy-house/company-os.git#<prod-commit-sha>",
+  "dockerfile_path": "Dockerfile.engineering",
+  "contexts": { "shared": "https://github.com/BuildMy-house/workspace.git#<workspace-commit-sha>" },
+  "image_repo": "company-os-engineering",
+  "image_tag": "engineering-<source-short-sha>",
+  "build_args": { "AGENT_FLAVOR": "claude" }
+}
 ```
 
-Only proceed with the build below once the checkout you're building from is
-`prod`'s current tip (or bail and ask for the `main`→`prod` merge to be
-approved first). Building from `main` directly skips the approval gate this
-branch split exists to enforce.
-
-## Build context: `Dockerfile.engineering` pulls from the private `workspace` repo
-
-`Dockerfile.engineering` uses a `docker buildx` **git-URL build context**
-(requires Docker 23+/buildx) named `shared` to pull the canonical
-`agent-manager.md` and related files from the separate private
-`BuildMy-house/workspace` GitHub repo at build time. This replaced an older
-approach that used local-directory build contexts
-(`--build-context manager-def=../.claude/agents --build-context
-skills-src=../.agents/skills`) assuming a now-removed monorepo layout — that
-layout no longer exists.
-
-Because `workspace` is private, the git URL must carry an authenticated
-token, e.g. a GitHub token from `gh auth token`:
-
-```bash
-docker build -f Dockerfile.engineering \
-  --build-context "shared=https://x-access-token:$(gh auth token)@github.com/BuildMy-house/workspace.git" \
-  -t localhost:30500/company-os-engineering:<tag> .
-```
-
-Pick `<tag>` as something unique and traceable (e.g. a date or short git
-SHA) — it does not need to follow any reserved name.
-
-## Push to the registry
-
-```bash
-docker push localhost:30500/company-os-engineering:<tag>
-```
+For a slim OpenCode image, also set `INSTALL_BROWSER=false` and use the
+`company-os-engineering-opencode` image repository. Source refs must be full
+commit SHAs with no token embedded in the URL; the builder mints its own
+short-lived GitHub App token for private contexts. It verifies the pushed tag
+in the registry before returning success.
 
 ## Deploy
 
-Point the running Deployment at the newly-pushed tag:
-
-```bash
-kubectl set image deployment/engineering-agent \
-  engineering-agent=localhost:30500/company-os-engineering:<tag> \
-  -n company-ops
-kubectl rollout status deployment/engineering-agent -n company-ops
-```
-
-`kubectl rollout status` blocks until the new pod is healthy and ready, or
-reports the rollout failure.
+After confirming the tag exists and checking the current deployment health,
+point the Deployment at the new image with the authorized deployment tool or
+an administrator's Kubernetes workflow. Wait for rollout readiness, then check
+health again. Keep the previous known-good image available for rollback.
 
 ## Rollback
 
@@ -167,18 +105,25 @@ kubectl exec -n company-ops deployment/registry -- registry garbage-collect /etc
 
 ## Agent-triggered build+push: `builder-manager` (rootless BuildKit Job), no docker socket anywhere
 
-Everything above this section describes a human/CI running `docker build`/
-`docker push` from a workstation. `scripts/builder-manager-mcp.js` gives
-Hermes/the engineering-agent a way to trigger the same kind of build+push
+The engineering manager calls this tool for routine builds. `scripts/builder-manager-mcp.js` gives the engineering-agent a way to trigger
+the same kind of build+push
 **from inside a k3s pod**, without ever handing that pod a docker socket or
 persistent registry credentials — the actual boundary this whole build
 pipeline exists to keep:
 
-- The engineering-agent pod and the hermes-gateway pod never hold a docker
-  socket, `k3s ctr` access, `sudo`, or long-lived push credentials. All they
-  can do is ask the Kubernetes API to create a **Job**.
+- The engineering-agent and Hermes build-dispatcher pods never hold a docker
+  socket, `k3s ctr` access, `sudo`, or registry push credentials. They can
+  only ask the Kubernetes API to create an isolated **Job**.
 - `builder_build_and_push(context_ref, dockerfile_path, image_repo,
-  image_tag, contexts?, build_args?)` creates a short-lived Job in
+  image_tag, contexts?, build_args?)` is exposed only to engineering. Hermes
+  uses `build_company_os_image(source_sha)` through the separate
+  `hermes-build-dispatcher` Service, which hard-codes the company-os repo,
+  root Dockerfile, `company-os` image repo, and `hermes-<12-char-sha>` tag.
+  It cannot read or edit source, build other repositories, or deploy. The
+  Hermes processes receive no GitHub App credentials and the Hermes pod has
+  no builder-token mount; the dispatcher runs under the dedicated
+  builder-manager ServiceAccount with no workspace checkout. The generic
+  call creates a short-lived Job in
   `company-ops` running **two containers** of the rootless `moby/buildkit`
   image (pinned by digest): a `buildkitd` daemon (a native-sidecar
   `initContainer`, Kubernetes >=1.29 — confirmed on this cluster, v1.36) and
@@ -219,7 +164,7 @@ pipeline exists to keep:
   `Dockerfile.buildkit-selftest-secret-isolation`) and need only
   `company-os`'s own public read access — this decouples verifying the
   BuildKit mechanism itself from the GitHub-App-token/Secrets-RBAC path
-  below, which is separately still blocked. See "Secret-isolation
+  below; the private company-os image build has now exercised that path. See "Secret-isolation
   self-test" below for the exact re-run of these fixtures under the current
   two-container Job design and its result.
 - The Job pod itself runs with `automountServiceAccountToken: false` — it
@@ -234,10 +179,9 @@ pipeline exists to keep:
   the last one added for the ephemeral per-build git-token Secret described
   below; it still cannot read any Secret, including ones it creates itself,
   back out. It cannot touch Deployments at all. This SA's bound token is
-  mounted at a distinct path (`/var/run/secrets/builder-manager/token`, via
-  a Secret + volume added to both the `hermes-gateway` and
-  `engineering-agent` Deployments), separate from the pod's default
-  in-cluster SA token path.
+  mounted at `/var/run/secrets/builder-manager/token` in the
+  `engineering-agent` and the separate `hermes-build-dispatcher` workload.
+  Hermes itself has no builder-token mount.
 - The tool polls the Job to completion, fetches the BuildKit pod's logs on
   either outcome (masking any injected git token before returning them —
   see "Named build contexts" below), deletes the Job (best-effort;
@@ -245,20 +189,12 @@ pipeline exists to keep:
   delete call itself fails), and independently confirms the pushed tag
   actually exists in the registry (`GET /v2/<repo>/tags/list`) before
   reporting success — it does not just trust BuildKit's own exit status.
-- Wired into `scripts/generate-agent-mcp-config.js` for both Hermes and
-  Claude's engineering-manager, and registered directly in
-  `hermes/config.yaml` as `builder_manager`. It has its own gate, separate
-  from `container-manager`/`registry-manager`/`hermes-messenger`'s generic
-  "are we running in this k3s Deployment at all" check: it only gets
-  advertised when **both** `/var/run/secrets/builder-manager/token` exists
-  **and** `scripts/builder-manager-mcp.js` is actually present in the
-  image. A runner must never advertise a tool it cannot launch — see
-  "Each runner only advertises tools it can launch" below for why that
-  second half of the check exists. Unlike
-  `container-manager`/`registry-manager`/`hermes-messenger`, it is **not**
-  added to the OpenCode skip-list in `generate-agent-mcp-config.js` — its
-  own RBAC is already narrow enough that OpenCode workers dispatched from
-  engineering-manager can safely trigger builds too.
+- Wired into `scripts/generate-agent-mcp-config.js` for engineering runners.
+  Hermes instead receives only the separate `build_company_os_image` tool
+  from `hermes-build-dispatcher`; it cannot call the generic builder or the
+  engineering-manager MCP. The dispatcher enforces a fixed private repo,
+  root Dockerfile, image repository, and SHA-derived tag at runtime.
+
 
 ### Named build contexts and git credential handling
 
@@ -417,59 +353,38 @@ Cross-checked every other script `generate-agent-mcp-config.js` and
 `hermes/config.yaml` reference against `Dockerfile.engineering`'s `COPY`
 list after this fix — no further gaps found as of this commit.
 
-### Required live setup before this can actually build anything
+### Deploying the Hermes-scoped build dispatcher
 
-`k8s/builder-rbac.yaml` (the ServiceAccount/Role/RoleBinding/token Secret)
-and the two Deployment volume-mount changes must be applied to the live
-cluster, and the affected Deployments restarted to pick up the new volume
-mounts, before `builder_build_and_push` can authenticate at all:
+The live `builder-manager` Role now includes only the Job/pod/log and
+per-build Secret permissions needed by BuildKit. Hermes does not mount its
+token or receive the generic builder tool. Its build-only Service runs in a
+separate pod with `automountServiceAccountToken: false`, the dedicated bound
+builder token/CA, and only the three GitHub App fields needed to fetch the
+fixed `BuildMy-house/company-os` source context. The app key is stripped from
+the Hermes startup environment, and Hermes uses the SOUL.md baked into its
+image instead of pulling a repository at runtime.
 
-```bash
-kubectl apply -f k8s/builder-rbac.yaml
-kubectl apply -f k8s/company-ops.yaml
-kubectl apply -f k8s/engineering.yaml
-kubectl -n company-ops rollout restart deployment hermes-gateway
-kubectl -n company-ops rollout restart deployment engineering-agent
-kubectl -n company-ops rollout status deployment hermes-gateway
-kubectl -n company-ops rollout status deployment engineering-agent
-```
+For changes to this boundary, deploy in this order:
 
-**Confirmed live 2026-09-29** (from inside the running `engineering-agent`
-pod, via `SelfSubjectAccessReview` probes as the `builder-manager` SA —
-`kubectl` itself is not available there): `/var/run/secrets/builder-manager/token`
-is mounted in this pod. Its Role currently grants exactly
-`create`/`get`/`list`/`watch`/`delete` on `jobs.batch` and `get`/`list`/
-`watch` on `pods`/`pods/log` — confirmed all `true`. **`secrets: ["create",
-"delete"]` (this change's addition to `k8s/builder-rbac.yaml`) is NOT yet
-applied** — `SelfSubjectAccessReview` for `create`/`delete`/`get`/`list` on
-`secrets` all came back `false`. The Jobs/pods-log portion of the RBAC was
-also independently exercised end-to-end with two real BuildKit build+push
-runs (see the "rootless BuildKit runs here" bullet above) — that part of
-the mechanism is proven, not just RBAC-probed. The Secrets addition itself
-has not been applied to the live cluster and this pod has no way to apply
-it (no `kubectl`, and the default `company-ops` SA was separately confirmed
-to lack `get`/`patch`/`update` on `roles`/`rolebindings` — this pod cannot
-self-escalate its own RBAC, by design). Applying it is an out-of-pod
-action for whoever administers this cluster. `git status` confirms
-`scripts/builder-manager-mcp.js` was absent from the image running at the
-time of writing (a prior gap now closed in source by this change) — a new
-image build+push+`container_upgrade` is still required for the running
-container to pick it up, in addition to the Secrets RBAC being applied.
+1. Promote the reviewed source commit to `prod`.
+2. Build and push a new `company-os-engineering` image through the existing
+   engineering BuildKit tool, using `Dockerfile.engineering` plus its pinned
+   named `workspace` context; update the dispatcher manifest to that image.
+3. Build the Hermes image from the same pinned `company-os` commit with the
+   engineering BuildKit tool.
+4. Apply `k8s/hermes-build-dispatcher.yaml` and `k8s/company-ops.yaml`, then
+   roll out `hermes-build-dispatcher` and `hermes-gateway`.
+5. Verify the Hermes API tool list contains `build_company_os_image` and does
+   not contain `engineering` or `builder_build_and_push`; verify an invalid
+   SHA and any extra source/image arguments are rejected without a BuildKit
+   Job being created.
 
-```bash
-kubectl -n company-ops auth can-i create jobs.batch \
-  --as=system:serviceaccount:company-ops:builder-manager   # expect yes
-kubectl -n company-ops get secret builder-manager-token     # expect a populated token key
-```
+### Named-context build of `Dockerfile.engineering`
 
-### Mechanism resolved, `Dockerfile.engineering` itself still blocked on Secrets RBAC
-
-**The previous documented gap — the builder having no equivalent of
-buildx's named additional build context — is closed in source and verified
-live 2026-09-29**, but only against a public repo (see the "rootless
-BuildKit runs here" bullet above); building this actual Dockerfile is a
-separate, still-open item because it additionally needs the
-GitHub-App-token/Secrets-RBAC path below, which is not yet live.
+The builder supports named additional contexts and its private GitHub App
+token path. The private company-os image build has been verified; an
+end-to-end in-cluster build of this Dockerfile plus its private workspace
+context remains a separate verification item.
 
 `Dockerfile.engineering`'s `COPY --from=shared .agents/agent-manager.md ...`
 step (see "Build context" above) depends on a **named additional build
@@ -479,8 +394,7 @@ shared=<url>` uses. The previous Kaniko-based builder accepted exactly one
 named context. The current rootless-BuildKit-based builder
 (`scripts/builder-manager-mcp.js`) natively supports this via
 `buildctl`'s own `--opt context:<name>=<url>` — no buildx wrapper needed,
-it's a plain BuildKit dockerfile.v0 frontend feature. Once the Secrets RBAC
-below is applied, the call shape will be:
+it's a plain BuildKit dockerfile.v0 frontend feature. The engineering-only call shape is:
 
 ```json
 {
@@ -497,36 +411,18 @@ for both private `BuildMy-house/*` repos (`company-os` and `workspace`
 share one installation) — see "Named build contexts and git credential
 handling" above. Do not pass credentials in either URL yourself.
 
-**Precise current blocker**: this depends on `builder-manager-mcp.js`
-creating a per-build Kubernetes Secret to deliver that token to the Job
-pod, which needs `create`/`delete` on `secrets` in `company-ops` for the
-`builder-manager` ServiceAccount. That RBAC addition
-(`k8s/builder-rbac.yaml`, this change) is **not yet applied to the live
-cluster** — confirmed via `SelfSubjectAccessReview` (see above). This pod
-cannot apply it itself (no `kubectl`, no RBAC-admin permission on any SA it
-holds a token for — a pod being unable to grant itself more permission is
-the intended security boundary, not a bug to route around). **Minimal
-secure next step**: apply the already-narrowly-scoped
-`k8s/builder-rbac.yaml` `secrets: ["create", "delete"]` addition to the
-live cluster from a host with `kubectl`/cluster-admin access; do not
-substitute a broader grant, and do not fall back to Kaniko or a
-privileged/root build as a workaround. Once applied, this Dockerfile
-(and any other private-repo build) can be exercised end-to-end and this
-section updated with real evidence — not before.
+The `builder-manager` Role now grants the required `create`/`delete`
+permissions for per-build Secrets. The generic build path is available from
+the engineering pod; Hermes cannot request this Dockerfile or the workspace
+context through its fixed company-os-only dispatcher.
 
-### Cross-repo note: canonical agent-manager instructions are stale on this point
+The canonical agent-manager instructions live in the separate private
+`BuildMy-house/workspace` repo. Keep them clear that engineering agents use
+the generic BuildKit tool for scoped engineering work, while Hermes receives
+only the fixed company-os image builder. Do not grant Hermes the generic
+engineering-manager or builder tools.
 
-The canonical `.agents/agent-manager.md` (in the separate, private
-`BuildMy-house/workspace` repo — company-os cannot edit it) states flatly
-that in-pod builds are impossible and that OpenCode workers never get a
-builder capability. Both statements predate `builder-manager-mcp.js`'s
-BuildKit-Job design, which was built specifically to make a safe in-pod
-build+push possible without a docker socket, and which is deliberately
-**not** on the OpenCode skip-list (see above) because its RBAC is already
-narrow enough to be safe there. Flag this to whoever next edits the
-canonical file upstream; it is out of scope for this repo to fix.
-
-### When/how to call `builder_build_and_push`
+### When/how engineering should call `builder_build_and_push`
 
 - **Only from an approved, immutable Git revision** — pin `context_ref`
   to a specific commit SHA (`https://github.com/BuildMy-house/company-os.git#<sha>`),
@@ -534,16 +430,14 @@ canonical file upstream; it is out of scope for this repo to fix.
   move between the moment it's reviewed/approved and the moment BuildKit
   actually clones it; a SHA can't. Resolve the SHA you intend to build
   (`git rev-parse HEAD` on the checkout you just verified) and use that.
-- **`dockerfile_path`** is relative to that same context — `Dockerfile`
-  for the Hermes image, `Dockerfile.engineering` for this one (pass
-  `contexts: { shared: "...#<sha>" }` alongside it — see "Named build
-  contexts" above).
+- **`dockerfile_path`** is relative to the context. Use the exact Dockerfile
+  required by the engineering image and include each immutable named context
+  it references.
 - **`contexts`/`build_args`** are optional; every `contexts` value follows
   the same immutable-SHA-pinning rule as `context_ref`.
-- **`image_repo`/`image_tag`**: pick something unique and traceable (a
-  date or the short SHA you built from), same convention as the manual
-  `docker build` path above — there is no fixed `:candidate`/`:latest`
-  alias.
+- **`image_repo`/`image_tag`**: use a unique, traceable tag (such as a date
+  or the source short SHA); do not overwrite shared `:candidate` or
+  `:latest` aliases.
 - The call blocks until the Job finishes (or `timeout_seconds` elapses)
   and independently re-confirms the tag landed in the registry before
   reporting success — but still treat a "success" response as a claim to
@@ -552,7 +446,7 @@ canonical file upstream; it is out of scope for this repo to fix.
 
 ### When/how to call `container_upgrade`
 
-- **Only after** a `builder_build_and_push` (or manual `docker push`) call
+- **Only after** a `builder_build_and_push` call
   has already independently confirmed the target tag exists in the
   registry — never point a Deployment at a tag you haven't confirmed was
   actually pushed.

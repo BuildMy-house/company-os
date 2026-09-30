@@ -12,8 +12,8 @@ RUN apt-get update \
 
 # opencode intentionally NOT installed here — Hermes never invokes opencode
 # directly (721MB saved); coding work is dispatched to the `engineering`
-# container via the engineering_manager MCP, whose ai-cli-mcp router is the
-# only place opencode/claude/codex actually run. Browser automation (via
+# engineering team owns source work and repository access. Hermes only gets a
+# narrowly-scoped BuildKit image-build tool. Browser automation (via
 # hermes-agent's bundled Playwright/Chromium below) stays — Hermes uses it
 # to interact with buildmyhouse directly.
 

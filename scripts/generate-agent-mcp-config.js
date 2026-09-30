@@ -155,7 +155,7 @@ function buildServers() {
     servers['builder-manager'] = {
       kind: 'stdio',
       command: ['node', BUILDER_MANAGER_SCRIPT_PATH],
-      environment: null,
+      environment: { BUILDER_SCOPE: 'engineering' },
     };
   } else if (hasBuilderManagerToken && !hasBuilderManagerScript) {
     console.error(`[generate-agent-mcp-config] WARN: builder-manager-token present but ${BUILDER_MANAGER_SCRIPT_PATH} is missing from this image; not advertising builder-manager`);

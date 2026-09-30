@@ -16,14 +16,11 @@
 # network access to the git remote and the in-cluster registry, never the
 # Kubernetes API.
 #
-# builder-manager-mcp.js (running as a subprocess inside hermes-gateway or
-# engineering-agent, both of which are already assigned the "company-ops"
-# SA at the pod level) authenticates as THIS SA instead via a separately
-# mounted bound token — see the "builder-manager-token" volume added to
-# those Deployments in company-ops.yaml/engineering.yaml, mounted at
-# /var/run/secrets/builder-manager/token (distinct from the pod's default
-# /var/run/secrets/kubernetes.io/serviceaccount/token path, which stays
-# the "company-ops" SA's token for every other MCP tool in the same pod).
+# The generic builder runs in engineering-agent; Hermes reaches a separate
+# builder-manager workload that exposes only its fixed company-os build tool.
+# Both use this SA's bound token at /var/run/secrets/builder-manager/token.
+# The Hermes builder pod disables automatic SA-token mounting and has no
+# company-ops credentials or workspace checkout.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -63,7 +60,7 @@ roleRef:
 # Legacy-style bound Secret token for the builder-manager SA — annotating a
 # Secret with kubernetes.io/service-account.name makes the token controller
 # populate .data.token/.data.ca.crt automatically once this is applied.
-# Mounted into hermes-gateway/engineering-agent as an extra volume so
+# Mounted into engineering-agent and hermes-build-dispatcher so
 # builder-manager-mcp.js can read a token scoped to THIS Role, without
 # changing either Deployment's primary serviceAccountName (which stays
 # "company-ops" for every other MCP tool already running in those pods).
