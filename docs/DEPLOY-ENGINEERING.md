@@ -135,7 +135,10 @@ pipeline exists to keep:
   `https://github.com/BuildMy-house/company-os.git#<40-hex-sha>` — a full
   commit SHA is required, a mutable branch name like `#main` is rejected)
   and pushes straight to `registry.company-ops.svc.cluster.local:5000` — no
-  docker daemon involved on either end. Optional `contexts: { <name>: <url>
+  docker daemon involved on either end. It returns the `localhost:30500`
+  NodePort image ref for Deployment use because kubelet/containerd cannot
+  resolve the in-cluster registry DNS name from the node. Optional
+  `contexts: { <name>: <url>
   }` adds **named additional build contexts** (the same primitive
   `docker buildx build --build-context` uses, native to plain BuildKit's
   dockerfile.v0 frontend) — this is what makes `Dockerfile.engineering`
@@ -459,27 +462,25 @@ engineering-manager or builder tools.
   Always inspect its `rollout` and `rollback` results and call
   `container_health` afterward; if the rollback itself is unhealthy, escalate
   with the recorded previous image.
-- For company-os's own self-modification (the `engineering-agent`/
-  `engineering-opencode`/`engineering-opencode-direct` Deployments), this
-  is still subject to the higher bar in `hermes/SOUL.md`: build a
-  distinctly-tagged candidate with BuildKit, independently confirm its
-  registry digest, then call `container_test(image, template_deployment)` for
-  the matching engineering Deployment and inspect its readiness/logs. The
-  test pod copies non-secret runtime settings and readiness probes but has no
-  Hive registration, Kubernetes API token, or injected Secret values. Its
-  readiness check verifies startup without production credentials. The optional
-  local `scripts/test-engineering-container.sh <image-ref>` tests an already
-  built image; it never builds one.
+- The candidate-and-handoff path applies to all agent images: `hermes-gateway`,
+  the three engineering Deployments, and `browser-adversary`. Build the
+  matching Dockerfile with BuildKit (Hermes through the fixed
+  `build_company_os_image` dispatcher; engineering and browser-adversary
+  through the engineering-only builder). Test with
+  `container_test(image, template_deployment)` using the matching Deployment,
+  inspect readiness/logs, and remove the temporary test Deployment. Candidate
+  pods retain non-secret settings and readiness probes, strip Secret values,
+  Hive registration and Kubernetes/builder credentials, and use empty temporary
+  storage instead of production persistent volumes.
 
-  **Never use the engineering pod to upgrade its own Deployment.** Its
-  `Recreate` strategy stops the old pod, so the caller can disappear before
-  observing the result. Save the task checkpoint and verification evidence,
-  then—only after the required Board approval—handoff the immutable image
-  digest and explicit deploy/health/rollback instruction to Hermes with
-  `hermes_ask`. Hermes runs in a separate Deployment and can finish the
-  rollout check or invoke the automatic rollback after the engineering pod
-  has been replaced. Expect a short service interruption: the engineering
-  Deployment has one replica and uses `Recreate`.
+  **A running agent must never upgrade its own Deployment.** After saving the
+  task checkpoint and evidence, obtain the required Board approval and hand
+  the immutable image ref, source SHA, and explicit health/rollback instruction
+  to a separate manager with `hermes_ask`. Hermes can upgrade engineering and
+  browser-adversary; an engineering manager can upgrade Hermes. That surviving
+  manager waits for readiness and can complete automatic rollback after the
+  old pod is stopped. All these Deployments use one replica with `Recreate`,
+  so expect a short service interruption.
 
 ### `builder-manager` cannot mutate any deployment
 

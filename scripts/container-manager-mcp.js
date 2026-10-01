@@ -88,14 +88,18 @@ function candidateTemplate(source, name, image, containerName) {
   selected.imagePullPolicy = "Always";
   // Keep non-secret runtime config/probes, but don't register or authorize a second worker.
   const secretVolumes = new Set((template.spec.volumes || []).filter((volume) => volume.secret || volume.projected).map((volume) => volume.name));
+  const hostVolumes = new Set((template.spec.volumes || []).filter((volume) => volume.hostPath).map((volume) => volume.name));
+  template.spec.volumes = (template.spec.volumes || []).flatMap((volume) => {
+    if (secretVolumes.has(volume.name) || hostVolumes.has(volume.name)) return [];
+    return volume.persistentVolumeClaim ? [{ name: volume.name, emptyDir: {} }] : [volume];
+  });
   for (const container of template.spec.containers) {
     container.env = (container.env || []).filter((entry) => !["HIVE_URL", "HIVE_AGENT_ID"].includes(entry.name) && !entry.valueFrom?.secretKeyRef);
     container.envFrom = (container.envFrom || []).filter((source) => !source.secretRef);
-    container.volumeMounts = (container.volumeMounts || []).filter((mount) => !secretVolumes.has(mount.name));
+    container.volumeMounts = (container.volumeMounts || []).filter((mount) => !secretVolumes.has(mount.name) && !hostVolumes.has(mount.name));
   }
   template.spec.serviceAccountName = "default";
   template.spec.automountServiceAccountToken = false;
-  template.spec.volumes = (template.spec.volumes || []).filter((volume) => !secretVolumes.has(volume.name));
   return template;
 }
 
@@ -106,7 +110,7 @@ const tools = [
   { name: "container_upgrade", description: "Change a local deployment to a pullable image and wait for readiness; restore the recorded previous image if rollout fails or times out. For self-upgrades, use an independent manager that survives the target pod restart.", inputSchema: { type: "object", required: ["deployment", "image"], properties: { deployment: { type: "string" }, image: { type: "string" }, container: { type: "string", default: "" }, timeout_seconds: { type: "integer", minimum: 30, maximum: 900, default: 300 } }, additionalProperties: false } },
   { name: "container_restart", description: "Restart one local deployment without changing its image.", inputSchema: { type: "object", required: ["deployment"], properties: { deployment: { type: "string" } }, additionalProperties: false } },
   { name: "container_rollback", description: "Roll one local deployment back to the image saved by its last container_upgrade and wait for readiness.", inputSchema: { type: "object", required: ["deployment"], properties: { deployment: { type: "string" } }, additionalProperties: false } },
-  { name: "container_test", description: "Start an isolated temporary test deployment from a pullable image. Set template_deployment to copy an existing deployment's runtime config and readiness probes.", inputSchema: { type: "object", required: ["image"], properties: { image: { type: "string" }, template_deployment: { type: "string", enum: ["engineering-agent", "engineering-opencode", "engineering-opencode-direct"] }, container: { type: "string", default: "" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 300, default: 300 } }, additionalProperties: false } },
+  { name: "container_test", description: "Start an isolated temporary test deployment from a pullable image. Set template_deployment to copy an agent deployment's non-secret runtime config and readiness probes while isolating persistent data.", inputSchema: { type: "object", required: ["image"], properties: { image: { type: "string" }, template_deployment: { type: "string", enum: ["engineering-agent", "engineering-opencode", "engineering-opencode-direct", "hermes-gateway", "browser-adversary"] }, container: { type: "string", default: "" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 300, default: 300 } }, additionalProperties: false } },
   { name: "container_remove_test", description: "Remove an isolated test deployment created by container_test.", inputSchema: { type: "object", required: ["deployment"], properties: { deployment: { type: "string", pattern: "^test-[a-z0-9-]+$" } }, additionalProperties: false } },
 ];
 
@@ -142,7 +146,7 @@ async function testDeployment(image, timeoutSeconds, templateName, containerName
   const name = `test-${suffix}`;
   let template;
   if (templateName) {
-    if (!["engineering-agent", "engineering-opencode", "engineering-opencode-direct"].includes(templateName)) throw new Error("unsupported template deployment");
+    if (!["engineering-agent", "engineering-opencode", "engineering-opencode-direct", "hermes-gateway", "browser-adversary"].includes(templateName)) throw new Error("unsupported template deployment");
     const source = await deployment(templateName);
     template = candidateTemplate(source.spec.template, name, image, containerName);
   } else {
@@ -200,16 +204,16 @@ function selfTest() {
     metadata: { labels: { app: "engineering-agent" } },
     spec: {
       serviceAccountName: "company-ops",
-      volumes: [{ name: "builder-manager-token", secret: {} }, { name: "agent-home", emptyDir: {} }],
-      containers: [{ name: "engineering-agent", image: "old", env: [{ name: "HIVE_URL" }, { name: "API_KEY" }, { name: "SECRET", valueFrom: { secretKeyRef: { name: "company-ops-secrets", key: "TOKEN" } } }], envFrom: [{ secretRef: { name: "company-ops-secrets" } }, { configMapRef: { name: "agent-config" } }], volumeMounts: [{ name: "builder-manager-token" }, { name: "agent-home" }], readinessProbe: { tcpSocket: { port: 8000 } } }],
+      volumes: [{ name: "builder-manager-token", secret: {} }, { name: "agent-home", emptyDir: {} }, { name: "hermes-data", persistentVolumeClaim: { claimName: "hermes-data" } }, { name: "host", hostPath: { path: "/tmp" } }],
+      containers: [{ name: "engineering-agent", image: "old", env: [{ name: "HIVE_URL" }, { name: "API_KEY" }, { name: "SECRET", valueFrom: { secretKeyRef: { name: "company-ops-secrets", key: "TOKEN" } } }], envFrom: [{ secretRef: { name: "company-ops-secrets" } }, { configMapRef: { name: "agent-config" } }], volumeMounts: [{ name: "builder-manager-token" }, { name: "agent-home" }, { name: "hermes-data", mountPath: "/opt/data" }, { name: "host", mountPath: "/host" }], readinessProbe: { tcpSocket: { port: 8000 } } }],
     },
   }, "test-candidate", "registry/candidate@sha256:abc", "engineering-agent");
   assert.equal(candidate.spec.containers[0].image, "registry/candidate@sha256:abc");
   assert.deepEqual(candidate.spec.containers[0].readinessProbe, { tcpSocket: { port: 8000 } });
   assert.deepEqual(candidate.spec.containers[0].env.map(({ name }) => name), ["API_KEY"]);
   assert.deepEqual(candidate.spec.containers[0].envFrom, [{ configMapRef: { name: "agent-config" } }]);
-  assert.deepEqual(candidate.spec.containers[0].volumeMounts.map(({ name }) => name), ["agent-home"]);
-  assert.deepEqual(candidate.spec.volumes.map(({ name }) => name), ["agent-home"]);
+  assert.deepEqual(candidate.spec.containers[0].volumeMounts.map(({ name }) => name), ["agent-home", "hermes-data"]);
+  assert.deepEqual(candidate.spec.volumes, [{ name: "agent-home", emptyDir: {} }, { name: "hermes-data", emptyDir: {} }]);
   assert.equal(candidate.spec.serviceAccountName, "default");
   assert.equal(candidate.spec.automountServiceAccountToken, false);
   assert.equal(rolloutReady({ spec: { replicas: 1 }, status: { observedGeneration: 2, updatedReplicas: 1, readyReplicas: 1, availableReplicas: 1 } }, 2), true);

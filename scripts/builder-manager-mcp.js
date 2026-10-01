@@ -203,6 +203,21 @@ function registryHasTag(repo, tag) {
   });
 }
 
+function registryManifestDigest(repo, tag) {
+  return new Promise((resolve) => {
+    const request = http.request(`http://${REGISTRY_HOST}:${REGISTRY_PORT}/v2/${repo}/manifests/${tag}`, {
+      method: "HEAD",
+      headers: { Accept: "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" },
+    }, (response) => {
+      const digest = response.headers["docker-content-digest"];
+      resolve((response.statusCode || 500) < 400 && /^sha256:[0-9a-f]{64}$/.test(digest || "") ? digest : null);
+      response.resume();
+    });
+    request.on("error", () => resolve(null));
+    request.end();
+  });
+}
+
 function text(id, value) {
   return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] } };
 }
@@ -293,7 +308,7 @@ function validateTimeoutSeconds(value) {
 const tools = [
   process.env.BUILDER_SCOPE === "company-os" ? {
     name: "build_company_os_image",
-    description: "Build and push the Hermes/company-os image from one immutable company-os commit using the isolated in-cluster BuildKit builder. Source repository, Dockerfile, image repository, and tag prefix are fixed by policy; this tool cannot build another repository or access an engineering workspace.",
+    description: "Build and push the Hermes/company-os image from one immutable company-os commit using the isolated in-cluster BuildKit builder. Returns a node-pullable localhost:30500 image reference pinned by registry digest. Source repository, Dockerfile, image repository, and tag prefix are fixed by policy; this tool cannot build another repository or access an engineering workspace.",
     inputSchema: {
       type: "object",
       required: ["source_sha"],
@@ -306,7 +321,7 @@ const tools = [
   } : {
     name: "builder_build_and_push",
     description:
-      "Build a Dockerfile from a git context using an ephemeral, rootless BuildKit Job and push the result to the in-cluster registry. Never touches a docker socket, holds no persistent build credentials, and never mounts a Kubernetes API token into the build pod. Supports one or more additional NAMED build contexts (buildx's --build-context equivalent, native to plain BuildKit) — use this for Dockerfile.engineering's `COPY --from=shared ...` step, passing contexts: { shared: 'https://github.com/BuildMy-house/workspace.git#<40-hex-sha>' }. context_ref and every contexts[] value must be a bare (no embedded credentials) https:// URL pinned to a full 40-hex commit SHA, never a branch name — a moving ref can change between approval and the moment the build actually clones it. For the private BuildMy-house/* repos specifically, this tool mints its own short-lived GitHub App token and injects it via a per-build Kubernetes Secret; do not pass credentials in the URL yourself. Blocks until the build finishes (polling internally), then returns the pushed image repo:tag, or the build failure logs (secrets masked) on failure. A successful response is still a claim to verify like any other worker self-report — independently re-check the registry (e.g. registry_list_tags) before trusting it, exactly as this tool itself does internally before reporting success.",
+      "Build a Dockerfile from a git context using an ephemeral, rootless BuildKit Job and push the result to the in-cluster registry. Never touches a docker socket, holds no persistent build credentials, and never mounts a Kubernetes API token into the build pod. Supports one or more additional NAMED build contexts (buildx's --build-context equivalent, native to plain BuildKit) — use this for Dockerfile.engineering's `COPY --from=shared ...` step, passing contexts: { shared: 'https://github.com/BuildMy-house/workspace.git#<40-hex-sha>' }. context_ref and every contexts[] value must be a bare (no embedded credentials) https:// URL pinned to a full 40-hex commit SHA, never a branch name — a moving ref can change between approval and the moment the build actually clones it. For the private BuildMy-house/* repos specifically, this tool mints its own short-lived GitHub App token and injects it via a per-build Kubernetes Secret; do not pass credentials in the URL yourself. Blocks until the build finishes (polling internally), verifies the registry tag and manifest digest, then returns a node-pullable localhost:30500 image reference pinned by digest, or the build failure logs (secrets masked) on failure.",
     inputSchema: {
       type: "object",
       required: ["context_ref", "dockerfile_path", "image_repo", "image_tag"],
@@ -596,8 +611,12 @@ async function buildAndPush(args) {
     if (!pushed) {
       throw new Error(`builder Job ${jobName} reported success but ${destination} is not visible in the registry yet. Logs:\n${logs}`);
     }
+    const digest = await registryManifestDigest(imageRepo, imageTag);
+    if (!digest) throw new Error(`builder Job ${jobName} pushed ${destination} but its immutable manifest digest could not be verified`);
 
-    return { job: jobName, image: `${REGISTRY_HOST}:${REGISTRY_PORT}/${destination}`, pushed: true };
+    // BuildKit pushes through the in-cluster DNS name, but kubelet pulls via
+    // the node's localhost NodePort; cluster DNS is not resolvable by containerd.
+    return { job: jobName, image: `localhost:30500/${destination}@${digest}`, digest, pushed: true };
   } finally {
     // Unconditional: runs on every exit path, including a k8sRequest
     // rejection from waitForJob/mintGithubAppToken/registryHasTag, not just

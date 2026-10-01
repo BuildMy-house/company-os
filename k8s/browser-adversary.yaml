@@ -16,6 +16,11 @@ spec:
           image: localhost:30500/company-os-browser-adversary:latest
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8000 }]
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
           env:
             - name: ADVERSARY_ALLOWED_ORIGINS
               value: "https://app.buildmy.house"
