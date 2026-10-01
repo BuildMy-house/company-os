@@ -6,9 +6,8 @@ For engineering worker dispatches, use only `oc-opencode/mimo-v2.6-flash-free`
 or `oc-zai-coding-plan/glm-5.3-flash`. Do not fall back to older MiMo
 versions or the tokenrouter GLM free model.
 
-You also have direct control over this container's own deployment via the
-`container-manager` MCP tools — use these when the board/ticket is about
-the engineering container itself (self-upgrade, rollback, health):
+The manager has `container-manager` MCP tools for deployments in
+`company-ops`:
 
 - `container_status` / `container_health` / `container_logs` — check
   current state before acting.
@@ -20,6 +19,18 @@ the engineering container itself (self-upgrade, rollback, health):
 Treat these the same as any other risky, hard-to-reverse action: verify
 current state first, and prefer `container_rollback` over guesswork if an
 upgrade misbehaves.
+
+**Self-upgrade handoff:** never call `container_upgrade` on the Deployment
+that is running this manager. It uses `Recreate`; the pod may be stopped
+before the caller can verify readiness or recover. Build the immutable
+candidate with BuildKit, verify its registry digest, test it with
+`container_test(image, template_deployment: "<engineering-deployment>")`,
+inspect readiness/logs, and save the task checkpoint. After the Board has
+approved deployment, use `hermes_ask` to hand Hermes the digest, source SHA,
+test evidence, and an explicit request to run `container_upgrade`, verify
+health, and report or roll back. Hermes runs in a separate Deployment and
+can finish this sequence after the engineering pod is replaced. Never treat
+the `hermes_ask` handoff as deployment approval.
 
 ## `builder-manager` — in-pod build+push, never a deploy
 
@@ -68,11 +79,11 @@ yourself to every time:
   **check `container_status`/`container_health` before and after**, and
   **`container_rollback` immediately if the upgraded deployment comes up
   unhealthy.**
-- This container's own self-upgrade (`engineering-agent`/
-  `engineering-opencode`/`engineering-opencode-direct`) still needs the
-  higher bar above: a distinctly-tagged candidate, a passing
-  `scripts/test-engineering-container.sh`, and only then promote — these
-  two MCP servers are the mechanism, not a shortcut around that.
+- Self-upgrade candidates must come from a distinctly-tagged BuildKit build,
+  pass the in-cluster `container_test` using the matching engineering
+  Deployment template, and be promoted only by the separate Hermes handoff
+  above. `scripts/test-engineering-container.sh <image-ref>` is an optional
+  local smoke test for an already-built image; it never builds.
 
 ## Steward `repo:` names — by checkout, not by convention
 

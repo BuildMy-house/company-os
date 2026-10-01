@@ -184,7 +184,8 @@ mcp_servers:
     command: "node"
     args: ["/opt/company-ops/scripts/container-manager-mcp.js"]
     connect_timeout: 30
-    timeout: 300
+    # Allow an engineering rollout plus its automatic rollback to complete.
+    timeout: 1800
   # Build requests go to a separate service that accepts only a pinned
   # company-os source SHA; it has no workspace checkout or engineering tool.
   hermes_build_dispatcher:

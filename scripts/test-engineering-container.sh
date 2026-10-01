@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Self-test script for the engineering container.
-# Builds a fresh image and runs a checklist verifying the container is
-# fundamentally functional. Repo-clone failures for known/tracked access
-# gaps (e.g. company-os without org access) are WARN, not FAIL.
+# Self-test an already-built engineering image. Build and push candidates with
+# in-cluster BuildKit first; this script never builds an image.
+# Repo-clone failures for known/tracked access gaps are WARN, not FAIL.
 #
-# Image is tagged engineering:selftest (never clobbers :candidate/:latest).
-# The image is kept after the run for inspection; remove with:
-#   docker rmi engineering:selftest
+# Usage: scripts/test-engineering-container.sh <candidate-image-ref>
+# The reference should be an immutable registry tag or digest.
 set -uo pipefail
 
 # ── output helpers ───────────────────────────────────────────────────
@@ -21,7 +19,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OPS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$OPS_DIR"
 
-IMAGE_TAG="engineering:selftest"
+IMAGE_REF="${1:-}"
+if [[ -z "$IMAGE_REF" ]]; then
+  echo "Usage: $0 <prebuilt-candidate-image-ref>" >&2
+  echo "Build and push the candidate with builder_build_and_push first." >&2
+  exit 2
+fi
 CONTAINER_NAME="engineering-selftest-$$"
 GITHUB_APP_KEY="$REPO_ROOT/certs/buildmyhouse-engineering-app.pem"
 
@@ -46,16 +49,13 @@ echo "════════════════════════�
 echo "Engineering container self-test"
 echo "══════════════════════════════════════════════════════════════"
 
-# ── 1. BUILD ─────────────────────────────────────────────────────────
+# ── 1. PULL CANDIDATE ────────────────────────────────────────────────
 echo ""
-echo "── Step 1: Build image ──"
-if docker buildx build \
-  -f "$OPS_DIR/Dockerfile.engineering" \
-  -t "$IMAGE_TAG" \
-  "$OPS_DIR" 2>&1; then
-  pass "Image built successfully as $IMAGE_TAG"
+echo "── Step 1: Pull candidate image ──"
+if docker pull "$IMAGE_REF"; then
+  pass "Candidate image pulled: $IMAGE_REF"
 else
-  fail "Image build failed"
+  fail "Candidate image could not be pulled: $IMAGE_REF"
   echo ""
   echo "══════════════════════════════════════════════════════════════"
   echo "RESULTS"
@@ -73,7 +73,7 @@ fi
 # ── 2. BASIC TOOLS (git, ssh-keyscan) ───────────────────────────────
 echo ""
 echo "── Step 2: Basic tools resolve ──"
-if docker run --rm --entrypoint bash "$IMAGE_TAG" -c \
+if docker run --rm --entrypoint bash "$IMAGE_REF" -c \
   'git --version && ssh-keyscan github.com >/dev/null 2>&1 && echo OK'; then
   pass "git and ssh-keyscan resolve"
 else
@@ -92,7 +92,7 @@ docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
 docker run -d --name "$CONTAINER_NAME" \
   "${GITHUB_APP_MOUNT_ARGS[@]}" \
-  "$IMAGE_TAG" >/dev/null 2>&1
+  "$IMAGE_REF" >/dev/null 2>&1
 
 # Wait for the entrypoint to finish its repo sync and start supergateway.
 # 240s ceiling: 5 sequential SSH repo clones + two cold `npx -y` installs
@@ -187,9 +187,9 @@ for i in "${!CLI_CMDS[@]}"; do
   cmd="${CLI_CMDS[$i]}"
   name="${CLI_NAMES[$i]}"
   # Some CLIs don't support --version; fall back to --help
-  if docker run --rm --entrypoint bash "$IMAGE_TAG" -c "$cmd" 2>&1 | head -1; then
+  if docker run --rm --entrypoint bash "$IMAGE_REF" -c "$cmd" 2>&1 | head -1; then
     pass "$name resolves"
-  elif docker run --rm --entrypoint bash "$IMAGE_TAG" -c "${cmd/--version/--help}" 2>&1 | head -1; then
+  elif docker run --rm --entrypoint bash "$IMAGE_REF" -c "${cmd/--version/--help}" 2>&1 | head -1; then
     pass "$name resolves (--help fallback)"
   else
     fail "$name does not resolve"
@@ -338,6 +338,6 @@ if [[ "$HAS_FAIL" -eq 1 ]]; then
   exit 1
 else
   echo ""
-  echo "Self-test completed (no FAIL results). Image $IMAGE_TAG retained for inspection."
+  echo "Self-test completed (no FAIL results) for $IMAGE_REF."
   exit 0
 fi

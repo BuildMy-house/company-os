@@ -453,18 +453,33 @@ engineering-manager or builder tools.
 - **Check `container_status`/`container_health` before** upgrading, so you
   have a known-good baseline to compare against and, for a self-upgrade,
   the previous-image annotation `container_rollback` depends on.
-- **Check `container_health` again after** the rollout — `container_upgrade`
-  starts a rollout, it does not wait for it to finish being healthy.
-- **If the new image is unhealthy, `container_rollback` immediately** —
-  it reverts to the image `container_upgrade` recorded as
-  `container-manager/previous-image`, no need to remember the old tag
-  yourself.
+- `container_upgrade` waits for the requested generation to become ready.
+  If it fails its rollout deadline or times out, it restores the previously
+  recorded image and waits for that rollback to become ready before returning.
+  Always inspect its `rollout` and `rollback` results and call
+  `container_health` afterward; if the rollback itself is unhealthy, escalate
+  with the recorded previous image.
 - For company-os's own self-modification (the `engineering-agent`/
   `engineering-opencode`/`engineering-opencode-direct` Deployments), this
-  is still subject to the higher bar in `hermes/SOUL.md`: build to a
-  distinctly-tagged candidate, pass `scripts/test-engineering-container.sh`,
-  and only then promote — `container_upgrade`/`container_rollback` are the
-  mechanism, not a bypass of that discipline.
+  is still subject to the higher bar in `hermes/SOUL.md`: build a
+  distinctly-tagged candidate with BuildKit, independently confirm its
+  registry digest, then call `container_test(image, template_deployment)` for
+  the matching engineering Deployment and inspect its readiness/logs. The
+  test pod copies non-secret runtime settings and readiness probes but has no
+  Hive registration, Kubernetes API token, or injected Secret values. Its
+  readiness check verifies startup without production credentials. The optional
+  local `scripts/test-engineering-container.sh <image-ref>` tests an already
+  built image; it never builds one.
+
+  **Never use the engineering pod to upgrade its own Deployment.** Its
+  `Recreate` strategy stops the old pod, so the caller can disappear before
+  observing the result. Save the task checkpoint and verification evidence,
+  then—only after the required Board approval—handoff the immutable image
+  digest and explicit deploy/health/rollback instruction to Hermes with
+  `hermes_ask`. Hermes runs in a separate Deployment and can finish the
+  rollout check or invoke the automatic rollback after the engineering pod
+  has been replaced. Expect a short service interruption: the engineering
+  Deployment has one replica and uses `Recreate`.
 
 ### `builder-manager` cannot mutate any deployment
 
