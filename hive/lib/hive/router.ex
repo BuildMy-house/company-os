@@ -253,7 +253,6 @@ defmodule Hive.Router do
   defp refresh_work(task) do
     case Hive.Work.get(task.id) do
       {:ok, %{} = work} -> %{task | state: work["state"] || work.state}
-      %{} = work -> %{task | state: work["state"] || work.state}
       _ -> task
     end
   end
