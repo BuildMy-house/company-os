@@ -4,7 +4,7 @@
 /**
  * generate-agent-mcp-config.js
  *
- * Writes/merges the "axiom" and "infisical" MCP server entries into the
+ * Writes/merges MCP server entries into the
  * user-scope configs for Claude Code (~/.claude.json) and OpenCode
  * (~/.config/opencode/opencode.json), reading credentials from the current
  * process environment (populated by fetch-infisical-secrets.js). Existing
@@ -70,6 +70,17 @@ function buildServers() {
       kind: 'http',
       url: 'https://mcp.neon.tech/mcp',
       headers: { Authorization: `Bearer ${process.env.NEON_API_KEY}` },
+    };
+  }
+
+  if (process.env.HIVE_URL && process.env.HIVE_AGENT_ID) {
+    servers.hive = {
+      kind: 'stdio',
+      command: ['node', '/opt/company-ops/scripts/hive-member-mcp.js'],
+      environment: {
+        HIVE_URL: process.env.HIVE_URL,
+        HIVE_AGENT_ID: process.env.HIVE_AGENT_ID,
+      },
     };
   }
 
