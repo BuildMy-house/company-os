@@ -68,8 +68,14 @@ defmodule Hive.Router do
 
   get "/tasks/:task_id" do
     case Hive.Tasks.get(task_id) do
-      nil -> json(conn, %{"error" => "task not found"}, 404)
-      task -> json(conn, task_response(refresh_work(task)))
+      nil ->
+        case Hive.Work.get(task_id) do
+          {:ok, work} -> json(conn, work_task_response(task_id, work))
+          _ -> json(conn, %{"error" => "task not found"}, 404)
+        end
+
+      task ->
+        json(conn, task_response(refresh_work(task)))
     end
   end
 
@@ -248,6 +254,13 @@ defmodule Hive.Router do
       "id" => task.id,
       "status" => %{"state" => task.state},
       "metadata" => %{"remote" => task.remote}
+    }
+
+  defp work_task_response(task_id, work),
+    do: %{
+      "id" => task_id,
+      "status" => %{"state" => work["state"] || work.state},
+      "metadata" => %{"remote" => nil}
     }
 
   defp refresh_work(task) do
