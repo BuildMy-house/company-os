@@ -68,3 +68,66 @@ spec:
       namespace: company-ops
       kind: Secret
       creationPolicy: Owner
+---
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: company-ops-steward-engineering-agent
+  namespace: company-ops
+spec:
+  infisicalAuthRef:
+    name: infisical-auth
+    namespace: company-ops
+  syncOptions:
+    refreshInterval: 60s
+  sources:
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /infra/steward/engineering-agent
+  targets:
+    - name: company-ops-steward-engineering-agent
+      namespace: company-ops
+      kind: Secret
+      creationPolicy: Owner
+---
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: company-ops-steward-engineering-opencode
+  namespace: company-ops
+spec:
+  infisicalAuthRef:
+    name: infisical-auth
+    namespace: company-ops
+  syncOptions:
+    refreshInterval: 60s
+  sources:
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /infra/steward/engineering-opencode
+  targets:
+    - name: company-ops-steward-engineering-opencode
+      namespace: company-ops
+      kind: Secret
+      creationPolicy: Owner
+---
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: company-ops-steward-engineering-opencode-direct
+  namespace: company-ops
+spec:
+  infisicalAuthRef:
+    name: infisical-auth
+    namespace: company-ops
+  syncOptions:
+    refreshInterval: 60s
+  sources:
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /infra/steward/engineering-opencode-direct
+  targets:
+    - name: company-ops-steward-engineering-opencode-direct
+      namespace: company-ops
+      kind: Secret
+      creationPolicy: Owner
