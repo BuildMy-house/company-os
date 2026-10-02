@@ -232,18 +232,57 @@ defmodule Hive.Work do
   end
 
   def handle_call({:available, limit}, _from, %{memory: memory} = state) do
-    items =
-      memory.work |> Map.values() |> Enum.filter(&(&1.state == "available")) |> Enum.take(limit)
+    now = DateTime.utc_now()
 
-    {:reply, {:ok, items}, state}
+    expired =
+      memory.work
+      |> Enum.filter(fn {_id, item} ->
+        lease = Map.get(item, :lease_expires_at)
+
+        item.state == "claimed" and is_struct(lease, DateTime) and DateTime.compare(lease, now) == :lt
+      end)
+      |> Map.new(fn {id, item} -> {id, Map.get(item, :claimed_by)} end)
+
+    work =
+      Map.merge(memory.work, Map.new(expired, fn {id, _agent} ->
+        {id, Map.merge(memory.work[id], %{state: "available", claimed_by: nil, lease_expires_at: nil})}
+      end))
+
+    bids =
+      Enum.reduce(expired, memory.bids, fn {id, agent_id}, acc ->
+        Map.delete(acc, {id, agent_id})
+      end)
+
+    items =
+      work |> Map.values() |> Enum.filter(&(&1.state == "available")) |> Enum.take(limit)
+
+    {:reply, {:ok, items}, %{state | memory: %{memory | work: work, bids: bids}}}
   end
 
   def handle_call({:available, limit}, _from, %{db: db} = state) do
-    Postgrex.query!(
-      db,
-      "UPDATE company.hive_work_items SET state = 'available', claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE state = 'claimed' AND lease_expires_at < now()",
-      []
-    )
+    transaction!(db, fn tx ->
+      expired =
+        Postgrex.query!(
+          tx,
+          "SELECT id, claimed_by FROM company.hive_work_items WHERE state = 'claimed' AND lease_expires_at < now() FOR UPDATE",
+          []
+        )
+        |> rows()
+
+      Enum.each(expired, fn %{"id" => id, "claimed_by" => agent_id} ->
+        Postgrex.query!(
+          tx,
+          "DELETE FROM company.hive_work_bids WHERE work_id = $1 AND agent_id = $2",
+          [id, agent_id]
+        )
+      end)
+
+      Postgrex.query!(
+        tx,
+        "UPDATE company.hive_work_items SET state = 'available', claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE state = 'claimed' AND lease_expires_at < now()",
+        []
+      )
+    end)
 
     result =
       Postgrex.query!(
@@ -292,7 +331,8 @@ defmodule Hive.Work do
         Map.merge(normalized, %{
           "bid_id" => "bid_" <> random_id(),
           "work_id" => work_id,
-          "agent_id" => agent_id
+          "agent_id" => agent_id,
+          "created_at" => DateTime.utc_now()
         })
 
       {:reply, {:ok, item}, put_in(state.memory.bids[{work_id, agent_id}], item)}
@@ -350,7 +390,7 @@ defmodule Hive.Work do
       memory.bids
       |> Enum.filter(fn {{id, _agent}, _bid} -> id == work_id end)
       |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid, memory.scoring)) end)
-      |> Enum.sort_by(& &1["score"], :desc)
+      |> Enum.sort(&rank_order/2)
       |> Enum.take(limit)
 
     {:reply, {:ok, bids}, state}
@@ -368,7 +408,7 @@ defmodule Hive.Work do
             POWER(GREATEST(estimated_cost, 0.01), $4)
           ELSE 0 END AS score
         FROM company.hive_work_bids WHERE work_id = $1
-        ORDER BY score DESC, created_at ASC
+        ORDER BY score DESC, created_at DESC
         LIMIT $5
         """,
         [
@@ -412,15 +452,22 @@ defmodule Hive.Work do
     end
   end
 
-  def handle_call({:allocate, work_id, _lease_seconds}, _from, %{memory: memory} = state) do
+  def handle_call({:allocate, work_id, lease_seconds}, _from, %{memory: memory} = state) do
+    winner =
+      memory.bids
+      |> Enum.filter(fn {{id, _agent}, bid} -> id == work_id and bid["interested"] end)
+      |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid, memory.scoring)) end)
+      |> Enum.sort(&rank_order/2)
+      |> List.first()
+
     with %{state: "available"} = work <- memory.work[work_id],
-         [{_key, winner}] <-
-           memory.bids
-           |> Enum.filter(fn {{id, _agent}, bid} -> id == work_id and bid["interested"] end)
-           |> Enum.sort_by(fn {_key, bid} -> score(bid, memory.scoring) end, :desc)
-           |> Enum.take(1) do
-      agent_id = winner["agent_id"]
-      allocated = %{work | state: "claimed", claimed_by: agent_id}
+         %{"agent_id" => agent_id} <- winner do
+      allocated =
+        Map.merge(work, %{
+          state: "claimed",
+          claimed_by: agent_id,
+          lease_expires_at: DateTime.add(DateTime.utc_now(), lease_seconds, :second)
+        })
 
       allocation =
         event("work.allocated", work_id, %{
@@ -447,7 +494,7 @@ defmodule Hive.Work do
         winner =
           Postgrex.query!(
             tx,
-            "SELECT agent_id, POWER(GREATEST(confidence, 0.0001), $2) * POWER(GREATEST(expected_benefit, 0.0001), $3) / POWER(GREATEST(estimated_cost, 0.01), $4) AS score FROM company.hive_work_bids WHERE work_id = $1 AND interested ORDER BY score DESC, created_at ASC LIMIT 1",
+            "SELECT agent_id, POWER(GREATEST(confidence, 0.0001), $2) * POWER(GREATEST(expected_benefit, 0.0001), $3) / POWER(GREATEST(estimated_cost, 0.01), $4) AS score FROM company.hive_work_bids WHERE work_id = $1 AND interested ORDER BY score DESC, created_at DESC LIMIT 1",
             [
               work_id,
               scoring["confidence_weight"],
@@ -521,24 +568,49 @@ defmodule Hive.Work do
     {:reply, :ok, state}
   end
 
-  def handle_call({:claim, id, agent_id, _lease_seconds}, _from, %{memory: memory} = state) do
-    case memory.work[id] do
-      %{state: "available"} = item ->
-        claimed = %{item | state: "claimed", claimed_by: agent_id}
-        event = event("work.allocated", id, %{"agent_id" => agent_id})
-        started = event("work.started", id, %{"agent_id" => agent_id})
+  def handle_call({:claim, id, agent_id, lease_seconds}, _from, %{memory: memory} = state) do
+    now = DateTime.utc_now()
 
-        next =
-          state
-          |> put_in([:memory, :work, id], claimed)
-          |> update_in([:memory, :events], &[started, event | &1])
+    expired_owner =
+      case memory.work[id] do
+        %{state: "claimed"} = item ->
+          lease = Map.get(item, :lease_expires_at)
 
-        notify_event_subscribers(started)
-        notify_event_subscribers(event)
-        {:reply, {:ok, claimed}, next}
+          if is_struct(lease, DateTime) and DateTime.compare(lease, now) == :lt,
+            do: Map.get(item, :claimed_by)
 
-      _ ->
-        {:reply, {:error, :unavailable}, state}
+        _ ->
+          nil
+      end
+
+    item = memory.work[id]
+
+    if is_map(item) and (item.state == "available" or is_binary(expired_owner)) do
+      claimed =
+        Map.merge(item, %{
+          state: "claimed",
+          claimed_by: agent_id,
+          lease_expires_at: DateTime.add(now, lease_seconds, :second)
+        })
+
+      event = event("work.allocated", id, %{"agent_id" => agent_id})
+      started = event("work.started", id, %{"agent_id" => agent_id})
+
+      next =
+        if expired_owner,
+          do: update_in(state.memory.bids, &Map.delete(&1, {id, expired_owner})),
+          else: state
+
+      next =
+        next
+        |> put_in([:memory, :work, id], claimed)
+        |> update_in([:memory, :events], &[started, event | &1])
+
+      notify_event_subscribers(started)
+      notify_event_subscribers(event)
+      {:reply, {:ok, claimed}, next}
+    else
+      {:reply, {:error, :unavailable}, state}
     end
   end
 
@@ -548,6 +620,27 @@ defmodule Hive.Work do
 
     result =
       transaction!(db, fn tx ->
+        previous =
+          Postgrex.query!(
+            tx,
+            "SELECT claimed_by FROM company.hive_work_items WHERE id = $1 AND state = 'claimed' AND lease_expires_at < now() FOR UPDATE",
+            [id]
+          )
+          |> rows()
+          |> List.first()
+
+        case previous do
+          %{"claimed_by" => expired_owner} when is_binary(expired_owner) ->
+            Postgrex.query!(
+              tx,
+              "DELETE FROM company.hive_work_bids WHERE work_id = $1 AND agent_id = $2",
+              [id, expired_owner]
+            )
+
+          _ ->
+            :ok
+        end
+
         result =
           Postgrex.query!(
             tx,
@@ -640,10 +733,22 @@ defmodule Hive.Work do
     {:reply, result, state}
   end
 
-  def handle_call({:heartbeat, id, agent_id, _lease_seconds}, _from, %{memory: memory} = state) do
+  def handle_call({:heartbeat, id, agent_id, lease_seconds}, _from, %{memory: memory} = state) do
+    now = DateTime.utc_now()
+
     case memory.work[id] do
-      %{state: "claimed", claimed_by: ^agent_id} = item -> {:reply, {:ok, item}, state}
-      _ -> {:reply, {:error, :not_owner}, state}
+      %{state: "claimed", claimed_by: ^agent_id} = item ->
+        lease = Map.get(item, :lease_expires_at)
+
+        if is_struct(lease, DateTime) and DateTime.compare(lease, now) == :lt do
+          {:reply, {:error, :not_owner}, state}
+        else
+          renewed = Map.put(item, :lease_expires_at, DateTime.add(now, lease_seconds, :second))
+          {:reply, {:ok, renewed}, put_in(state.memory.work[id], renewed)}
+        end
+
+      _ ->
+        {:reply, {:error, :not_owner}, state}
     end
   end
 
@@ -776,6 +881,13 @@ defmodule Hive.Work do
         :math.pow(max(bid["estimated_cost"], 0.01), scoring["cost_weight"])
     else
       0.0
+    end
+  end
+
+  defp rank_order(a, b) do
+    case {a["score"], b["score"]} do
+      {score, score} -> DateTime.compare(a["created_at"], b["created_at"]) == :gt
+      {a_score, b_score} -> a_score > b_score
     end
   end
 
