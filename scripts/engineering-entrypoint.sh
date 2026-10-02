@@ -60,7 +60,7 @@ if [ -n "${AXIOM_TOKEN:-}" ]; then
   echo "[otel] Claude Code telemetry -> Axiom (bmh-company)"
 fi
 
-# ── Agent MCP Configuration (Axiom, Infisical, Neon, Cloudflare, Steward, ai-cli) ──
+# ── Agent MCP Configuration (Axiom, Infisical, Neon, Cloudflare, Steward, Hive, ai-cli) ──
 # Gives claude and opencode the same MCP server list, wired from whatever
 # credentials are present in the container's environment, so any repo the
 # container works in gets the same tool access regardless of that repo's
@@ -95,6 +95,15 @@ if [ -n "${INFISICAL_UNIVERSAL_AUTH_CLIENT_ID:-}" ] && command -v codex >/dev/nu
     -- npx -y --legacy-peer-deps @infisical/mcp >/dev/null 2>&1 \
     && echo "[mcp-config] wrote infisical to codex" \
     || echo "[mcp-config] WARN: codex mcp add infisical failed" >&2
+fi
+
+if [ -n "${HIVE_URL:-}" ] && [ -n "${HIVE_AGENT_ID:-}" ] && command -v codex >/dev/null 2>&1; then
+  codex mcp add hive \
+    --env HIVE_URL="$HIVE_URL" \
+    --env HIVE_AGENT_ID="$HIVE_AGENT_ID" \
+    -- node /opt/company-ops/scripts/hive-member-mcp.js >/dev/null 2>&1 \
+    && echo "[mcp-config] wrote hive to codex" \
+    || echo "[mcp-config] WARN: codex mcp add hive failed" >&2
 fi
 
 # ── AI-CLI-MCP Configuration ────────────────────────────────────────
