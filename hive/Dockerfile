@@ -7,9 +7,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY mix.exs mix.lock ./
+COPY hive/mix.exs hive/mix.lock ./
 RUN mix deps.get --only prod
-COPY lib ./lib
+COPY hive/lib ./lib
 RUN mix compile
 
 EXPOSE 4100
