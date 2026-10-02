@@ -76,6 +76,9 @@ node "$SCRIPT_DIR/generate-agent-mcp-config.js"
 # be loud in the boot log.
 node "$SCRIPT_DIR/check-advertised-mcp-tools.js" || echo "[mcp-config] WARN: see check-advertised-mcp-tools output above — some advertised MCP tool(s) will fail when called" >&2
 
+# CODEX_HOME may be mounted as an empty, not-yet-created directory.
+if command -v codex >/dev/null 2>&1; then mkdir -p "${CODEX_HOME:-$HOME/.codex}"; fi
+
 if [ -n "${AXIOM_TOKEN:-}" ] && command -v codex >/dev/null 2>&1; then
   codex mcp add axiom \
     --env AXIOM_TOKEN="$AXIOM_TOKEN" \
