@@ -231,4 +231,91 @@ defmodule Hive.RouterTest do
 
     assert task["status"]["state"] == "claimed"
   end
+
+  test "prefers the most recent bid when scores tie" do
+    task_id = create_task!("tie-break")
+
+    submit_bid!(task_id, "first", 0.8, 1, 1)
+    submit_bid!(task_id, "second", 0.8, 1, 1)
+
+    assert allocate!(task_id, 900)["claimed_by"] == "second"
+  end
+
+  test "a resubmitted bid wins ties with its refreshed timestamp" do
+    task_id = create_task!("upsert-recency")
+
+    submit_bid!(task_id, "early", 0.8, 1, 1)
+    submit_bid!(task_id, "later", 0.8, 1, 1)
+    submit_bid!(task_id, "early", 0.8, 1, 1)
+
+    assert allocate!(task_id, 900)["claimed_by"] == "early"
+  end
+
+  test "purges the expired assignee bid and reassigns the work" do
+    task_id = create_task!("stale-bid")
+
+    submit_bid!(task_id, "stale", 0.9, 1, 5)
+    assert allocate!(task_id, 1)["claimed_by"] == "stale"
+
+    Process.sleep(1100)
+    assert {:ok, _} = Hive.Work.available(10)
+
+    {:ok, bids} = Hive.Work.ranked_bids(task_id)
+    refute Enum.any?(bids, &(&1["agent_id"] == "stale"))
+
+    submit_bid!(task_id, "fresh", 0.8, 1, 4)
+    assert allocate!(task_id, 900)["claimed_by"] == "fresh"
+  end
+
+  test "claiming expired work purges the previous holder's bid" do
+    task_id = create_task!("claim-expired")
+
+    submit_bid!(task_id, "stale", 0.9, 1, 5)
+    assert allocate!(task_id, 1)["claimed_by"] == "stale"
+
+    Process.sleep(1100)
+
+    claimed = post_json("/work/#{task_id}/claim", %{"agent_id" => "fresh"})
+    assert claimed.status == 200
+
+    {:ok, bids} = Hive.Work.ranked_bids(task_id)
+    refute Enum.any?(bids, &(&1["agent_id"] == "stale"))
+  end
+
+  defp post_json(path, body) do
+    conn(:post, path, Jason.encode!(body))
+    |> Plug.Conn.put_req_header("content-type", "application/json")
+    |> Hive.Router.call(@opts)
+  end
+
+  defp create_task!(text) do
+    post_json("/", %{
+      "jsonrpc" => "2.0",
+      "id" => 1,
+      "method" => "message/send",
+      "params" => %{"message" => %{"parts" => [%{"text" => text}]}}
+    })
+    |> Map.fetch!(:resp_body)
+    |> Jason.decode!()
+    |> get_in(["result", "id"])
+  end
+
+  defp submit_bid!(work_id, agent_id, confidence, cost, benefit) do
+    conn =
+      post_json("/work/#{work_id}/bids", %{
+        "agent_id" => agent_id,
+        "confidence" => confidence,
+        "approach" => "test",
+        "estimated_cost" => cost,
+        "expected_benefit" => benefit
+      })
+
+    assert conn.status == 201
+  end
+
+  defp allocate!(work_id, lease_seconds) do
+    post_json("/work/#{work_id}/allocate", %{"lease_seconds" => lease_seconds})
+    |> Map.fetch!(:resp_body)
+    |> Jason.decode!()
+  end
 end
