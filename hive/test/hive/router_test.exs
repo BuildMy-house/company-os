@@ -55,6 +55,19 @@ defmodule Hive.RouterTest do
     assert task["metadata"]["remote"] == nil
   end
 
+  test "restores an A2A task read from durable work" do
+    task_id = "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+    assert {:ok, _} = Hive.Work.enqueue(task_id, [%{"text" => "durable"}])
+
+    conn = conn(:get, "/tasks/#{task_id}") |> Hive.Router.call(@opts)
+    task = Jason.decode!(conn.resp_body)
+
+    assert conn.status == 200
+    assert task["id"] == task_id
+    assert task["status"]["state"] == "available"
+    assert task["metadata"]["remote"] == nil
+  end
+
   test "an agent claims and completes queued work" do
     body =
       Jason.encode!(%{
