@@ -46,9 +46,7 @@ spec:
             - name: HIVE_URL
               value: http://hive-coordinator:4100
             - name: HIVE_AGENT_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
+              value: engineering-opencode
             - name: A2A_ENDPOINT
               value: http://engineering-opencode:8001
             - name: AGENT_FLAVOR
@@ -88,6 +86,8 @@ spec:
           envFrom:
             - secretRef:
                 name: company-ops-secrets
+            - secretRef:
+                name: company-ops-steward-engineering-opencode
           readinessProbe:
             tcpSocket:
               port: 8000

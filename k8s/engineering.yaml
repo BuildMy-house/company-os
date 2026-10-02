@@ -84,6 +84,8 @@ spec:
           envFrom:
             - secretRef:
                 name: company-ops-secrets
+            - secretRef:
+                name: company-ops-steward-engineering-agent
           readinessProbe:
             tcpSocket:
               port: 8000
