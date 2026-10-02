@@ -22,7 +22,7 @@ spec:
         runAsNonRoot: true
       containers:
         - name: engineering-opencode
-          image: localhost:30500/company-os-engineering@sha256:b12c1cc06ca3996e232d60f0700d66c35a7c41c757dfacf0ac0cffb1884eb208
+          image: localhost:30500/company-os-engineering:hive-bid-8b29112
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
