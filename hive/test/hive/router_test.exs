@@ -209,5 +209,13 @@ defmodule Hive.RouterTest do
 
     assert allocated["claimed_by"] == "high"
     assert allocated["allocated_to"] == "high"
+
+    task =
+      conn(:get, "/tasks/#{task_id}")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert task["status"]["state"] == "claimed"
   end
 end

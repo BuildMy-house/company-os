@@ -675,8 +675,12 @@ defmodule Hive.Work do
     {:reply, :ok, state}
   end
 
-  def handle_call({:get, id}, _from, %{memory: memory} = state),
-    do: {:reply, Map.get(memory.work, id), state}
+  def handle_call({:get, id}, _from, %{memory: memory} = state) do
+    case Map.fetch(memory.work, id) do
+      {:ok, item} -> {:reply, {:ok, item}, state}
+      :error -> {:reply, {:error, :not_found}, state}
+    end
+  end
 
   def handle_call({:get, id}, _from, %{db: db} = state), do: {:reply, get_db(db, id), state}
 

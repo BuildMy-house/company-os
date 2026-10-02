@@ -6,9 +6,8 @@ For engineering worker dispatches, use only `oc-opencode/mimo-v2.6-flash-free`
 or `oc-zai-coding-plan/glm-5.3-flash`. Do not fall back to older MiMo
 versions or the tokenrouter GLM free model.
 
-You also have direct control over this container's own deployment via the
-`container-manager` MCP tools — use these when the board/ticket is about
-the engineering container itself (self-upgrade, rollback, health):
+The manager has `container-manager` MCP tools for deployments in
+`company-ops`:
 
 - `container_status` / `container_health` / `container_logs` — check
   current state before acting.
@@ -20,6 +19,25 @@ the engineering container itself (self-upgrade, rollback, health):
 Treat these the same as any other risky, hard-to-reverse action: verify
 current state first, and prefer `container_rollback` over guesswork if an
 upgrade misbehaves.
+
+**Agent image updates:** use this candidate-and-handoff path for
+`hermes-gateway`, all three engineering Deployments, and `browser-adversary`.
+Build the matching Dockerfile through the appropriate BuildKit tool, verify
+the immutable image ref, then call
+`container_test(image, template_deployment: "<matching-deployment>")` and
+inspect readiness/logs. The test pod keeps non-secret settings/probes,
+removes Secret values and Hive/builder/Kubernetes credentials, and replaces
+persistent storage with an isolated emptyDir.
+
+The manager doing the rollout must outlive the target. Never call
+`container_upgrade` from the pod whose Deployment is being changed: all agent
+Deployments use `Recreate`, so that pod can stop before it verifies readiness
+or recovers. After the Board has approved deployment, hand the image ref,
+source SHA, test evidence, and explicit health/rollback request to a separate
+manager. Hermes can upgrade engineering and browser-adversary; an engineering
+manager handles Hermes image updates. The surviving manager waits for
+readiness and can complete the automatic rollback. A `hermes_ask` handoff is
+not deployment approval.
 
 ## `builder-manager` — in-pod build+push, never a deploy
 
@@ -64,15 +82,13 @@ yourself to every time:
   `container-manager` MCP server (different ServiceAccount entirely).
 - **Only call `container_upgrade` after independently confirming the build
   actually landed** (the tool's own response already re-checks the
-  registry, but verify it yourself too, same as any worker self-report),
-  **check `container_status`/`container_health` before and after**, and
-  **`container_rollback` immediately if the upgraded deployment comes up
-  unhealthy.**
-- This container's own self-upgrade (`engineering-agent`/
-  `engineering-opencode`/`engineering-opencode-direct`) still needs the
-  higher bar above: a distinctly-tagged candidate, a passing
-  `scripts/test-engineering-container.sh`, and only then promote — these
-  two MCP servers are the mechanism, not a shortcut around that.
+  registry tag and digest, but verify them yourself too, same as any worker
+  self-report), and **check `container_status`/`container_health` before and
+  after**. `container_upgrade` waits for readiness and attempts automatic
+  rollback on failure; if its rollback result is unhealthy, use
+  `container_rollback` with the recorded previous image.
+- `scripts/test-engineering-container.sh <image-ref>` is an optional local
+  smoke test for an already-built image; it never builds.
 
 ## Steward `repo:` names — by checkout, not by convention
 

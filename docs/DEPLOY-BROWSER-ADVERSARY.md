@@ -8,17 +8,22 @@ Task mode is the useful default. Exploration mode is deliberately bounded and
 should be used to discover candidate flows that can later become repeatable
 tasks.
 
-## Build and deploy locally
+## Build and update
 
-From `company-os/`, with the registry already running:
+Build the candidate from a pinned `prod` commit with the engineering manager's
+`builder_build_and_push` tool. Use `Dockerfile.browser-adversary`, the
+`company-os-browser-adversary` image repository, and a unique tag such as
+`browser-adversary-<short-sha>`. The build runs in an isolated BuildKit Job;
+do not build this container locally or inside an agent pod.
 
-```bash
-docker build -f Dockerfile.browser-adversary -t localhost:30500/company-os-browser-adversary:latest .
-docker push localhost:30500/company-os-browser-adversary:latest
-kubectl apply -f k8s/browser-adversary.yaml
-kubectl rollout status deployment/browser-adversary -n company-ops
-kubectl rollout restart deployment/hermes-gateway -n company-ops
-```
+Test the candidate with `container_test(image, template_deployment:
+"browser-adversary")`, inspect health/logs, and remove the temporary test
+Deployment. The test keeps the port/readiness settings but has no Secret
+values or production auth volume. After Board approval, have an independent
+manager call `container_upgrade` for `browser-adversary`, then confirm health.
+If readiness fails, `container_upgrade` restores the previous image and waits
+for its readiness. Hermes or the engineering manager can perform the rollout;
+the browser-adversary container cannot replace its own running pod.
 
 The Hermes config entry is already wired to
 `http://browser-adversary:8000/mcp`.
