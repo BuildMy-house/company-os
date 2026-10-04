@@ -12,6 +12,17 @@ from `dev` to `main`/prod — it is **advisory pre-merge evidence, not a hard
 CI gate**: `app`'s `dev`→`main` merge has no automated check wired to this
 cluster, so a red gate does not block a merge by itself.
 
+Agents working this runbook: use the `kubernetes` MCP tool (Hermes's
+`k8s_deployment` entry, or the engineering-agent's own `kubernetes` MCP
+entry — see `hermes/config.yaml` and `scripts/generate-agent-mcp-config.js`)
+instead of shelling out to a `kubectl` binary, which does not exist in the
+engineering-agent container image. Its RBAC (`k8s/rbac.yaml`) covers
+exactly what this runbook needs: company-ops pods/events/deployments/
+replicasets/jobs/cronjobs, and read-only access to buildmyhouse-dev's
+pods/services/deployments and the `buildmyhouse-dev-deploy-state`
+configmap. It cannot read buildmyhouse-dev Secrets or delete anything in
+either namespace.
+
 ## Auto-deploy: CO-DEV3's poller
 
 A CronJob, `buildmyhouse-dev-deployer` (namespace `company-ops`), polls
@@ -67,10 +78,15 @@ Live output as of this writing:
 
 ### Manual on-demand rebuild
 
-Any agent with `kubectl` access to `company-ops` (every hive/opencode
-worker already has this) can force an immediate run instead of waiting up
-to 3 minutes for the next poll, by creating a one-off Job from the
-CronJob's own template:
+Hermes and the Claude-manager side of the engineering-agent pod each have a
+`kubernetes` MCP tool (a `kubernetes-mcp-server`, `--disable-destructive`,
+authenticating as the shared `company-ops` ServiceAccount — see
+`hermes/config.yaml`'s `k8s_deployment` entry and
+`scripts/generate-agent-mcp-config.js`'s `kubernetes` entry) that can do
+this instead of raw `kubectl`. OpenCode workers dispatched from the
+engineering manager do NOT get this tool (same skip-list treatment as
+`container-manager`); only a human with local `kubectl` access, or Hermes/
+the engineering-manager via its `kubernetes` MCP tool, can trigger this:
 
 ```
 kubectl create job -n company-ops buildmyhouse-dev-deploy-manual-$(date +%s) \
