@@ -14,6 +14,22 @@ execs `mcp-proxy` serving the manager facade over `ai-cli-mcp`.
 The flavor is a build-time choice; manager versus worker is a runtime pattern,
 not a second codebase.
 
+## Manual release control for company-os containers
+
+Pushing or merging code does not update any running company-os container.
+This is intentional: a manager controls when each runtime image changes.
+For an approved release, build from an immutable commit on `prod` with the
+engineering builder MCP's `builder_build_and_push`, test the returned digest
+with `container_test`, then use the container-manager MCP's
+`container_upgrade` for the specific deployment. Verify readiness and health
+after rollout, and use `container_rollback` if it fails. Keep the previous
+known-good digest available. Do not use mutable tags or raw Kubernetes
+deployment mutations as the routine update path. Workers without the deploy
+MCP hand the manager the source SHA, image digest, and test evidence.
+
+This rule applies to the Hive coordinator and every other company-os runtime
+deployment, not just the engineering image described below.
+
 ## Production deployment
 
 The container runs as the `engineering-agent` Deployment in namespace

@@ -40,3 +40,17 @@ pools; do not put personal notes, credentials, or task-specific data here.
 - Promote a reusable lesson for all pools into this file through a reviewed
   repo change. Keep personal tips in your pool's Steward memory; do not edit
   generated copies in `/workspace`.
+
+## Company OS container updates
+
+- A push or merge does not update a running company-os container. Images and
+  Deployments are intentionally updated manually so releases stay controlled.
+- For an approved container change, build from an immutable `prod` commit
+  with `builder_build_and_push`, test the candidate with `container_test`,
+  and have an authorized manager use `container_upgrade` for the named
+  Deployment. Check rollout health afterward; keep the prior image available
+  for `container_rollback` if readiness fails.
+- Do not change a Deployment with raw `kubectl`, restart a container to pick
+  up a mutable tag, or assume a pushed image is live. Workers without the
+  deployment MCP must hand the source SHA and verified image digest to the
+  manager and wait for the manual rollout.

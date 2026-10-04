@@ -26,6 +26,13 @@ available again. The task status retains its attempt count and last failure.
 Worker completion is a report for manager review: code work is not marked done
 until the verified commit is pushed and that exact remote commit is confirmed.
 
+The Hive coordinator is not automatically redeployed when code reaches `prod`.
+An authorized manager builds a digest-pinned image from the approved `prod`
+commit with `builder_build_and_push`, verifies a candidate with
+`container_test`, then deploys it through `container_upgrade` and checks
+health. This manual MCP flow keeps runtime updates under explicit release
+control.
+
 ```sh
 mix deps.get
 mix test

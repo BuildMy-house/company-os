@@ -20,6 +20,13 @@ commit is pushed to the remote integration branch and that exact commit is
 confirmed there. Record the remote branch and commit SHA in the PLAN row; only
 then mark the row `done` and close the Steward task.
 
+Pushing code does not update any running company-os container. Container
+releases are intentionally manual: an authorized manager builds from an
+immutable approved `prod` commit with `builder_build_and_push`, tests it with
+`container_test`, and uses `container_upgrade` to roll out the digest and
+verify health. Workers without those MCP tools hand off the source SHA and
+image digest; they never mutate Deployments directly.
+
 ## Cardinal Rules
 
 1. **Read before write.** Open every file you plan to edit. Never assume
