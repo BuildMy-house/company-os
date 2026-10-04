@@ -177,7 +177,8 @@ function buildServers() {
 
 function toClaudeServer(server) {
   if (server.kind === 'http') {
-    return { type: 'http', url: server.url, headers: server.headers };
+    const headers = Object.fromEntries(Object.entries(server.headers || {}).map(([key, value]) => [key, value.replace(/\{env:([^}]+)\}/g, '${$1}')]));
+    return { type: 'http', url: server.url, headers };
   }
   const entry = { command: server.command[0], args: server.command.slice(1) };
   if (server.environment) entry.env = server.environment;
