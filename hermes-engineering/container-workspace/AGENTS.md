@@ -95,6 +95,15 @@ last updated) — see the canonical file's "Environment-neutral model
 selection" and "Model-routing memory" sections for the full mechanism,
 including how to try and record a model with no routing memory yet.
 
+## Company OS runtime updates
+
+Company OS runtime containers do not auto-update on a repository push. This
+is deliberate release control: managers build from an immutable approved
+`prod` commit with `builder_build_and_push`, verify the candidate with
+`container_test`, then roll out the digest with `container_upgrade` and check
+health. Use `container_rollback` if readiness fails. Workers must not mutate
+Deployments; hand off the source SHA and image digest to an authorized manager.
+
 ## Task-fit bidding rubric
 
 The tracked `HIVE_WORKER_MEMORY.md` is loaded directly into both the Hive
