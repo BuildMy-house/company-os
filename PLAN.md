@@ -676,9 +676,10 @@ project `58b43b81-effb-4392-a937-46f2448efb78`, environment `dev`.
 
 ## Hive lifecycle reliability (2026-10-05)
 
-Steward is currently unavailable, so this manager fallback is recorded here
-and the Hive item remains open until its implementation commit is pushed and
-the task can be closed through Steward.
+Two worker dispatches failed before making progress, so the manager completed
+the verified fallback. The code commit was pushed to remote `main` before the
+Hive items were claimed and completed by this manager; the close-out records
+the commit SHA and test evidence.
 
 | Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
 |--------|-------|------|--------------|------------|--------|-------|
