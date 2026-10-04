@@ -1,0 +1,64 @@
+# Live sync of the buildmyhouse-app Infisical project (dev environment)
+# into the buildmyhouse-dev namespace, via the Infisical Secrets Operator.
+#
+# Assumes the operator is installed with buildmyhouse-dev in its
+# scopedNamespaces (operator-namespaced chart), mirroring the company-ops
+# setup:
+#
+#   helm install infisical-secrets-operator infisical-helm-charts/secrets-operator \
+#     -n company-ops \
+#     --set scopedNamespaces="{company-ops,buildmyhouse-dev}" \
+#     --set scopedRBAC=true
+#
+# The infisical-bootstrap-credentials Secret (keys: clientId, clientSecret)
+# must exist in the buildmyhouse-dev namespace before these resources are
+# applied; it is applied separately and intentionally not committed here.
+---
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalConnection
+metadata:
+  name: infisical-connection-dev
+  namespace: buildmyhouse-dev
+spec:
+  address: https://eu.infisical.com
+---
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalAuth
+metadata:
+  name: infisical-auth-dev
+  namespace: buildmyhouse-dev
+spec:
+  infisicalConnectionRef:
+    name: infisical-connection-dev
+    namespace: buildmyhouse-dev
+  method: universal
+  universal:
+    clientIdRef:
+      name: infisical-bootstrap-credentials
+      namespace: buildmyhouse-dev
+      key: clientId
+    clientSecretRef:
+      name: infisical-bootstrap-credentials
+      namespace: buildmyhouse-dev
+      key: clientSecret
+---
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: buildmyhouse-dev-sync
+  namespace: buildmyhouse-dev
+spec:
+  infisicalAuthRef:
+    name: infisical-auth-dev
+    namespace: buildmyhouse-dev
+  syncOptions:
+    refreshInterval: 60s
+  sources:
+    - projectId: 58b43b81-effb-4392-a937-46f2448efb78
+      environmentSlug: dev
+      secretPath: /
+  targets:
+    - name: buildmyhouse-dev-secrets
+      namespace: buildmyhouse-dev
+      kind: Secret
+      creationPolicy: Owner

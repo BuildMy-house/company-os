@@ -1,0 +1,7 @@
+# Namespace for the buildmyhouse-dev cluster environment (CO-DEV1).
+# Companion to buildmyhouse-dev-infisical-sync.yaml, which syncs the
+# buildmyhouse-app Infisical project's dev secrets into this namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: buildmyhouse-dev
