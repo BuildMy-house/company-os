@@ -1,0 +1,136 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: buildmyhouse-dev-app
+  namespace: buildmyhouse-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: buildmyhouse-dev-app }
+  template:
+    metadata: { labels: { app: buildmyhouse-dev-app } }
+    spec:
+      containers:
+        - name: buildmyhouse-dev-app
+          image: localhost:30500/buildmyhouse-app:dev-pending
+          imagePullPolicy: Always
+          ports: [{ containerPort: 3000 }]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: buildmyhouse-dev-secrets
+                  key: JWT_SECRET
+            - name: DB_PATH
+              value: /data/homely.db
+            - name: ASSET_DIR
+              value: /data/assets
+            - name: STATIC_DIR
+              value: /app/dist-static
+            - name: PORT
+              value: "3000"
+            - name: LUXCORE_WORKER_URL
+              value: http://buildmyhouse-dev-luxcore:8081
+          envFrom:
+            - secretRef: { name: buildmyhouse-dev-secrets }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: 1500m, memory: 2Gi }
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: buildmyhouse-dev-app
+  namespace: buildmyhouse-dev
+spec:
+  selector: { app: buildmyhouse-dev-app }
+  ports: [{ port: 3000, targetPort: 3000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: buildmyhouse-dev-mcp
+  namespace: buildmyhouse-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: buildmyhouse-dev-mcp }
+  template:
+    metadata: { labels: { app: buildmyhouse-dev-mcp } }
+    spec:
+      containers:
+        - name: buildmyhouse-dev-mcp
+          image: localhost:30500/buildmyhouse-mcp:dev-pending
+          imagePullPolicy: Always
+          ports: [{ containerPort: 8080 }]
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          env:
+            - name: HOMELY_MCP_HOST
+              value: 0.0.0.0
+            - name: HOMELY_MCP_HTTP_PORT
+              value: "8080"
+            - name: BUILDMYHOUSE_API_URL
+              value: http://buildmyhouse-dev-app:3000
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: 1500m, memory: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: buildmyhouse-dev-mcp
+  namespace: buildmyhouse-dev
+spec:
+  selector: { app: buildmyhouse-dev-mcp }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: buildmyhouse-dev-luxcore
+  namespace: buildmyhouse-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: buildmyhouse-dev-luxcore }
+  template:
+    metadata: { labels: { app: buildmyhouse-dev-luxcore } }
+    spec:
+      containers:
+        - name: buildmyhouse-dev-luxcore
+          image: localhost:30500/buildmyhouse-luxcore:dev-pending
+          imagePullPolicy: Always
+          ports: [{ containerPort: 8081 }]
+          readinessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: 1500m, memory: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: buildmyhouse-dev-luxcore
+  namespace: buildmyhouse-dev
+spec:
+  selector: { app: buildmyhouse-dev-luxcore }
+  ports: [{ port: 8081, targetPort: 8081 }]

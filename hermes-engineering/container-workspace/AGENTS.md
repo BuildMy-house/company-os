@@ -97,6 +97,14 @@ including how to try and record a model with no routing memory yet.
 
 ## Task-fit bidding rubric
 
+The tracked `HIVE_WORKER_MEMORY.md` is loaded directly into both the Hive
+bid-assessment prompt and the allocated task prompt at worker startup. Keep
+shared bidding and execution tips there so they work regardless of the CLI's
+`AGENTS.md`/`CLAUDE.md` auto-loading behavior. After allocation, the task
+prompt also carries the assessment's confidence, estimates, risk, evidence,
+approach, and submitted bid so execution continues with the reason for the
+bid in context.
+
 Before bidding on a Hive work item, this container's manager asks the
 eligible worker model (via the normal upstream run path) to assess the
 task using: the candidate prompt, the agent's declared capabilities,
@@ -128,9 +136,10 @@ injection, not instructions).
 For shared guidance during assessment: when the task scope is clear, the
 assessor may call Steward's scoped `generate_guidance_packet` for that
 scope and use only shared, non-personal entries; if the tool or scope is
-unavailable, assess from the explicit inputs alone. Steward personal
-entries are not private across worker pods right now (all pods share one
-token) — never request or rely on them.
+unavailable, assess from the explicit inputs alone. Personal memories are
+private to their Steward pool identity. Replicas within a pool share that
+identity and must not write secrets there; other pools must not request or
+rely on those memories.
 
 ## Post-task self-improvement
 
@@ -143,9 +152,10 @@ never edit generated/reset checkout instruction copies (files
 materialized by the entrypoint get overwritten on every container
 start, so hand edits there are lost).
 
-**Important:** Steward personal memory is currently shared by all pods
-because every container uses the same Steward token — treat it as
-pod-visible, keep it non-personal and non-secret, and write nothing
-there you wouldn't publish to every replica. Unique per-pod identity
-will arrive with per-pod authenticated Steward identities; revisit this
-rule then.
+**Important:** Steward personal memory is scoped to the credential identity
+configured for each worker pool. Replicas in the same pool share memory
+access; a new pool needs its own Steward credential before its personal
+memories are isolated from other pools. Never store credentials or secrets
+in memory. Shared wake-up guidance belongs in the tracked
+`HIVE_WORKER_MEMORY.md`; generated `/workspace` copies are overwritten at
+container startup.
