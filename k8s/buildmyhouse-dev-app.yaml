@@ -12,7 +12,7 @@ spec:
     spec:
       containers:
         - name: buildmyhouse-dev-app
-          image: localhost:30500/buildmyhouse-app:dev-pending
+          image: localhost:30500/buildmyhouse-app:dev-914028a@sha256:8f10497eb2df8582e8f991caaa890bcb3d340982a778e78ab7a88c153bc97a47
           imagePullPolicy: Always
           ports: [{ containerPort: 3000 }]
           readinessProbe:
@@ -72,7 +72,7 @@ spec:
     spec:
       containers:
         - name: buildmyhouse-dev-mcp
-          image: localhost:30500/buildmyhouse-mcp:dev-pending
+          image: localhost:30500/buildmyhouse-mcp:dev-914028a@sha256:ebf1a3782ccad3193107892429adfcff31349377f8c3ac81580489b60491a17d
           imagePullPolicy: Always
           ports: [{ containerPort: 8080 }]
           readinessProbe:
@@ -87,6 +87,8 @@ spec:
               value: "8080"
             - name: BUILDMYHOUSE_API_URL
               value: http://buildmyhouse-dev-app:3000
+          envFrom:
+            - secretRef: { name: buildmyhouse-dev-secrets }
           resources:
             requests: { cpu: 200m, memory: 512Mi }
             limits: { cpu: 1500m, memory: 2Gi }
@@ -114,7 +116,7 @@ spec:
     spec:
       containers:
         - name: buildmyhouse-dev-luxcore
-          image: localhost:30500/buildmyhouse-luxcore:dev-pending
+          image: localhost:30500/buildmyhouse-luxcore:dev-914028a@sha256:772c6fddca85cca940801dd78ab1168dc070488ba2a22d10bdc766b08b914f6c
           imagePullPolicy: Always
           ports: [{ containerPort: 8081 }]
           readinessProbe:
@@ -122,6 +124,8 @@ spec:
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 5
+          envFrom:
+            - secretRef: { name: buildmyhouse-dev-secrets }
           resources:
             requests: { cpu: 200m, memory: 512Mi }
             limits: { cpu: 1500m, memory: 2Gi }
