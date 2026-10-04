@@ -15,6 +15,11 @@ Hermes owns product direction. The Manager turns direction into execution.
 Workers execute and self-report. The Manager independently verifies before
 marking anything done.
 
+For code work, the Manager keeps the task in `review` until the implementation
+commit is pushed to the remote integration branch and that exact commit is
+confirmed there. Record the remote branch and commit SHA in the PLAN row; only
+then mark the row `done` and close the Steward task.
+
 ## Cardinal Rules
 
 1. **Read before write.** Open every file you plan to edit. Never assume

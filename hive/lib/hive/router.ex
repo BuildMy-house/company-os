@@ -22,25 +22,58 @@ defmodule Hive.Router do
       %{"jsonrpc" => "2.0", "id" => request_id, "method" => "message/send", "params" => params} ->
         task_id = "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
         parts = get_in(params, ["message", "parts"]) || []
-        task = Hive.Tasks.create(task_id, parts)
+        metadata = params["metadata"] || get_in(params, ["message", "metadata"]) || %{}
         started_at = System.monotonic_time(:millisecond)
 
-        Hive.Telemetry.emit(%{
-          "event" => "a2a_task",
-          "task_id" => task_id,
-          "state" => "submitted"
-        })
+        case Hive.Work.enqueue(task_id, parts, metadata) do
+          {:ok, work} ->
+            task =
+              Hive.Tasks.create(
+                task_id,
+                parts,
+                work["title"] || work[:title],
+                work["slug"] || work[:slug]
+              )
 
-        {:ok, _work} = Hive.Work.enqueue(task_id, parts)
+            Hive.Telemetry.emit(%{
+              "event" => "a2a_task",
+              "task_id" => task_id,
+              "work_slug" => task.slug,
+              "state" => "submitted"
+            })
 
-        Hive.Telemetry.emit(%{
-          "event" => "a2a_task",
-          "task_id" => task_id,
-          "state" => "available",
-          "duration_ms" => System.monotonic_time(:millisecond) - started_at
-        })
+            Hive.Telemetry.emit(%{
+              "event" => "a2a_task",
+              "task_id" => task_id,
+              "work_slug" => task.slug,
+              "state" => "available",
+              "duration_ms" => System.monotonic_time(:millisecond) - started_at
+            })
 
-        json(conn, %{"jsonrpc" => "2.0", "id" => request_id, "result" => task_response(task)})
+            json(conn, %{"jsonrpc" => "2.0", "id" => request_id, "result" => task_response(task)})
+
+          {:error, :slug_taken} ->
+            json(
+              conn,
+              %{
+                "jsonrpc" => "2.0",
+                "id" => request_id,
+                "error" => %{"code" => -32009, "message" => "work slug already exists"}
+              },
+              409
+            )
+
+          {:error, :invalid_slug} ->
+            json(
+              conn,
+              %{
+                "jsonrpc" => "2.0",
+                "id" => request_id,
+                "error" => %{"code" => -32602, "message" => "slug must be lowercase kebab-case"}
+              },
+              422
+            )
+        end
 
       %{"jsonrpc" => "2.0", "id" => request_id, "method" => method} ->
         json(
@@ -212,16 +245,22 @@ defmodule Hive.Router do
     with %{"agent_id" => agent_id, "state" => state} <- conn.body_params,
          {:ok, work} <-
            Hive.Work.complete(work_id, agent_id, state, conn.body_params["result"] || %{}) do
-      Hive.Tasks.attach_remote(work_id, %{
-        "id" => work_id,
+      Hive.Tasks.attach_remote(work["id"] || work[:id] || work_id, %{
+        "id" => work["id"] || work[:id] || work_id,
         "status" => %{"state" => state},
-        "result" => work["result"]
+        "result" => work["result"] || work[:result]
       })
 
       json(conn, work)
     else
-      {:error, :not_owner} -> json(conn, %{"error" => "agent does not hold lease"}, 409)
-      _ -> json(conn, %{"error" => "agent_id and state required"}, 400)
+      {:error, :not_owner} ->
+        json(conn, %{"error" => "agent does not hold lease"}, 409)
+
+      {:error, :invalid_state} ->
+        json(conn, %{"error" => "state must be completed or failed"}, 422)
+
+      _ ->
+        json(conn, %{"error" => "agent_id and state required"}, 400)
     end
   end
 
@@ -252,21 +291,47 @@ defmodule Hive.Router do
   defp task_response(task),
     do: %{
       "id" => task.id,
-      "status" => %{"state" => task.state},
-      "metadata" => %{"remote" => task.remote}
+      "name" => task.title,
+      "slug" => task.slug,
+      "status" => %{
+        "state" => task.state,
+        "attempt" => task.attempt || 0,
+        "last_failure" => task.last_failure,
+        "claimed_by" => task.claimed_by,
+        "lease_expires_at" => task.lease_expires_at
+      },
+      "metadata" => %{"remote" => task.remote, "slug" => task.slug}
     }
 
   defp work_task_response(task_id, work),
     do: %{
-      "id" => task_id,
-      "status" => %{"state" => work["state"] || work.state},
-      "metadata" => %{"remote" => nil}
+      "id" => work["id"] || work[:id] || task_id,
+      "name" => work["title"] || work[:title],
+      "slug" => work["slug"] || work[:slug],
+      "status" => %{
+        "state" => work["state"] || work[:state],
+        "attempt" => work["attempt"] || work[:attempt] || 0,
+        "last_failure" => work["last_failure"] || work[:last_failure],
+        "claimed_by" => work["claimed_by"] || work[:claimed_by],
+        "lease_expires_at" => work["lease_expires_at"] || work[:lease_expires_at]
+      },
+      "metadata" => %{"remote" => nil, "slug" => work["slug"] || work[:slug]}
     }
 
   defp refresh_work(task) do
     case Hive.Work.get(task.id) do
-      {:ok, %{} = work} -> %{task | state: work["state"] || work.state}
-      _ -> task
+      {:ok, %{} = work} ->
+        %{
+          task
+          | state: work["state"] || work[:state],
+            attempt: work["attempt"] || work[:attempt] || 0,
+            last_failure: work["last_failure"] || work[:last_failure],
+            claimed_by: work["claimed_by"] || work[:claimed_by],
+            lease_expires_at: work["lease_expires_at"] || work[:lease_expires_at]
+        }
+
+      _ ->
+        task
     end
   end
 

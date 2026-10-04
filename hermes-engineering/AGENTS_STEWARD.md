@@ -52,6 +52,9 @@ todo → claimed → in_progress → review → done
 ```
 
 - **Only the integrator/manager sets `done`**
+- For code work, keep the task in `review` until the verified implementation
+  commit is pushed to the remote integration branch and that exact SHA is
+  confirmed there. Record branch + SHA in the PLAN row before setting `done`.
 - Workers cannot self-approve
 - `blocked`: set status + write reason in Notes column
 
