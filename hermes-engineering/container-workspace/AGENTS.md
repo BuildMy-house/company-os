@@ -100,7 +100,10 @@ including how to try and record a model with no routing memory yet.
 The tracked `HIVE_WORKER_MEMORY.md` is loaded directly into both the Hive
 bid-assessment prompt and the allocated task prompt at worker startup. Keep
 shared bidding and execution tips there so they work regardless of the CLI's
-`AGENTS.md`/`CLAUDE.md` auto-loading behavior.
+`AGENTS.md`/`CLAUDE.md` auto-loading behavior. After allocation, the task
+prompt also carries the assessment's confidence, estimates, risk, evidence,
+approach, and submitted bid so execution continues with the reason for the
+bid in context.
 
 Before bidding on a Hive work item, this container's manager asks the
 eligible worker model (via the normal upstream run path) to assess the

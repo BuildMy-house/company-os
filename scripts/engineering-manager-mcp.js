@@ -490,8 +490,19 @@ export async function runHiveWork(candidate, deps = {}) {
     hiveBusy = true;
     const task = { id: candidate.id, state: "working", startedAt: Date.now() };
     const taskPrompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
+    const bidContext = {
+      confidence: assessment.confidence,
+      expected_benefit: assessment.expected_benefit,
+      estimated_cost: assessment.estimated_cost,
+      risk: assessment.risk,
+      evidence: assessment.evidence || "",
+      approach: assessment.approach || decision.bid.approach,
+      submitted_bid: decision.bid,
+    };
     const prompt = [
       HIVE_WORKER_MEMORY ? `Local Hive worker startup memory (trusted guidance):\n${HIVE_WORKER_MEMORY}` : "",
+      "Bid decision context for this same Hive task. Use this prior fit reasoning to guide execution, check it against the repository and actual task, and call out any material change:",
+      JSON.stringify(bidContext, null, 2),
       taskPrompt,
     ].filter(Boolean).join("\n\n");
     upstreamCall("run", { workFolder: "/workspace", prompt, agent: MANAGER.agent, model: MANAGER.model }, { task_id: task.id }).then((reply) => {

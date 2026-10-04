@@ -24,6 +24,9 @@ pools; do not put personal notes, credentials, or task-specific data here.
 
 ## After allocation
 
+- The task context includes the bid's confidence, benefit/cost estimates,
+  risk, evidence, and approach. Use that reasoning as the starting point,
+  then revise your plan if repository facts contradict it.
 - Claim the exact task slug using your own configured `HIVE_AGENT_ID` and
   connected Steward identity. Never impersonate another worker.
 - Follow the task's acceptance criteria, report evidence and blockers
