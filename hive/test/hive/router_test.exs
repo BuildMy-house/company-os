@@ -52,7 +52,56 @@ defmodule Hive.RouterTest do
 
     assert conn.status == 200
     assert task["status"]["state"] == "available"
+    assert task["name"] == "test"
+    assert task["slug"] == "test"
     assert task["metadata"]["remote"] == nil
+
+    by_slug =
+      conn(:get, "/tasks/test")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert by_slug["id"] == task_id
+    assert by_slug["slug"] == "test"
+  end
+
+  test "rejects duplicate and invalid human-readable slugs" do
+    submit = fn params ->
+      conn(
+        :post,
+        "/",
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "message/send",
+          "params" => params
+        })
+      )
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+    end
+
+    message = %{"message" => %{"parts" => [%{"text" => "Unique human task"}]}}
+    assert submit.(message).status == 200
+    assert submit.(message).status == 409
+
+    invalid = put_in(message, ["metadata"], %{"slug" => "Bad Slug"})
+    assert submit.(invalid).status == 422
+  end
+
+  test "bids and lifecycle events accept the readable slug" do
+    task_id = create_task!("Readable work slug")
+    slug = "readable-work-slug"
+
+    submit_bid!(slug, "worker", 0.8, 1, 3)
+    allocated = allocate!(slug, 900)
+    assert allocated["id"] == task_id
+    assert allocated["payload"]["slug"] == slug
+
+    {:ok, events} = Hive.Work.events(slug)
+    assert Enum.map(events, & &1["topic"]) == ["work.started", "work.allocated", "work.created"]
+    assert hd(events)["payload"]["slug"] == slug
   end
 
   test "restores an A2A task read from durable work" do
@@ -127,13 +176,22 @@ defmodule Hive.RouterTest do
     heartbeat_body = Jason.encode!(%{"agent_id" => "agent-1", "lease_seconds" => 900})
 
     heartbeat =
-      conn(:post, "/work/#{task_id}/heartbeat", heartbeat_body)
+      conn(:post, "/work/queued/heartbeat", heartbeat_body)
       |> Plug.Conn.put_req_header("content-type", "application/json")
       |> Hive.Router.call(@opts)
       |> Map.fetch!(:resp_body)
       |> Jason.decode!()
 
     assert heartbeat["state"] == "claimed"
+
+    claimed_task =
+      conn(:get, "/tasks/queued")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert claimed_task["status"]["claimed_by"] == "agent-1"
+    assert claimed_task["status"]["attempt"] == 1
 
     complete_body =
       Jason.encode!(%{
@@ -143,15 +201,26 @@ defmodule Hive.RouterTest do
       })
 
     completed =
-      conn(:post, "/work/#{task_id}/complete", complete_body)
+      conn(:post, "/work/queued/complete", complete_body)
       |> Plug.Conn.put_req_header("content-type", "application/json")
       |> Hive.Router.call(@opts)
       |> Map.fetch!(:resp_body)
       |> Jason.decode!()
 
     assert completed["state"] == "completed"
+    assert completed["claimed_by"] == nil
+    assert completed["lease_expires_at"] == nil
 
-    assert {:ok, events} = Hive.Work.events(task_id)
+    done_task =
+      conn(:get, "/tasks/queued")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert done_task["status"]["state"] == "completed"
+    assert done_task["status"]["claimed_by"] == nil
+
+    assert {:ok, events} = Hive.Work.events("queued")
 
     assert Enum.map(events, & &1["topic"]) == [
              "engineering.completed",
@@ -260,6 +329,17 @@ defmodule Hive.RouterTest do
     Process.sleep(1100)
     assert {:ok, _} = Hive.Work.available(10)
 
+    task =
+      conn(:get, "/tasks/stale-bid")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert task["status"]["attempt"] == 1
+    assert task["status"]["last_failure"]["reason"] == "lease_expired"
+    {:ok, events} = Hive.Work.events("stale-bid")
+    assert Enum.any?(events, &(&1["topic"] == "engineering.failed" and &1["attempt"] == 1))
+
     {:ok, bids} = Hive.Work.ranked_bids(task_id)
     refute Enum.any?(bids, &(&1["agent_id"] == "stale"))
 
@@ -280,6 +360,17 @@ defmodule Hive.RouterTest do
 
     {:ok, bids} = Hive.Work.ranked_bids(task_id)
     refute Enum.any?(bids, &(&1["agent_id"] == "stale"))
+
+    {:ok, events} = Hive.Work.events(task_id)
+
+    assert Enum.map(events, & &1["topic"]) == [
+             "work.started",
+             "work.allocated",
+             "engineering.failed",
+             "work.started",
+             "work.allocated",
+             "work.created"
+           ]
   end
 
   defp post_json(path, body) do
