@@ -10,7 +10,6 @@ spec:
   template:
     metadata: { labels: { app: buildmyhouse-dev-app } }
     spec:
-      serviceAccountName: company-ops
       containers:
         - name: buildmyhouse-dev-app
           image: localhost:30500/buildmyhouse-app:dev-pending
@@ -71,7 +70,6 @@ spec:
   template:
     metadata: { labels: { app: buildmyhouse-dev-mcp } }
     spec:
-      serviceAccountName: company-ops
       containers:
         - name: buildmyhouse-dev-mcp
           image: localhost:30500/buildmyhouse-mcp:dev-pending
@@ -114,7 +112,6 @@ spec:
   template:
     metadata: { labels: { app: buildmyhouse-dev-luxcore } }
     spec:
-      serviceAccountName: company-ops
       containers:
         - name: buildmyhouse-dev-luxcore
           image: localhost:30500/buildmyhouse-luxcore:dev-pending
