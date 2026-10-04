@@ -21,6 +21,10 @@ pools; do not put personal notes, credentials, or task-specific data here.
 - Use only shared scoped Steward guidance during bidding. Personal memories
   are private to their Steward pool identity; replicas using that pool's
   credential share the identity, and other pools must not rely on them.
+- For tasks that need live cluster state from the `buildmyhouse-dev` gate
+  flow, see `docs/DEV-CLUSTER-GATE.md`. Only the Claude-manager side has a
+  `kubernetes` MCP tool; OpenCode workers do not and must ask the manager
+  for cluster state instead of assuming `kubectl` is available.
 
 ## After allocation
 

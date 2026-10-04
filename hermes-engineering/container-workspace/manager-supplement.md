@@ -39,6 +39,16 @@ manager handles Hermes image updates. The surviving manager waits for
 readiness and can complete the automatic rollback. A `hermes_ask` handoff is
 not deployment approval.
 
+## Dev-cluster gate (buildmyhouse-dev)
+
+For live debugging/verification against the disposable `buildmyhouse-dev`
+namespace (auto-deployed copy of `app`'s `dev` branch), see
+`docs/DEV-CLUSTER-GATE.md` in the `company-os` checkout. Use the
+`kubernetes` MCP tool (same `kubernetes-mcp-server` Hermes runs, see
+`hermes/config.yaml`'s `k8s_deployment` entry and
+`scripts/generate-agent-mcp-config.js`) for cluster reads/manual rebuild
+triggers in that flow -- this image has no `kubectl` binary.
+
 ## `builder-manager` — in-pod build+push, never a deploy
 
 If the `builder-manager` MCP server is connected (it is gated on its own

@@ -55,6 +55,16 @@ Rules:
 - After modifying code, run `graphify update .` to keep the graph current
   (AST-only, no API cost).
 
+## Dev-cluster gate flow
+
+For live debugging against `buildmyhouse-dev` (disposable copy of `app`'s
+`dev` branch, auto-deployed by a poller CronJob), see
+`docs/DEV-CLUSTER-GATE.md`. Use the `kubernetes` MCP tool where available
+(Hermes, and the engineering-agent's Claude-manager side) instead of a raw
+`kubectl` binary -- see `hermes/config.yaml`'s `k8s_deployment` entry and
+`scripts/generate-agent-mcp-config.js`'s `kubernetes` entry for how it's
+wired, and `k8s/rbac.yaml` for exactly what it can and cannot do.
+
 ## E2E Tests (Playwright) — MANDATORY for UI work
 
 UI and 3D viewport changes MUST be verified with Playwright E2E tests.
