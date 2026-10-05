@@ -61,10 +61,20 @@ if (hiveMember) {
   hiveInput.on("line", (line) => {
     let message;
     try { message = JSON.parse(line); } catch { return; }
+    if (message.method === "notifications/message" && message.params?.data?.event === "hive_subscription") {
+      emitTelemetry(message.params.data);
+      return;
+    }
     const waiter = hivePending.get(message.id);
     if (!waiter) return;
     hivePending.delete(message.id);
-    if (message.error) waiter.reject(new Error(message.error.message || "Hive MCP call failed"));
+    if (message.error) {
+      let details;
+      try { details = JSON.parse(message.error.message); } catch {}
+      const error = new Error(details?.message || message.error.message || "Hive MCP call failed");
+      error.details = details;
+      waiter.reject(error);
+    }
     else waiter.resolve(message);
   });
   hiveMember.on("error", (error) => {
@@ -236,14 +246,16 @@ function a2aResponse(task) {
 }
 
 function trackProcess(task, pid, onDone = () => {}) {
-  const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
   const heartbeat = process.env.HIVE_URL ? setInterval(() => {
     hiveCall("hive_heartbeat", { task_id: task.id, lease_seconds: 900 })
-      .catch((error) => emitTelemetry({ event: "hive_lease", task_id: task.id, state: "failed", error: error.message }));
+      .catch((error) => emitTelemetry({ event: "hive_lease", task_id: task.id, state: "failed", ...errorTelemetry(error) }));
   }, 60_000) : null;
   const finish = (value) => {
-    if (heartbeat) clearInterval(heartbeat);
-    onDone(value);
+    Promise.resolve().then(() => onDone(value)).catch((error) => {
+      emitTelemetry({ event: "hive_completion", task_id: task.id, state: "failed", stage: "completion_callback", ...errorTelemetry(error) });
+    }).finally(() => {
+      if (heartbeat) clearInterval(heartbeat);
+    });
   };
   const poll = () => upstreamCall("get_result", { pid, verbose: true }, { task_id: task.id }).then((reply) => {
     const payload = toolPayload(reply);
@@ -347,6 +359,39 @@ export function outputText(payload) {
   const output = payload?.agentOutput?.text ?? payload?.agentOutput?.message ?? payload?.agentOutput?.output ?? payload?.output ?? payload?.result;
   if (typeof output === "string") return output;
   return output == null ? "" : JSON.stringify(output);
+}
+
+export function retryDelayMs(attempt, random = Math.random) {
+  const ceiling = Math.min(60_000, 1_000 * (2 ** Math.max(0, attempt - 1)));
+  return Math.floor(Math.max(0, Math.min(0.999999, random())) * ceiling);
+}
+
+export function errorTelemetry(error) {
+  const details = error?.details || error;
+  const clean = (value) => String(value || "")
+    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "[url]")
+    .slice(0, 400);
+  return {
+    error: clean(details?.message || error?.message || error),
+    error_name: clean(details?.name || error?.name),
+    error_code: clean(details?.code || details?.cause_code || error?.cause?.code),
+    error_cause: clean(details?.cause || error?.cause?.message),
+    http_status: details?.http_status || details?.status || error?.status || null,
+    error_stage: details?.stage || null,
+  };
+}
+
+export async function completeWithRetry(hiveCallDep, args, { maxAttempts = 8, wait = delay, random = Math.random, onFailure = () => {} } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await hiveCallDep("hive_complete", args);
+    } catch (error) {
+      onFailure({ attempt, ...errorTelemetry(error) });
+      if (attempt >= maxAttempts || [400, 401, 403, 404, 409, 422].includes(error?.details?.http_status || error?.status)) throw error;
+      await wait(retryDelayMs(attempt, random));
+    }
+  }
 }
 
 export function buildFitPrompt({ prompt, capabilities, health, load }) {
@@ -456,6 +501,7 @@ export async function runHiveWork(candidate, deps = {}) {
     return;
   }
   let assessment = null;
+  const assessmentStartedAt = Date.now();
   try {
     const taskPrompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
     const stats = telemetryDep();
@@ -469,9 +515,9 @@ export async function runHiveWork(candidate, deps = {}) {
       },
       load: { load_average: stats.load_average, process_count: stats.process_count, memory: stats.memory },
     });
-    emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "completed" });
+    emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "completed", stage: "task_fit", runner_agent: MANAGER.agent, provider: MANAGER.model.split("/")[0], model: MANAGER.model, duration_ms: Date.now() - assessmentStartedAt });
   } catch (error) {
-    emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "failed", error: error.message });
+    emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "failed", stage: "task_fit", runner_agent: MANAGER.agent, provider: MANAGER.model.split("/")[0], model: MANAGER.model, duration_ms: Date.now() - assessmentStartedAt, ...errorTelemetry(error) });
   }
   const decision = evaluateFit({ assessment, busy: hiveBusy, healthStatus: healthState.status });
   if (decision.skip) {
@@ -509,29 +555,49 @@ export async function runHiveWork(candidate, deps = {}) {
       const started = toolPayload(reply);
       if (reply.error || started?.status !== "started" || !Number.isInteger(started.pid)) throw new Error(reply.error?.message || "engineering runner did not return a process id");
       task.pid = started.pid;
-      trackProcess(task, started.pid, (finished) => hiveCall("hive_complete", { task_id: candidate.id, state: finished.state, result: finished.result || { error: finished.error } }).then(() => emitTelemetry({ event: "hive_work", task_id: candidate.id, state: finished.state, agent_id: process.env.HIVE_AGENT_ID || "engineering-agent" })).catch((error) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", error: error.message })).finally(() => { hiveBusy = false; }));
+      trackProcess(task, started.pid, async (finished) => {
+        try {
+          await completeWithRetry(hiveCall, { task_id: candidate.id, state: finished.state, result: finished.result || { error: finished.error } }, {
+            onFailure: (failure) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "retrying", ...failure }),
+          });
+          emitTelemetry({ event: "hive_work", task_id: candidate.id, state: finished.state, agent_id: process.env.HIVE_AGENT_ID || "engineering-agent" });
+        } catch (error) {
+          emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", stage: "complete", ...errorTelemetry(error) });
+        } finally {
+          hiveBusy = false;
+        }
+      });
     }).catch((error) => {
-      hiveCall("hive_complete", { task_id: candidate.id, state: "failed", result: { error: error.message } }).catch(() => {}).finally(() => { hiveBusy = false; });
+      completeWithRetry(hiveCall, { task_id: candidate.id, state: "failed", result: { error: error.message } })
+        .catch((completionError) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", stage: "runner_start", ...errorTelemetry(completionError) }))
+        .finally(() => { hiveBusy = false; });
     });
   } catch (error) {
     hiveBusy = false;
-    emitTelemetry({ event: "hive_subscription", state: "failed", error: error.message });
+    emitTelemetry({ event: "hive_work_dispatch", state: "failed", stage: "dispatch", ...errorTelemetry(error) });
   }
 }
 
+let hiveRetryAttempt = 0;
 async function subscribeHive() {
   if (!hiveMember) return;
   const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
+  const startedAt = Date.now();
   try {
-    emitTelemetry({ event: "hive_subscription", state: "connected", agent_id: agentId });
+    emitTelemetry({ event: "hive_subscription", state: "connecting", agent_id: agentId, attempt: hiveRetryAttempt + 1 });
     while (true) {
       const candidate = await hiveCall("hive_next_work", { timeout_seconds: 900 });
+      hiveRetryAttempt = 0;
+      emitTelemetry({ event: "hive_subscription", state: "work_received", agent_id: agentId, duration_ms: Date.now() - startedAt });
       await runHiveWork(candidate);
     }
   } catch (error) {
-    emitTelemetry({ event: "hive_subscription", state: "failed", error: error.message });
+    hiveRetryAttempt += 1;
+    const delayMs = retryDelayMs(hiveRetryAttempt);
+    emitTelemetry({ event: "hive_subscription", state: "failed", agent_id: agentId, attempt: hiveRetryAttempt, duration_ms: Date.now() - startedAt, ...errorTelemetry(error) });
+    emitTelemetry({ event: "hive_subscription", state: "reconnecting", agent_id: agentId, attempt: hiveRetryAttempt, delay_ms: delayMs });
+    setTimeout(subscribeHive, delayMs);
   }
-  setTimeout(subscribeHive, 1000);
 }
 if (hiveMember) subscribeHive();
 

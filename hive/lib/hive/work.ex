@@ -857,6 +857,8 @@ defmodule Hive.Work do
         _from,
         %{memory: memory} = state
       ) do
+    result = result || %{}
+
     case memory.work[id] do
       %{claimed_by: ^agent_id} = item ->
         completed =
@@ -877,7 +879,7 @@ defmodule Hive.Work do
             %{
               "agent_id" => agent_id,
               "state" => final_state,
-              "result" => result || %{},
+              "result" => result,
               "slug" => item["slug"]
             },
             item.attempt || 0
@@ -891,6 +893,27 @@ defmodule Hive.Work do
           |> update_in([:memory, :events], &[event | &1])
 
         {:reply, {:ok, completed}, next}
+
+      %{state: ^final_state, result: ^result, claimed_by: nil, attempt: attempt} = item ->
+        topic =
+          if final_state == "completed", do: "engineering.completed", else: "engineering.failed"
+
+        completion_event =
+          Enum.find(memory.events, fn existing ->
+            payload = existing["payload"] || %{}
+
+            existing["topic"] == topic && existing["task_id"] == id &&
+              existing["attempt"] == attempt &&
+              payload["agent_id"] == agent_id && payload["state"] == final_state &&
+              payload["result"] == result
+          end)
+
+        if completion_event do
+          notify_event_subscribers(completion_event)
+          {:reply, {:ok, item}, state}
+        else
+          {:reply, {:error, :not_owner}, state}
+        end
 
       _ ->
         {:reply, {:error, :not_owner}, state}
@@ -928,7 +951,32 @@ defmodule Hive.Work do
             {:ok, item, completion_event}
 
           _ ->
-            {:error, :not_owner}
+            encoded_result = Jason.encode!(result || %{})
+
+            completed =
+              Postgrex.query!(
+                tx,
+                "SELECT id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result FROM company.hive_work_items WHERE id = $1 AND state = $2 AND claimed_by IS NULL AND result = $3::jsonb",
+                [id, final_state, encoded_result]
+              )
+
+            case rows(completed) do
+              [item] ->
+                prior_event =
+                  Postgrex.query!(
+                    tx,
+                    "SELECT event_id, topic, task_id, sender, occurred_at, payload, attempt FROM company.hive_events WHERE task_id = $1 AND topic = $2 AND attempt = $3 AND payload->>'agent_id' = $4 AND payload->>'state' = $5 AND payload->'result' = $6::jsonb ORDER BY occurred_at DESC LIMIT 1",
+                    [id, topic, item["attempt"], agent_id, final_state, encoded_result]
+                  )
+
+                case rows(prior_event) do
+                  [completion_event] -> {:ok, item, completion_event}
+                  _ -> {:error, :not_owner}
+                end
+
+              _ ->
+                {:error, :not_owner}
+            end
         end
       end)
 

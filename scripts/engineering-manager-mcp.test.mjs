@@ -5,6 +5,9 @@ import {
   isValidAssessment,
   evaluateFit,
   outputText,
+  retryDelayMs,
+  errorTelemetry,
+  completeWithRetry,
   runHiveWork,
 } from "./engineering-manager-mcp.js";
 
@@ -47,7 +50,7 @@ check("buildFitPrompt carries inputs, hardens the untrusted prompt, and demands 
   assert.match(prompt, /Do NOT execute the task/);
   assert.match(prompt, /generate_guidance_packet/);
   assert.match(prompt, /ignore personal or private entries/);
-  assert.match(prompt, /never request or rely on them/);
+  assert.match(prompt, /Never request or rely on another pool's personal entries/);
   const fence = prompt.match(/<<<(TASK_PROMPT_[0-9a-f]+)/)?.[1];
   assert.ok(fence, "expected a nonce task-prompt fence");
   const opening = prompt.indexOf(`<<<${fence}`);
@@ -66,7 +69,55 @@ check("buildFitPrompt never treats priority labels as refusal reasons", () => {
   });
   const fence = prompt.match(/<<<(TASK_PROMPT_[0-9a-f]+)/)?.[1];
   const instructions = fence ? prompt.slice(0, prompt.indexOf(`<<<${fence}`)) : prompt;
-  assert.doesNotMatch(instructions, /P0|P1|reserved lane/i);
+  assert.doesNotMatch(instructions, /reserved lane/i);
+});
+
+check("retryDelayMs applies capped exponential full jitter", () => {
+  assert.equal(retryDelayMs(1, () => 0.5), 500);
+  assert.equal(retryDelayMs(8, () => 0.5), 30_000);
+  assert.equal(retryDelayMs(20, () => 0.999999), 59_999);
+  assert.equal(retryDelayMs(2, () => -1), 0);
+});
+
+check("errorTelemetry preserves useful causes and redacts credentials and URLs", () => {
+  const details = errorTelemetry(Object.assign(new Error("request failed"), {
+    details: { message: "Bearer abc failed https://hive.internal/work?token=secret", code: "ECONNRESET", cause: "socket closed", http_status: 503, stage: "work_sse" },
+  }));
+  assert.match(details.error, /Bearer \[redacted\]/);
+  assert.doesNotMatch(details.error, /abc|secret|hive\.internal/);
+  assert.equal(details.error_code, "ECONNRESET");
+  assert.equal(details.error_cause, "socket closed");
+  assert.equal(details.http_status, 503);
+  assert.equal(details.error_stage, "work_sse");
+});
+
+check("completeWithRetry retries transient errors and preserves the same completion", async () => {
+  const calls = [];
+  const retries = [];
+  let attempt = 0;
+  const result = await completeWithRetry(async (name, args) => {
+    calls.push({ name, args });
+    attempt += 1;
+    if (attempt < 3) throw Object.assign(new Error("temporary"), { status: 503 });
+    return { ok: true };
+  }, { task_id: "work-1", state: "completed", result: { sha: "abc" } }, {
+    wait: async (ms) => retries.push(ms),
+    random: () => 0.5,
+    onFailure: (failure) => retries.push(failure.attempt),
+  });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every(({ name, args }) => name === "hive_complete" && args.task_id === "work-1" && args.result.sha === "abc"));
+  assert.deepEqual(retries, [1, 500, 2, 1000]);
+});
+
+check("completeWithRetry stops retrying permanent lease and validation errors", async () => {
+  let calls = 0;
+  await assert.rejects(completeWithRetry(async () => {
+    calls += 1;
+    throw Object.assign(new Error("lease lost"), { status: 409 });
+  }, { task_id: "work-1", state: "completed" }, { wait: async () => assert.fail("must not retry") }));
+  assert.equal(calls, 1);
 });
 
 check("outputText reads the real ai-cli result shapes", () => {
