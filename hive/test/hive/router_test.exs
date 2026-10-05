@@ -229,6 +229,15 @@ defmodule Hive.RouterTest do
              "work.created"
            ]
 
+    assert {:ok, _already_completed} =
+             Hive.Work.complete("queued", "agent-1", "completed", %{"ok" => true})
+
+    assert {:ok, retry_events} = Hive.Work.events("queued")
+    assert Enum.map(retry_events, & &1["topic"]) == Enum.map(events, & &1["topic"])
+
+    assert {:error, :not_owner} =
+             Hive.Work.complete("queued", "another-agent", "completed", %{"ok" => true})
+
     event_response =
       conn(:get, "/events?task_id=#{task_id}")
       |> Hive.Router.call(@opts)

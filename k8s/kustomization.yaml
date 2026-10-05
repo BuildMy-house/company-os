@@ -10,6 +10,7 @@ resources:
   - browser-adversary.yaml
   - company-ops.yaml
   - hermes-build-dispatcher.yaml
+  - engineering-build-dispatcher.yaml
   - engineering.yaml
   - engineering-opencode.yaml
   - engineering-opencode-direct.yaml

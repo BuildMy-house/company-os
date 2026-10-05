@@ -127,7 +127,8 @@ the same kind of build+push
 persistent registry credentials — the actual boundary this whole build
 pipeline exists to keep:
 
-- The engineering-agent and Hermes build-dispatcher pods never hold a docker
+- The engineering-agent, engineering-build-dispatcher, and Hermes
+  build-dispatcher pods never hold a docker
   socket, `k3s ctr` access, `sudo`, or registry push credentials. They can
   only ask the Kubernetes API to create an isolated **Job**.
 - `builder_build_and_push(context_ref, dockerfile_path, image_repo,
@@ -199,8 +200,9 @@ pipeline exists to keep:
   below; it still cannot read any Secret, including ones it creates itself,
   back out. It cannot touch Deployments at all. This SA's bound token is
   mounted at `/var/run/secrets/builder-manager/token` in the
-  `engineering-agent` and the separate `hermes-build-dispatcher` workload.
-  Hermes itself has no builder-token mount.
+  `engineering-build-dispatcher`, the engineering worker workloads, and the
+  separate `hermes-build-dispatcher` workload. Hermes itself has no
+  builder-token mount.
 - The tool polls the Job to completion, fetches the BuildKit pod's logs on
   either outcome (masking any injected git token before returning them —
   see "Named build contexts" below), deletes the Job (best-effort;
@@ -213,6 +215,39 @@ pipeline exists to keep:
   from `hermes-build-dispatcher`; it cannot call the generic builder or the
   engineering-manager MCP. The dispatcher enforces a fixed private repo,
   root Dockerfile, image repository, and SHA-derived tag at runtime.
+
+### Stable engineering builder host
+
+The generic engineering builder runs in the dedicated
+`engineering-build-dispatcher` Deployment defined in
+`k8s/engineering-build-dispatcher.yaml`. Do not point the workspace builder
+MCP at `engineering-agent`, `engineering-opencode`, or
+`engineering-opencode-direct`: upgrading any of those pods would close an
+in-flight BuildKit call. The dispatcher uses the same build-only
+`builder-manager` ServiceAccount, exposes only the generic engineering build
+tool, and has no Deployment permissions. The Hermes dispatcher remains a
+separate fixed-scope endpoint for company-os builds.
+
+The MCP proxy binds only to the pod's loopback interface; there is no
+ClusterIP Service exposing the generic build tool to other pods. Workspace
+MCP clients start the stdio tool with `kubectl exec` into this Deployment.
+
+Provision the Deployment from the checked-in Kustomization before
+changing `.mcp.json` or `.codex/config.toml` to exec into
+`deployment/engineering-build-dispatcher`. Verify it with the independent
+container-manager MCP (`container_health`) and confirm the builder MCP's
+`tools/list` includes `builder_build_and_push`. The current container-manager
+MCP can upgrade existing Deployments but cannot create a new one; until its
+manifest-provisioning capability is available, an authorized cluster
+manifest controller must create this one-time Service and Deployment. Do not
+repurpose `hermes-build-dispatcher` or broaden its fixed company-os scope to
+work around that missing create operation.
+
+If a builder call reports `Transport closed`, its result is unknown. Check
+`engineering-build-dispatcher` health and logs from the container-manager
+MCP, then inspect the BuildKit Job and registry tag before deciding whether
+to retry. A successful Job can outlive a lost MCP response, so verify the
+immutable image digest first.
 
 
 ### Named build contexts and git credential handling

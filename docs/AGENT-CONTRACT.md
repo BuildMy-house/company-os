@@ -39,3 +39,29 @@ HIVE_AGENT_ID=website-builder
 
 Sensitive abilities remain Kubernetes RBAC and secret concerns, not prompt
 or capability-string concerns.
+
+## Connection recovery and diagnostics
+
+Worker adapters retry Hive subscriptions with capped exponential backoff and
+jitter. A `hive_subscription=connected` Axiom event means the worker received
+an HTTP 200 `text/event-stream` response; `connecting`, `failed`, and
+`reconnecting` describe the actual retry state. Each event includes the pool's
+`agent_id`; failures also include stage, duration, attempt, safe cause/code,
+and HTTP status when available. Bid-assessment events include the runner,
+provider, model, stage, and duration so a failed assessment can be separated
+from subscription transport failures.
+
+From the affected worker container, call the `hive_diagnostics` MCP tool. It
+checks DNS, TCP, the HTTP agent-card route, and the work SSE route in that
+order. It opens and closes the stream before reading data, so the check does
+not claim work. The first failing stage narrows the fault to name resolution,
+connectivity, HTTP, or SSE routing. Read the matching Axiom events and
+container logs from the independent container-manager MCP before restarting
+anything.
+
+Completion is retried with the same task, state, and result while the lease
+heartbeat stays active. Hive accepts an identical repeat from the original
+agent idempotently and emits no duplicate durable event. A different result,
+state, agent, or lease attempt is not treated as a retry. On `Transport
+closed`, inspect Hive task status and events first: the completion may already
+have committed even though the client missed its response.
