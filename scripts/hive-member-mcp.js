@@ -3,6 +3,8 @@
 // Small MCP member adapter for Hermes and other agent runtimes. Hive remains
 // the source of truth; wait uses SSE and never polls.
 import readline from "node:readline";
+import { lookup } from "node:dns/promises";
+import { createConnection } from "node:net";
 
 const base = process.env.HIVE_URL || "http://hive-coordinator:4100";
 const consumerId = process.env.HIVE_AGENT_ID || "hermees";
@@ -26,8 +28,84 @@ async function request(path, options = {}) {
     headers: { "content-type": "application/json", ...(options.headers || {}) },
   });
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error || `Hive returned ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(body.error || `Hive returned ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return body;
+}
+
+function safeErrorDetails(error, stage) {
+  const clean = (value) => String(value || "")
+    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "[url]")
+    .slice(0, 400);
+  return {
+    name: clean(error?.name || "Error"),
+    message: clean(error?.message || error),
+    code: clean(error?.cause?.code || error?.code),
+    cause: clean(error?.cause?.message),
+    http_status: error?.status || error?.statusCode || null,
+    stage,
+  };
+}
+
+function reportSubscription(state, fields = {}) {
+  send({
+    jsonrpc: "2.0",
+    method: "notifications/message",
+    params: { level: "info", logger: "hive-member", data: { event: "hive_subscription", state, agent_id: consumerId, ...fields } },
+  });
+}
+
+function checkTcp(host, port, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host, port });
+    const timer = setTimeout(() => socket.destroy(new Error("TCP connect timed out")), timeoutMs);
+    socket.once("connect", () => { clearTimeout(timer); socket.destroy(); resolve(); });
+    socket.once("error", (error) => { clearTimeout(timer); reject(error); });
+  });
+}
+
+async function diagnosticStep(name, timeoutMs, operation) {
+  const started = Date.now();
+  let timer;
+  try {
+    await Promise.race([
+      operation(),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(`${name} timed out`), { code: "ETIMEDOUT" })), timeoutMs); }),
+    ]);
+    return { step: name, ok: true, duration_ms: Date.now() - started };
+  } catch (error) {
+    return { step: name, ok: false, duration_ms: Date.now() - started, ...safeErrorDetails(error, name) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function diagnoseHive(timeoutMs = 2_000) {
+  const endpoint = new URL(base);
+  const port = Number(endpoint.port || (endpoint.protocol === "https:" ? 443 : 80));
+  const steps = [];
+  steps.push(await diagnosticStep("dns", timeoutMs, () => lookup(endpoint.hostname)));
+  steps.push(await diagnosticStep("tcp", timeoutMs, () => checkTcp(endpoint.hostname, port, timeoutMs)));
+  steps.push(await diagnosticStep("http", timeoutMs, async () => {
+    const response = await fetch(`${base}/.well-known/agent-card.json`, { signal: AbortSignal.timeout(timeoutMs) });
+    await response.body?.cancel();
+    if (!response.ok) throw Object.assign(new Error(`Hive returned ${response.status}`), { status: response.status });
+  }));
+  steps.push(await diagnosticStep("work_sse", timeoutMs, async () => {
+    const response = await fetch(`${base}/work/subscribe?agent_id=${encodeURIComponent(consumerId)}`, {
+      headers: { accept: "text/event-stream" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const contentType = response.headers.get("content-type") || "";
+    await response.body?.cancel();
+    if (!response.ok) throw Object.assign(new Error(`Hive work stream returned ${response.status}`), { status: response.status });
+    if (!contentType.includes("text/event-stream")) throw new Error(`unexpected work stream content-type: ${contentType}`);
+  }));
+  return { endpoint: endpoint.host, ok: steps.every((step) => step.ok), steps };
 }
 
 async function waitForEvent(taskId, timeoutSeconds = 900) {
@@ -75,6 +153,7 @@ const tools = [
   { name: "hive_events", description: "Replay durable lifecycle events for a task.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
   { name: "hive_wait", description: "Wait for a task completion/failure event over SSE without polling.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
   { name: "hive_next_work", description: "Wait for the next available Hive work item over SSE without polling.", inputSchema: { type: "object", properties: { timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
+  { name: "hive_diagnostics", description: "Check DNS, TCP, the Hive HTTP health route, and the worker SSE subscription from this container. Opens and immediately closes an unclaimed stream; no work is consumed.", inputSchema: { type: "object", properties: { timeout_ms: { type: "integer", minimum: 250, maximum: 5000 } }, additionalProperties: false } },
 ];
 
 function send(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }
@@ -91,10 +170,12 @@ async function call(name, args) {
   if (name === "hive_events") return request(`/events?task_id=${encodeURIComponent(args.task_id)}&limit=${args.limit || 100}`);
   if (name === "hive_wait") return waitForEvent(args.task_id, args.timeout_seconds || 900);
   if (name === "hive_next_work") return waitForWork(args.timeout_seconds || 900);
+  if (name === "hive_diagnostics") return diagnoseHive(Math.min(5_000, Math.max(250, args.timeout_ms || 2_000)));
   throw new Error(`unknown tool: ${name}`);
 }
 
 async function waitForWork(timeoutSeconds = 900) {
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
   try {
@@ -103,6 +184,9 @@ async function waitForWork(timeoutSeconds = 900) {
       headers: { accept: "text/event-stream" },
     });
     if (!response.ok || !response.body) throw new Error(`Hive work stream returned ${response.status}`);
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("text/event-stream")) throw new Error(`unexpected work stream content-type: ${contentType}`);
+    reportSubscription("connected", { duration_ms: Date.now() - startedAt, stream: "work" });
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -131,6 +215,6 @@ for await (const line of input) {
   if (message.method === "tools/list") { send({ jsonrpc: "2.0", id: message.id, result: { tools } }); continue; }
   if (message.method === "tools/call") {
     try { send(text(message.id, await call(message.params.name, message.params.arguments || {}))); }
-    catch (error) { send(fail(message.id, error.message)); }
+    catch (error) { send(fail(message.id, JSON.stringify(safeErrorDetails(error, message.params?.name)))); }
   }
 }
