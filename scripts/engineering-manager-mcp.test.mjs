@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import {
   buildFitPrompt,
@@ -11,6 +12,7 @@ import {
   runHiveWork,
   handleBidPrompt,
   promptWorkers,
+  trackProcess,
 } from "./engineering-manager-mcp.js";
 
 // Checks execute at top level when this file is loaded, so `node --test`
@@ -402,6 +404,63 @@ check("prompt -> bid -> allocate forwards the same rationale to execution", asyn
   const bidCalls = hive.calls.filter((c) => c.name === "hive_bid");
   assert.equal(bidCalls.length, 2);
   assert.deepEqual(bidCalls[1].args, bidCalls[0].args);
+});
+
+check("trackProcess: hung get_result is bounded, task fails and a terminal callback fires", async () => {
+  process.env.HIVE_POLL_TIMEOUT_MS = "20";
+  try {
+    const task = { id: "t-hung", state: "working", startedAt: Date.now() };
+    const finished = await new Promise((resolve) => {
+      trackProcess(task, 1, resolve, { call: () => new Promise(() => {}), firstPollMs: 1 });
+    });
+    assert.equal(finished.state, "failed");
+    assert.match(finished.error, /timed out after 20ms/);
+  } finally { delete process.env.HIVE_POLL_TIMEOUT_MS; }
+});
+
+check("trackProcess: rejected get_result still completes as failed", async () => {
+  const task = { id: "t-rej", state: "working", startedAt: Date.now() };
+  const finished = await new Promise((resolve) => {
+    trackProcess(task, 1, resolve, { call: async () => { throw new Error("upstream gone"); }, firstPollMs: 1 });
+  });
+  assert.equal(finished.state, "failed");
+  assert.equal(finished.error, "upstream gone");
+});
+
+check("trackProcess: execution deadline fails the task without polling again", async () => {
+  process.env.HIVE_EXEC_DEADLINE_MS = "5";
+  try {
+    const calls = [];
+    const task = { id: "t-deadline", state: "working", startedAt: Date.now() - 1000 };
+    const finished = await new Promise((resolve) => {
+      trackProcess(task, 1, resolve, { call: async (name) => { calls.push(name); return {}; }, firstPollMs: 1 });
+    });
+    assert.equal(finished.state, "failed");
+    assert.equal(finished.error, "execution deadline exceeded");
+    assert.equal(calls.includes("get_result"), false);
+  } finally { delete process.env.HIVE_EXEC_DEADLINE_MS; }
+});
+
+check("runHiveWork: hung get_result lands a failed Hive completion", async () => {
+  process.env.HIVE_POLL_TIMEOUT_MS = "20";
+  try {
+    const hive = fakeHiveFor([agentRow("w1")]);
+    hive.forWorker = ((orig) => (id) => async (name, args) => (name === "hive_allocate" ? { claimed_by: "w1" } : orig(id)(name, args)))(hive.forWorker);
+    const upstreamCall = async (tool) => (tool === "run" ? { result: { content: [{ type: "text", text: JSON.stringify({ status: "started", pid: 42 }) }] } } : new Promise(() => {}));
+    await runHiveWork({ id: "work-uuid-1", payload: workItem.payload }, { ...workerDeps(hive, "w1"), hiveCall: hive.forWorker("w1"), upstreamCall, trackOptions: { call: () => new Promise(() => {}), firstPollMs: 1 } });
+    for (let i = 0; i < 100 && !hive.calls.some((c) => c.name === "hive_complete"); i += 1) await new Promise((r) => setTimeout(r, 10));
+    const done = hive.calls.find((c) => c.name === "hive_complete");
+    assert.ok(done, "expected a terminal hive_complete");
+    assert.equal(done.args.state, "failed");
+    assert.match(done.args.result.error, /timed out/);
+  } finally { delete process.env.HIVE_POLL_TIMEOUT_MS; }
+});
+
+check("telemetry correlation: started emit spreads context and work_received carries task_id", () => {
+  // upstreamCall/subscribeHive need a live upstream/Hive, so assert on the source shape.
+  const source = readFileSync(new URL("./engineering-manager-mcp.js", import.meta.url), "utf8");
+  assert.match(source, /state: "started", \.\.\.context \}/);
+  assert.match(source, /state: "work_received", task_id: candidate\?\.id/);
 });
 
 const failures = [];

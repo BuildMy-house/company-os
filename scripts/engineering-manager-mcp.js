@@ -150,7 +150,7 @@ function upstreamCall(name, arguments_, context = {}) {
         reject(error);
       },
     });
-    emitTelemetry({ event: "manager_upstream_call", call_id: id, tool: name, state: "started" });
+    emitTelemetry({ event: "manager_upstream_call", call_id: id, tool: name, state: "started", ...context });
     upstream.stdin.write(`${JSON.stringify({
       jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: arguments_ },
     })}\n`);
@@ -246,7 +246,7 @@ function a2aResponse(task) {
   };
 }
 
-function trackProcess(task, pid, onDone = () => {}) {
+export function trackProcess(task, pid, onDone = () => {}, { call = upstreamCall, firstPollMs = 1000, pollMs = 2000 } = {}) {
   const heartbeat = process.env.HIVE_URL ? setInterval(() => {
     hiveCall("hive_heartbeat", { task_id: task.id, lease_seconds: 900 })
       .catch((error) => emitTelemetry({ event: "hive_lease", task_id: task.id, state: "failed", ...errorTelemetry(error) }));
@@ -258,7 +258,25 @@ function trackProcess(task, pid, onDone = () => {}) {
       if (heartbeat) clearInterval(heartbeat);
     });
   };
-  const poll = () => upstreamCall("get_result", { pid, verbose: true }, { task_id: task.id }).then((reply) => {
+  const pollTimeoutMs = Number(process.env.HIVE_POLL_TIMEOUT_MS) || 30_000;
+  const deadlineMs = Number(process.env.HIVE_EXEC_DEADLINE_MS) || 3_600_000;
+  const fail = (message) => {
+    task.state = "failed";
+    task.error = message;
+    emitTelemetry({ event: "a2a_task", task_id: task.id, state: "failed", duration_ms: Date.now() - task.startedAt, pid, error: task.error });
+    finish(task);
+  };
+  const bounded = (promise, message) => {
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), pollTimeoutMs); });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  };
+  const poll = () => {
+    if (Date.now() - task.startedAt > deadlineMs) {
+      const cancel = upstreamCancelTool ? call(upstreamCancelTool, { pid }, { task_id: task.id }).catch(() => {}) : Promise.resolve();
+      return bounded(cancel, "cancel timed out").catch(() => {}).then(() => fail("execution deadline exceeded"));
+    }
+    return bounded(call("get_result", { pid, verbose: true }, { task_id: task.id }), `get_result poll timed out after ${pollTimeoutMs}ms`).then((reply) => {
     const payload = toolPayload(reply);
     if (["completed", "failed", "killed"].includes(payload?.status)) {
       task.state = payload.status === "completed" ? "completed" : "failed";
@@ -273,15 +291,11 @@ function trackProcess(task, pid, onDone = () => {}) {
       finish(task);
       return;
     }
-    setTimeout(poll, 2000);
-  }).catch((error) => {
-    task.state = "failed";
-    task.error = error.message;
-    emitTelemetry({ event: "a2a_task", task_id: task.id, state: "failed", duration_ms: Date.now() - task.startedAt, pid, error: task.error });
-    finish(task);
-  });
+    setTimeout(poll, pollMs);
+    }).catch((error) => fail(error.message));
+  };
 
-  setTimeout(poll, 1000);
+  setTimeout(poll, firstPollMs);
 }
 
 function sendHttp(response, status, body) {
@@ -573,7 +587,7 @@ export async function runHiveWork(candidate, deps = {}) {
       task.pid = started.pid;
       trackProcess(task, started.pid, async (finished) => {
         try {
-          await completeWithRetry(hiveCall, { task_id: candidate.id, state: finished.state, result: finished.result || { error: finished.error } }, {
+          await completeWithRetry(hiveCallDep, { task_id: candidate.id, state: finished.state, result: finished.result || { error: finished.error } }, {
             onFailure: (failure) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "retrying", ...failure }),
           });
           emitTelemetry({ event: "hive_work", task_id: candidate.id, state: finished.state, agent_id: process.env.HIVE_AGENT_ID || "engineering-agent" });
@@ -582,7 +596,7 @@ export async function runHiveWork(candidate, deps = {}) {
         } finally {
           hiveBusy = false;
         }
-      });
+      }, deps.trackOptions);
     }).catch((error) => {
       completeWithRetry(hiveCallDep, { task_id: candidate.id, state: "failed", result: { error: error.message } })
         .catch((completionError) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", stage: "runner_start", ...errorTelemetry(completionError) }))
@@ -714,7 +728,7 @@ async function subscribeHive() {
     while (true) {
       const candidate = await hiveCall("hive_next_work", { timeout_seconds: 900 });
       hiveRetryAttempt = 0;
-      emitTelemetry({ event: "hive_subscription", state: "work_received", agent_id: agentId, duration_ms: Date.now() - startedAt });
+      emitTelemetry({ event: "hive_subscription", state: "work_received", task_id: candidate?.id, agent_id: agentId, duration_ms: Date.now() - startedAt });
       await runHiveWork(candidate);
     }
   } catch (error) {

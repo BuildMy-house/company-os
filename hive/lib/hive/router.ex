@@ -154,6 +154,9 @@ defmodule Hive.Router do
 
         json(conn, %{"work_id" => work_id, "bids" => ranked})
 
+      {:error, reason} when reason in [:not_found, :work_not_found] ->
+        json(conn, %{"error" => "work not found"}, 404)
+
       _ ->
         json(conn, %{"error" => "unable to rank bids"}, 500)
     end

@@ -118,6 +118,14 @@ defmodule Hive.RouterTest do
     assert hd(events)["payload"]["slug"] == slug
   end
 
+  test "GET bids for unknown work returns 404 instead of 500" do
+    for work_id <- ["no-such-work-slug", "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)] do
+      conn = conn(:get, "/work/#{work_id}/bids") |> Hive.Router.call(@opts)
+      assert conn.status == 404
+      assert Jason.decode!(conn.resp_body) == %{"error" => "work not found"}
+    end
+  end
+
   test "restores an A2A task read from durable work" do
     task_id = "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
     assert {:ok, _} = Hive.Work.enqueue(task_id, [%{"text" => "durable"}])
