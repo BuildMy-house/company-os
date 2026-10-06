@@ -154,6 +154,10 @@ const tools = [
   { name: "hive_wait", description: "Wait for a task completion/failure event over SSE without polling.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
   { name: "hive_next_work", description: "Wait for the next available Hive work item over SSE without polling.", inputSchema: { type: "object", properties: { timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
   { name: "hive_diagnostics", description: "Check DNS, TCP, the Hive HTTP health route, and the worker SSE subscription from this container. Opens and immediately closes an unclaimed stream; no work is consumed.", inputSchema: { type: "object", properties: { timeout_ms: { type: "integer", minimum: 250, maximum: 5000 } }, additionalProperties: false } },
+  ...(process.env.AGENT_ROLE === "manager" ? [
+    { name: "hive_prompt_workers", description: "Wake currently subscribed eligible workers for an available task. Returns worker identities prompted; does not bid or allocate on their behalf.", inputSchema: { type: "object", required: ["work_slug"], properties: { work_slug: { type: "string" } }, additionalProperties: false } },
+    { name: "hive_work_bids", description: "Read bids and their rationale for a Hive item by human-readable slug or task id.", inputSchema: { type: "object", required: ["work_slug"], properties: { work_slug: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
+  ] : []),
 ];
 
 function send(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }
@@ -171,6 +175,8 @@ async function call(name, args) {
   if (name === "hive_wait") return waitForEvent(args.task_id, args.timeout_seconds || 900);
   if (name === "hive_next_work") return waitForWork(args.timeout_seconds || 900);
   if (name === "hive_diagnostics") return diagnoseHive(Math.min(5_000, Math.max(250, args.timeout_ms || 2_000)));
+  if (name === "hive_prompt_workers") return request(`/work/${encodeURIComponent(args.work_slug)}/prompt`, { method: "POST", body: JSON.stringify({ requester_id: consumerId }) });
+  if (name === "hive_work_bids") return request(`/work/${encodeURIComponent(args.work_slug)}/bids?limit=${args.limit || 100}`);
   throw new Error(`unknown tool: ${name}`);
 }
 
