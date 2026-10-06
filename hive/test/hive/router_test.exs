@@ -90,6 +90,20 @@ defmodule Hive.RouterTest do
     assert submit.(invalid).status == 422
   end
 
+  test "lists registered agents with endpoint and capabilities" do
+    :ok =
+      Hive.Work.register_agent(%{
+        "id" => "listed-worker",
+        "endpoint" => "http://listed-worker:8001",
+        "capabilities" => %{"modes" => ["bid", "execute"]}
+      })
+
+    conn = conn(:get, "/agents") |> Hive.Router.call(@opts)
+    assert conn.status == 200
+    agents = Jason.decode!(conn.resp_body)["agents"]
+    assert %{"endpoint" => "http://listed-worker:8001"} = Enum.find(agents, &(&1["id"] == "listed-worker"))
+  end
+
   test "bids and lifecycle events accept the readable slug" do
     task_id = create_task!("Readable work slug")
     slug = "readable-work-slug"

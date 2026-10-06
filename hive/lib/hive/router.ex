@@ -123,6 +123,11 @@ defmodule Hive.Router do
     end
   end
 
+  get "/agents" do
+    {:ok, agents} = Hive.Work.agents()
+    json(conn, %{"agents" => agents})
+  end
+
   post "/work/:work_id/bids" do
     with %{"agent_id" => agent_id} <- conn.body_params,
          {:ok, bid} <-

@@ -217,6 +217,7 @@ if (isMain) {
       }
       visible.push(tool("team_health", `Check ${MANAGER.flavor} ${MANAGER.role}, workspace, identity, and worker-binary health.`, { type: "object", properties: {}, additionalProperties: false }));
       visible.push(tool("container_telemetry", "Get lightweight engineering-container uptime, load, memory, process, and disk telemetry.", { type: "object", properties: {}, additionalProperties: false }));
+      if (hiveMember) visible.push(tool("hive_prompt_workers", "Ask each eligible registered Hive worker to assess one available work item (by human slug or id) and submit its OWN hive_bid. Returns per-worker bid/declined/unavailable/timeout outcomes with stored rationale. Never allocates; call hive_allocate separately afterwards.", { type: "object", required: ["work"], properties: { work: { type: "string", description: "Work slug (or durable id)" }, worker_ids: { type: "array", items: { type: "string" } }, timeout_seconds: { type: "integer", minimum: 1, maximum: 300 } }, additionalProperties: false }));
       message.result.tools = visible;
     }
     send(message);
@@ -318,6 +319,14 @@ async function handleA2A(request, response) {
     return sendHttp(response, 400, { jsonrpc: "2.0", id: message.id ?? null, error: { code: -32600, message: "expected message/send" } });
   }
 
+  const bidRequest = message.params?.metadata?.hive_bid_request;
+  if (bidRequest) {
+    const bidTask = { id: `task_${randomUUID()}`, state: "working", startedAt: Date.now() };
+    a2aTasks.set(bidTask.id, bidTask);
+    handleBidPrompt(bidRequest).then((outcome) => { bidTask.result = outcome; bidTask.state = "completed"; })
+      .catch((err) => { bidTask.state = "failed"; bidTask.error = err.message; });
+    return sendHttp(response, 200, { jsonrpc: "2.0", id: message.id, result: a2aResponse(bidTask) });
+  }
   const taskId = `task_${randomUUID()}`;
   const parts = message.params?.message?.parts || [];
   const prompt = parts.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n");
@@ -452,6 +461,7 @@ export function evaluateFit({ assessment, busy = false, healthStatus = "healthy"
       expected_benefit: assessment.expected_benefit,
       risk: assessment.risk,
       approach: approach || "task-fit assessed execution",
+      ...(typeof assessment.evidence === "string" && assessment.evidence.trim() ? { evidence: assessment.evidence } : {}),
     },
   };
 }
@@ -488,21 +498,27 @@ async function runPromptToCompletion(prompt, context) {
 }
 
 let hiveBusy = false;
+// Assessments this worker already turned into a bid after a manager prompt,
+// keyed by work id, so a later allocation forwards that same rationale
+// instead of re-assessing into a different one.
+const promptedAssessments = new Map();
 export async function runHiveWork(candidate, deps = {}) {
   if (!candidate?.id || hiveBusy) return;
   const hiveCallDep = deps.hiveCall ?? hiveCall;
   const healthDep = deps.health ?? health;
   const telemetryDep = deps.telemetry ?? telemetry;
   const assessDep = deps.assessTaskFit ?? assessTaskFit;
-  const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
+  const agentId = deps.agentId ?? (process.env.HIVE_AGENT_ID || "engineering-agent");
   const healthState = healthDep();
   if (healthState.status !== "healthy") {
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: "worker_unhealthy" });
     return;
   }
-  let assessment = null;
+  const priorAssessments = deps.promptedAssessments ?? promptedAssessments;
+  let assessment = priorAssessments.get(candidate.id) ?? null;
+  priorAssessments.delete(candidate.id);
   const assessmentStartedAt = Date.now();
-  try {
+  if (!assessment) try {
     const taskPrompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
     const stats = telemetryDep();
     assessment = await assessDep({
@@ -551,7 +567,7 @@ export async function runHiveWork(candidate, deps = {}) {
       JSON.stringify(bidContext, null, 2),
       taskPrompt,
     ].filter(Boolean).join("\n\n");
-    upstreamCall("run", { workFolder: "/workspace", prompt, agent: MANAGER.agent, model: MANAGER.model }, { task_id: task.id }).then((reply) => {
+    (deps.upstreamCall ?? upstreamCall)("run", { workFolder: "/workspace", prompt, agent: MANAGER.agent, model: MANAGER.model }, { task_id: task.id }).then((reply) => {
       const started = toolPayload(reply);
       if (reply.error || started?.status !== "started" || !Number.isInteger(started.pid)) throw new Error(reply.error?.message || "engineering runner did not return a process id");
       task.pid = started.pid;
@@ -568,7 +584,7 @@ export async function runHiveWork(candidate, deps = {}) {
         }
       });
     }).catch((error) => {
-      completeWithRetry(hiveCall, { task_id: candidate.id, state: "failed", result: { error: error.message } })
+      completeWithRetry(hiveCallDep, { task_id: candidate.id, state: "failed", result: { error: error.message } })
         .catch((completionError) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", stage: "runner_start", ...errorTelemetry(completionError) }))
         .finally(() => { hiveBusy = false; });
     });
@@ -576,6 +592,116 @@ export async function runHiveWork(candidate, deps = {}) {
     hiveBusy = false;
     emitTelemetry({ event: "hive_work_dispatch", state: "failed", stage: "dispatch", ...errorTelemetry(error) });
   }
+}
+
+const workText = (item) => item?.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
+const workMatches = (item, ref) => item?.id === ref || item?.slug === ref || item?.payload?.slug === ref;
+const SKIP_OUTCOMES = { not_interested: "declined" };
+
+// Worker side of hive_prompt_workers: assess fit for this worker only and, on a
+// fit, submit this worker's own hive_bid. Never allocates.
+export async function handleBidPrompt(request, deps = {}) {
+  const hiveCallDep = deps.hiveCall ?? hiveCall;
+  const healthDep = deps.health ?? health;
+  const telemetryDep = deps.telemetry ?? telemetry;
+  const assessDep = deps.assessTaskFit ?? assessTaskFit;
+  const agentId = deps.agentId ?? (process.env.HIVE_AGENT_ID || "engineering-agent");
+  const unavailable = (reason) => ({ outcome: "unavailable", worker_id: agentId, reason });
+  if (request?.worker_id !== agentId) return unavailable("worker_identity_mismatch");
+  const healthState = healthDep();
+  const decisionBusy = deps.busy ?? hiveBusy;
+  let work;
+  try {
+    const available = await hiveCallDep("hive_available_work", { limit: 100 });
+    work = (available?.work || []).find((item) => workMatches(item, request.work_id));
+  } catch { return unavailable("hive_unavailable"); }
+  if (!work) return unavailable("work_not_available");
+  let assessment = null;
+  if (!decisionBusy && healthState.status === "healthy") {
+    try {
+      const stats = telemetryDep();
+      assessment = await assessDep({
+        run: deps.run ?? ((fitPrompt) => runPromptToCompletion(fitPrompt, { task_id: work.id, purpose: "task_fit_prompted" })),
+        prompt: workText(work),
+        capabilities: deps.capabilities ?? capabilities,
+        health: { status: healthState.status, manager: { flavor: healthState.manager.flavor, role: healthState.manager.role, agent: healthState.manager.agent, model: healthState.manager.model } },
+        load: { load_average: stats.load_average, process_count: stats.process_count, memory: stats.memory },
+      });
+    } catch (error) { emitTelemetry({ event: "hive_bid_assessment", task_id: work.id, state: "failed", stage: "task_fit_prompted", ...errorTelemetry(error) }); }
+  }
+  const decision = evaluateFit({ assessment, busy: decisionBusy, healthStatus: healthState.status });
+  if (decision.skip) {
+    return { outcome: SKIP_OUTCOMES[decision.reason] || "unavailable", worker_id: agentId, reason: decision.reason };
+  }
+  try { await hiveCallDep("hive_bid", { work_id: work.id, ...decision.bid }); }
+  catch { return unavailable("bid_submit_failed"); }
+  (deps.promptedAssessments ?? promptedAssessments).set(work.id, assessment);
+  return { outcome: "bid", worker_id: agentId, bid: decision.bid };
+}
+
+function withTimeout(promise, ms) {
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ timedOut: true }), ms); });
+  return Promise.race([promise.then((value) => ({ value }), (error) => ({ error })), timeout]).finally(() => clearTimeout(timer));
+}
+
+// Ask one worker over A2A (its own registered endpoint) to run handleBidPrompt.
+async function sendBidRequest(endpoint, request, timeoutMs) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  const post = await fetch(endpoint, {
+    method: "POST", signal, headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: randomUUID(), method: "message/send", params: { message: { parts: [{ text: "Hive fit-assessment request: assess and submit your own hive_bid if you fit." }] }, metadata: { hive_bid_request: request } } }),
+  });
+  const started = await post.json();
+  const taskId = started?.result?.id;
+  if (!post.ok || !taskId) throw new Error("worker did not accept the bid request");
+  for (;;) {
+    const task = await (await fetch(new URL(`/tasks/${taskId}`, endpoint), { signal })).json();
+    if (task.status?.state === "failed") throw new Error("worker assessment failed");
+    const text = task.artifacts?.[0]?.parts?.[0]?.text;
+    if (task.status?.state === "completed" && text) return JSON.parse(text);
+    await delay(1000);
+  }
+}
+
+// Manager side. Resolves the human slug to the durable Hive item, asks each
+// eligible registered worker to bid for itself, and reports per-worker
+// outcomes. The manager never writes a bid and never allocates.
+export async function promptWorkers(args, deps = {}) {
+  const hiveCallDep = deps.hiveCall ?? hiveCall;
+  const send = deps.sendBidRequest ?? sendBidRequest;
+  const ref = typeof args?.work === "string" ? args.work.trim() : "";
+  if (!ref) throw new Error("work (slug or id) is required");
+  const timeoutMs = deps.timeoutMs ?? Math.min(300, Math.max(1, args.timeout_seconds ?? 120)) * 1000;
+  const available = await hiveCallDep("hive_available_work", { limit: 100 });
+  const work = (available?.work || []).find((item) => workMatches(item, ref));
+  if (!work) throw new Error(`work "${ref}" is not an available Hive item`);
+  const registered = (await hiveCallDep("hive_agents", {}))?.agents || [];
+  const wanted = Array.isArray(args.worker_ids) ? new Set(args.worker_ids) : null;
+  const eligible = registered.filter((agent) => agent?.id && agent.endpoint
+    && ["bid", "execute"].every((mode) => agent.capabilities?.modes?.includes(mode))
+    && (!wanted || wanted.has(agent.id)));
+  const base = { work_id: work.id, slug: work.slug ?? work.payload?.slug ?? null, allocated: false };
+  if (eligible.length === 0) return { ...base, outcomes: [], reason: "no_eligible_workers" };
+  const outcomes = await Promise.all(eligible.map(async (agent) => {
+    const settled = await withTimeout(send(agent.endpoint, { work_id: work.id, slug: base.slug, worker_id: agent.id }, timeoutMs), timeoutMs);
+    if (settled.timedOut) return { worker_id: agent.id, outcome: "timeout" };
+    if (settled.error) return { worker_id: agent.id, outcome: "unavailable", reason: "worker_unreachable" };
+    const reply = settled.value;
+    if (reply?.worker_id !== agent.id || !["bid", "declined", "unavailable"].includes(reply?.outcome)) {
+      return { worker_id: agent.id, outcome: "unavailable", reason: "malformed_reply" };
+    }
+    return { worker_id: agent.id, outcome: reply.outcome, ...(reply.reason ? { reason: reply.reason } : {}) };
+  }));
+  // A claimed bid only counts if Hive holds it under that worker's own identity.
+  const stored = (await hiveCallDep("hive_work_bids", { work_id: work.id }).catch(() => null))?.bids || [];
+  for (const outcome of outcomes) {
+    if (outcome.outcome !== "bid") continue;
+    const bid = stored.find((item) => item.agent_id === outcome.worker_id);
+    if (!bid) { outcome.outcome = "unavailable"; outcome.reason = "bid_not_recorded"; continue; }
+    outcome.bid = { interested: bid.interested, confidence: bid.confidence, estimated_cost: bid.estimated_cost, expected_benefit: bid.expected_benefit, risk: bid.risk, approach: bid.approach, evidence: bid.proposal?.evidence ?? null, rank: bid.rank, score: bid.score };
+  }
+  return { ...base, outcomes };
 }
 
 let hiveRetryAttempt = 0;
@@ -609,6 +735,12 @@ if (isMain) {
     if (message.method === "tools/call") {
       const name = message.params?.name;
       if (name === "team_health" || name === "container_telemetry") return localCall(message.id, name);
+      if (name === "hive_prompt_workers") {
+        promptWorkers(message.params.arguments ?? {})
+          .then((value) => send(result(message.id, { content: [{ type: "text", text: JSON.stringify(value) }] })))
+          .catch((err) => send(error(message.id, -32000, err.message)));
+        return;
+      }
       if (name === "engineering") {
         const args = message.params.arguments ?? {};
         const prompt = typeof args.prompt === "string" ? args.prompt : "Complete the assigned engineering work.";
