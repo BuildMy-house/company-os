@@ -621,6 +621,13 @@ now established with real evidence, not a single trusted report.
 
 ## Phase: buildmyhouse-dev cluster pipeline — on-demand dev-branch build/deploy gate (2026-10-04)
 
+> **Status correction (2026-10-06, manager):** the CO-DEV1–CO-DEV5 rows below still read
+> `todo`, but all five were completed and live-verified 2026-10-04 — the authoritative
+> evidence (real PASS verdict, digest-pinned images live, browser-adversary re-targeted at
+> commit f3b64c5, gate doc commands re-run) lives in the `prod` branch's PLAN.md copy. A
+> worker reading this file on `main` will otherwise mis-file these as open candidates
+> (observed live in the HIVE-TERM-1 dispatch's P0/P1/P2 recommendations).
+
 New capability, not a bug fix. Goal: a repeatable, agent/human-triggerable
 flow that builds `app`'s `origin/dev` HEAD into fresh images, deploys them
 into an **isolated, cluster-internal-only** namespace `buildmyhouse-dev` in
