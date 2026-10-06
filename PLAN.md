@@ -756,3 +756,20 @@ file-disjoint, no live-cluster mutation, no deploy. PM-C/PM-D/PM-E/PM-F stay
 `todo`, fully scoped, for the next wave once PM-A/PM-B land and PM-D's
 Hermes-trust-boundary question gets a quick confirmation from Nahar (flagged
 in this run's completion report, not blocking PM-A/PM-B).
+
+## Hive terminal-signal recovery (2026-10-06)
+
+Incident: Hive task task_c0a338c7e93ac4fa attempt 1 lost its terminal signal — bid/allocated
+09:08:26Z, upstream get_result polls cease ~09:22Z, zero terminal events (no a2a_task failed, no
+hive completion); the item was reallocated and attempt 4 completed healthy at 10:46:30Z (commit
+97c2159 pushed to main by engineering-agent; independently verified: on origin/main, mix test
+13/13 pass locally, diff matches self-report). Manager diagnosis (source + Axiom verified):
+(1) engineering-manager-mcp.js trackProcess() get_result poll chain has no deadline — a hung
+upstream call stalls forever with no terminal marker; (2) upstreamCall started telemetry emit omits
+...context so start rows have task_id:null (live-confirmed in Axiom), and hive_subscription
+work_received omits task_id; (3) hive router GET /work/:id/bids maps resolve_id :not_found to 500
+"unable to rank bids" (live-confirmed; valid task id resolves bids fine).
+
+| Ticket | Title | Deps | Owner paths | Claimed-by | Status | Notes |
+|--------|-------|------|--------------|------------|--------|-------|
+| HIVE-TERM-1 | Bounded worker poll chain + execution deadline, telemetry correlation ids, bids not-found→404 | HIVE-CONN-1 | scripts/engineering-manager-mcp.js, scripts/engineering-manager-mcp.test.mjs, hive/lib/hive/router.ex, hive/test/hive/router_test.exs | 2_Paul (Hive dispatch: engineering-agent) | in_progress | Steward task hive-term-1-hive-worker-terminal-signal-reliability-telemetr; dispatched via Hive submit→bid→allocate flow. |
