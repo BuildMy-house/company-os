@@ -15,6 +15,20 @@ replay the durable event rows by task id after reconnecting.
 The current lifecycle emits `work.created`, `work.allocated`, `work.started`,
 and either `engineering.completed` or `engineering.failed`.
 
+Work subscribers replay currently available tasks on every connection, scoped
+to tasks that subscriber has not already bid on. A worker records a
+`interested: false` bid when it declines, so the same item cannot block its
+queue while remaining available to other agents. The manager consumes one
+task at a time and waits until its fit assessment or execution finishes before
+reading another.
+
+Managers can call the manager-only `hive_prompt_workers` MCP tool with a
+human-readable `work_slug` and a bounded `timeout_seconds` (5–120). Hive wakes
+currently subscribed eligible workers; the tool reports each worker's bid,
+decline, timeout, or unavailable outcome. The wake-up delivers that exact
+item, even when a worker has more than 100 older available items. Workers
+write bids with their own identity, and the prompt tool never allocates.
+
 Each item has a stable human-readable `slug` (provided in request metadata or
 derived from its title). Responses return both `id` and `slug`; agents should
 use the slug for task status, bids, claims, heartbeats, completion, and event

@@ -154,6 +154,18 @@ defmodule Hive.Router do
     end
   end
 
+  post "/work/:work_id/prompt" do
+    with %{"requester_id" => requester_id}
+         when is_binary(requester_id) and byte_size(requester_id) > 0 <- conn.body_params,
+         {:ok, result} <- Hive.Work.prompt(work_id, requester_id) do
+      json(conn, result)
+    else
+      {:error, :not_found} -> json(conn, %{"error" => "work not found"}, 404)
+      {:error, :unavailable} -> json(conn, %{"error" => "work is not available"}, 409)
+      _ -> json(conn, %{"error" => "requester_id required"}, 400)
+    end
+  end
+
   get "/scoring" do
     {:ok, scoring} = Hive.Work.scoring()
 
@@ -190,7 +202,7 @@ defmodule Hive.Router do
           |> send_chunked(200)
 
         :ok = Hive.Work.subscribe(self(), agent_id)
-        stream_work(conn)
+        stream_work(conn, agent_id)
 
       _ ->
         json(conn, %{"error" => "agent_id required"}, 400)
@@ -339,14 +351,14 @@ defmodule Hive.Router do
     conn |> put_resp_content_type("application/json") |> send_resp(status, Jason.encode!(body))
   end
 
-  defp stream_work(conn) do
+  defp stream_work(conn, agent_id) do
     try do
-      case Hive.Work.available(100) do
+      case Hive.Work.available_for(agent_id, 100) do
         {:ok, work} -> stream_available(conn, work)
         _ -> :closed
       end
       |> case do
-        {:ok, next} -> stream_loop(next)
+        {:ok, next} -> stream_loop(next, agent_id)
         :closed -> :ok
       end
     after
@@ -354,29 +366,44 @@ defmodule Hive.Router do
     end
   end
 
-  defp stream_loop(conn) do
+  defp stream_loop(conn, agent_id) do
     receive do
-      {:hive_work_available, _id} ->
-        case Hive.Work.available(100) do
-          {:ok, work} ->
-            case stream_available(conn, work) do
-              {:ok, next} -> stream_loop(next)
+      {:hive_work_prompt, id} ->
+        case Hive.Work.available_for_work(id, agent_id) do
+          {:ok, nil} ->
+            stream_loop(conn, agent_id)
+
+          {:ok, item} ->
+            case stream_available(conn, [item]) do
+              {:ok, next} -> stream_loop(next, agent_id)
               :closed -> :ok
             end
 
           _ ->
-            stream_loop(conn)
+            stream_loop(conn, agent_id)
+        end
+
+      {:hive_work_available, _id} ->
+        case Hive.Work.available_for(agent_id, 100) do
+          {:ok, work} ->
+            case stream_available(conn, work) do
+              {:ok, next} -> stream_loop(next, agent_id)
+              :closed -> :ok
+            end
+
+          _ ->
+            stream_loop(conn, agent_id)
         end
 
       {:hive_work_heartbeat} ->
         case Plug.Conn.chunk(conn, ": heartbeat\n\n") do
-          {:ok, next} -> stream_loop(next)
+          {:ok, next} -> stream_loop(next, agent_id)
           {:error, :closed} -> conn
         end
     after
       15_000 ->
         case Plug.Conn.chunk(conn, ": heartbeat\n\n") do
-          {:ok, next} -> stream_loop(next)
+          {:ok, next} -> stream_loop(next, agent_id)
           {:error, :closed} -> conn
         end
     end

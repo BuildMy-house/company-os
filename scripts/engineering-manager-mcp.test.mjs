@@ -8,6 +8,7 @@ import {
   retryDelayMs,
   errorTelemetry,
   completeWithRetry,
+  collectPromptOutcomes,
   runHiveWork,
 } from "./engineering-manager-mcp.js";
 
@@ -151,13 +152,55 @@ check("isValidAssessment enforces shape and ranges", () => {
   assert.equal(isValidAssessment({ ...validAssessment, estimated_cost: "cheap" }), false);
 });
 
-check("evaluateFit skips on busy, unhealthy, missing, invalid, or uninterested", () => {
+check("evaluateFit skips busy, unhealthy, missing, or invalid assessments", () => {
   assert.equal(evaluateFit({ assessment: validAssessment, busy: true }).skip, true);
   assert.equal(evaluateFit({ assessment: validAssessment, busy: true }).reason, "worker_busy");
   assert.equal(evaluateFit({ assessment: validAssessment, healthStatus: "degraded" }).reason, "worker_unhealthy");
   assert.equal(evaluateFit({ assessment: null }).reason, "assessment_unavailable");
   assert.equal(evaluateFit({ assessment: { interested: true } }).reason, "assessment_invalid");
-  assert.equal(evaluateFit({ assessment: { ...validAssessment, interested: false } }).reason, "not_interested");
+  assert.equal(evaluateFit({ assessment: { ...validAssessment, interested: false } }).bid.interested, false);
+});
+
+check("prompt outcomes preserve independent worker bids and declines", async () => {
+  const outcomes = await collectPromptOutcomes({
+    agentIds: ["engineering-opencode", "engineering-opencode-direct"],
+    readBids: async () => ({ bids: [
+      { agent_id: "engineering-opencode", interested: true, confidence: 0.8, estimated_cost: 1, expected_benefit: 3, risk: "low", approach: "Build and verify the candidate." },
+      { agent_id: "engineering-opencode-direct", interested: false, confidence: 0.2, estimated_cost: 1, expected_benefit: 1, risk: "missing deploy capability", approach: "Decline and report the capability gap." },
+    ] }),
+  });
+  assert.deepEqual(outcomes.map(({ agent_id, state }) => [agent_id, state]), [
+    ["engineering-opencode", "bid"],
+    ["engineering-opencode-direct", "declined"],
+  ]);
+  assert.match(outcomes[0].approach, /Build and verify/);
+  assert.match(outcomes[1].risk, /missing deploy capability/);
+});
+
+check("prompt outcomes handle no eligible workers and bounded timeouts", async () => {
+  let readCount = 0;
+  assert.deepEqual(await collectPromptOutcomes({ agentIds: [], readBids: async () => { readCount += 1; return []; } }), []);
+  assert.equal(readCount, 0);
+
+  let now = 0;
+  const outcomes = await collectPromptOutcomes({
+    agentIds: ["silent-worker"],
+    timeoutMs: 500,
+    now: () => now,
+    wait: async (ms) => { now += ms; },
+    readBids: async () => ({ bids: [] }),
+  });
+  assert.deepEqual(outcomes, [{ agent_id: "silent-worker", state: "timeout" }]);
+});
+
+check("prompt outcomes report a disconnected bid query as unavailable", async () => {
+  const outcomes = await collectPromptOutcomes({
+    agentIds: ["worker"],
+    timeoutMs: 0,
+    readBids: async () => { throw new Error("connection reset"); },
+  });
+  assert.equal(outcomes[0].state, "unavailable");
+  assert.match(outcomes[0].reason, /connection reset/);
 });
 
 check("evaluateFit bids with validated fields for a fit", () => {
@@ -216,17 +259,44 @@ check("runHiveWork bids on a P1 review-only candidate for a capable review worke
   assert.equal(hive.calls.some((call) => call.name === "hive_allocate"), true);
 });
 
-check("runHiveWork skips the bid when the assessment is not interested", async () => {
+check("runHiveWork records an uninterested assessment so this worker will not receive the item repeatedly", async () => {
   const hive = fakeHive();
   await runHiveWork(candidate, {
     ...healthyDeps,
     hiveCall: hive.hiveCall,
     assessTaskFit: async () => ({ ...validAssessment, interested: false }),
   });
-  assert.equal(hive.calls.length, 0);
+  assert.equal(hive.calls.length, 1);
+  assert.equal(hive.calls[0].name, "hive_bid");
+  assert.equal(hive.calls[0].args.interested, false);
+  assert.equal(hive.calls.some((call) => call.name === "hive_allocate"), false);
 });
 
-check("runHiveWork skips the bid when unhealthy, without assessing", async () => {
+check("runHiveWork holds the single worker slot through assessment and defers a second candidate", async () => {
+  const hive = fakeHive();
+  let finishAssessment;
+  let assessments = 0;
+  const first = runHiveWork(candidate, {
+    ...healthyDeps,
+    hiveCall: hive.hiveCall,
+    assessTaskFit: async () => {
+      assessments += 1;
+      return new Promise((resolve) => { finishAssessment = resolve; });
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await runHiveWork({ id: "work-2", payload: { parts: [{ text: "another task" }] } }, {
+    ...healthyDeps,
+    hiveCall: hive.hiveCall,
+    assessTaskFit: async () => { assessments += 1; return validAssessment; },
+  });
+  assert.equal(assessments, 1);
+  finishAssessment({ ...validAssessment, interested: false });
+  await first;
+  assert.equal(hive.calls.filter((call) => call.name === "hive_bid").length, 1);
+});
+
+check("runHiveWork records a decline when unhealthy, without assessing", async () => {
   const hive = fakeHive();
   let assessed = false;
   await runHiveWork(candidate, {
@@ -236,27 +306,33 @@ check("runHiveWork skips the bid when unhealthy, without assessing", async () =>
     assessTaskFit: async () => { assessed = true; return validAssessment; },
   });
   assert.equal(assessed, false);
-  assert.equal(hive.calls.length, 0);
+  assert.equal(hive.calls.length, 1);
+  assert.equal(hive.calls[0].name, "hive_bid");
+  assert.equal(hive.calls[0].args.interested, false);
 });
 
-check("runHiveWork skips the bid on an invalid assessment", async () => {
+check("runHiveWork records a decline on an invalid assessment", async () => {
   const hive = fakeHive();
   await runHiveWork(candidate, {
     ...healthyDeps,
     hiveCall: hive.hiveCall,
     assessTaskFit: async () => ({ interested: "sure", confidence: 9 }),
   });
-  assert.equal(hive.calls.length, 0);
+  assert.equal(hive.calls.length, 1);
+  assert.equal(hive.calls[0].name, "hive_bid");
+  assert.equal(hive.calls[0].args.interested, false);
 });
 
-check("runHiveWork skips the bid when the assessment run fails", async () => {
+check("runHiveWork records a decline when the assessment run fails", async () => {
   const hive = fakeHive();
   await runHiveWork(candidate, {
     ...healthyDeps,
     hiveCall: hive.hiveCall,
     assessTaskFit: async () => { throw new Error("runner down"); },
   });
-  assert.equal(hive.calls.length, 0);
+  assert.equal(hive.calls.length, 1);
+  assert.equal(hive.calls[0].name, "hive_bid");
+  assert.equal(hive.calls[0].args.interested, false);
 });
 
 const failures = [];
