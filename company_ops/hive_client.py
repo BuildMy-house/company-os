@@ -32,6 +32,15 @@ def _post(url: str, body: dict[str, Any]) -> dict[str, Any]:
     except urllib.error.HTTPError as exc:
         status = exc.code
         raw = exc.read()
+    except urllib.error.URLError as exc:
+        # DNS failure, connection refused, timeout, etc. -- a network-level
+        # outage, not an HTTP-level error response. Must surface as
+        # HiveClientError (not propagate raw urllib.error.URLError) so
+        # callers' existing `except HiveClientError` fallback paths (e.g.
+        # pm-agent/agent.py's _file_signal, which still records the signal
+        # occurrence durably even when Hive filing fails) actually trigger
+        # instead of the whole request crashing.
+        raise HiveClientError(f"could not reach Hive at {url}: {exc}") from exc
 
     try:
         payload = json.loads(raw)

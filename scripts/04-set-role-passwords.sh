@@ -11,6 +11,14 @@ if [ -z "${COMPANY_PASSWORD:-}" ] || [ -z "${OBSERVER_PASSWORD:-}" ] || [ -z "${
   exit 1
 fi
 
+# PM_AGENT_WRITER_PASSWORD is optional here (pm_agent_writer is a newer role,
+# PM-C) so this script keeps working for deployments that haven't applied
+# sql/roles.sql's pm_agent_writer block yet -- warn instead of hard-failing.
+if [ -z "${PM_AGENT_WRITER_PASSWORD:-}" ]; then
+  echo "WARNING: PM_AGENT_WRITER_PASSWORD not set -- pm_agent_writer will keep" >&2
+  echo "  its sql/roles.sql placeholder password (CHANGE_ME_PM_AGENT_WRITER_PASSWORD)." >&2
+fi
+
 PGPASSWORD="${POSTGRES_PASSWORD}" psql -U postgres -d homely_company -c \
   "ALTER ROLE hermes_company WITH PASSWORD '${COMPANY_PASSWORD}';"
 
@@ -19,5 +27,10 @@ PGPASSWORD="${POSTGRES_PASSWORD}" psql -U postgres -d homely_company -c \
 
 PGPASSWORD="${POSTGRES_PASSWORD}" psql -U postgres -d homely_company -c \
   "ALTER ROLE hermes_analytics WITH PASSWORD '${ANALYTICS_PASSWORD}';"
+
+if [ -n "${PM_AGENT_WRITER_PASSWORD:-}" ]; then
+  PGPASSWORD="${POSTGRES_PASSWORD}" psql -U postgres -d homely_company -c \
+    "ALTER ROLE pm_agent_writer WITH PASSWORD '${PM_AGENT_WRITER_PASSWORD}';"
+fi
 
 echo "Role passwords updated."
