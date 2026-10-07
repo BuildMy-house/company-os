@@ -81,6 +81,8 @@ spec:
               value: "https://github.com/BuildMy-house/hermees-diary.git"
             - name: OBSERVER_WEBSITE_REPO_URL
               value: "https://github.com/BuildMy-house/observer-website.git"
+            - name: HERMEES_MEMORY_REPO_URL
+              value: "https://github.com/BuildMy-house/hermees-memory.git"
           envFrom:
             - secretRef:
                 name: company-ops-secrets
