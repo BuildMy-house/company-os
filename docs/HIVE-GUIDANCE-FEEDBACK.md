@@ -167,3 +167,89 @@ Responsibility split:
   `friction` string present). The Elixir services never call Steward; the
   actual Steward forwarding call lives in `hive-member-mcp.js` because that
   is where the Steward MCP connection already exists.
+
+## 5. Review-to-guidance pipeline (Phase 3)
+
+Verified live on 2026-10-07 (agent `2_Mia`, Steward at
+`buildmyhouse.stewardacs.xyz`). Goal: confirm an APPROVED `hive_guidance`
+spec becomes visible to a live `generate_guidance_packet(scope_path: "hive")`
+call — the mechanism Phase 1.3 wired hive members to use.
+
+### 5.1 Proposal + approval works (real calls)
+
+- `specs_propose(app: "hive", path: "hive_guidance/test-1791393490",
+  document_type: "spec", title: "test entry")` → stored, `status: proposed`,
+  `version: 1`. (The MCP binding's `document_type` enum has no
+  `"hive_guidance"`; `"spec"` was used for the live test.)
+- `specs_approve(app: "hive", path: "hive_guidance/test-1791393490",
+  reviewer: "2_Mia")` → `status: approved`, `version: 2`. **Self-approval was
+  used purely to verify the pipe for this ticket; real proposals must be
+  approved by a human or a different reviewer.**
+- A second entry with realistic title/content ("Hive worker operating
+  guidance: bidding, waiting, heartbeats, completion") plus
+  `tags: ["hive_guidance", "hive"]` and `project: "hive"` approved the same
+  way → stored and versioned identically.
+
+### 5.2 Approved entries do NOT surface in live guidance (observed)
+
+- `generate_guidance_packet(scope_path: "hive")` returned `relevant_specs` =
+  exactly `{company-os/scripts/hive-member-mcp, company-os/scripts/
+  engineering-manager-mcp, hive/hive/router}` — a stable set. The approved
+  test entries were absent across 6 packet generations over ~10 minutes,
+  regardless of title/content/tags/project.
+- `query_specs(query: "hive worker operating guidance bidding waiting
+  heartbeats completion")` ranked the approved entry #2 immediately —
+  entries are stored and searchable, just not packet-selected.
+- `hive/work` (a real, approved module spec) also never surfaces → the
+  effect is not specific to test entries.
+- `generate_guidance_packet(scope_path: "hive/work")` → `relevant_specs: []`
+  (not path-prefix matching). `generate_guidance_packet(task_id: …)` → a
+  different stable set, also excluding the test entry.
+- No client-controllable parameter steers packet membership: the binding
+  strips unknown params; raw JSON-RPC `specs_propose` with `scope_path` is
+  accepted but the server stores no `scope_path` field on the entry.
+- `steward_query` (read-only SQL) is blocked for tenant-scoped credentials
+  ("Tenant-scoped credentials cannot query database tables directly"), so no
+  DB-level inspection was possible.
+
+**Conclusion:** `specs_propose` → `specs_approve` works and entries are
+immediately searchable, but `generate_guidance_packet`'s `relevant_specs`
+draws from a server-side registry/snapshot that freshly approved specs do
+not join within the observation window, via any parameter we control. The
+gap is Steward-side scope-store indexing — outside this repo. Phase 2's
+call shape was not the cause, with one real exception:
+
+### 5.3 Real bug found + fixed: `document_type: "hive_guidance"` is rejected
+
+- Raw JSON-RPC (Phase 2's exact transport) `specs_propose` with
+  `document_type: "hive_guidance"` → server error: `Validation failed:
+  invalid document_type: hive_guidance. Must be one of: spec, knowledge,
+  project, marketing, deliverable, policy, process, guideline, reference`.
+- Because forwarding is fire-and-forget (section 4), every forwarded
+  proposal would have failed validation silently — the feedback would never
+  have reached Steward at all.
+- Fix: `scripts/hive-member-mcp.js` now sends `document_type: "knowledge"`
+  (closest accepted type for forwarded operating feedback). The
+  `hive_guidance/` path prefix is unchanged — freeform paths are accepted
+  and keep entries discoverable via `query_specs`. Test assertion updated;
+  `node --test scripts/hive-member-mcp.test.mjs` → 3 pass, 0 fail. Server
+  re-verified to accept `"knowledge"` via the same raw transport.
+- Note: section 4 above describes the original pre-fix
+  `document_type: "hive_guidance"`; `"knowledge"` is now authoritative.
+
+### 5.4 Status of the loop
+
+- Working end to end: `hive_complete` feedback → `specs_propose`
+  (now `"knowledge"`) → entry stored, versioned, immediately searchable via
+  `query_specs`.
+- Not yet working: newly approved entries joining
+  `generate_guidance_packet` `relevant_specs`. Open with Steward
+  maintainers — requires scope-store indexing of approved specs per
+  `scope_path`.
+
+### 5.5 Cleanup of test entries
+
+Both test entries were tombstoned (content replaced with a TOMBSTONED note,
+title prefixed `(tombstoned)`) and soft-rejected via `specs_reject` →
+`status: rejected`. No delete tool exists, so the entries remain in the
+store — partial cleanup only.

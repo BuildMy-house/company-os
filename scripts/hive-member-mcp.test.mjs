@@ -223,7 +223,7 @@ test("hive_complete validates feedback client-side and forwards to Steward", asy
   const proposal = await waitForSteward("specs_propose");
   assert.ok(proposal, "specs_propose not forwarded");
   assert.equal(proposal.arguments.app, "hive");
-  assert.equal(proposal.arguments.document_type, "hive_guidance");
+  assert.equal(proposal.arguments.document_type, "knowledge");
   assert.match(proposal.arguments.path, /^hive_guidance\/t1-\d+$/);
   assert.match(proposal.arguments.content, /lease-renewal example/);
 

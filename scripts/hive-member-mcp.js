@@ -74,7 +74,7 @@ function forwardFeedbackToSteward(taskId, state, feedback) {
         await requestSteward("specs_propose", {
           app: "hive",
           path: `hive_guidance/${taskId}-${Date.now()}`,
-          document_type: "hive_guidance",
+          document_type: "knowledge", // Steward rejects custom types; "knowledge" is the accepted enum for guidance docs
           title: `hive_guidance change suggested by ${consumerId} for ${taskId}`,
           content: "```json\n" + JSON.stringify({ task_id: taskId, state, feedback }, null, 2) + "\n```",
         });
