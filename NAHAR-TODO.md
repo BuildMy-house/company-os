@@ -462,3 +462,20 @@ host>:5432/homely_company` to `company-ops-secrets` before rolling out
 `k8s/pm-agent.yaml` — not attempted here since this repo's standing policy
 is no live secret-store writes from this session (see
 `docs/DEPLOY-ENGINEERING.md`).
+
+### P10-C follow-up: enable the `model_retirement_watch` plugin
+
+The plugin code ships in `hermes-plugins/model_retirement_watch/` but is
+NOT loaded yet — two config changes are required, both of which need a
+normal pipeline redeploy (builder_build_and_push → container_test →
+container_upgrade):
+
+1. `Dockerfile` (hermes-agent image): add
+   `COPY hermes-plugins/model_retirement_watch /opt/hermes/plugins/observability/model_retirement_watch`
+   next to the existing `axiom_usage` COPY line.
+2. `hermes/config.yaml`: add `model_retirement_watch` to the
+   `plugins.enabled` list.
+
+Pod env already provides `STEWARD_URL`/`STEWARD_TOKEN`; the plugin also
+reads `NOUS_API_KEY` (from the matching `custom_providers` entry's
+`key_env`) to list models when filing a replacement suggestion.

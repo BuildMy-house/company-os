@@ -1,0 +1,8 @@
+name: model_retirement_watch
+version: 0.1.0
+description: Detects permanent retirement of the configured primary model via api_request_error and files a Steward task with a vetted replacement
+author: 4SG/BuildMy-house
+requires_env:
+  - STEWARD_TOKEN
+hooks:
+  - api_request_error
