@@ -6,15 +6,21 @@ agent:
 
 model:
   # tencent/hy3:free (the original default) was discontinued by Nous
-  # entirely ("This model's free period has ended") — confirmed live
-  # against Nous's own /v1/models listing, not guessed. upstage/solar-pro4
-  # is Nous's current free-tier model explicitly built for "long-horizon
-  # tasks and agentic workflows" — the best match for what Hermes actually
-  # does — with the largest context window (524K) among the current free
-  # options; the alternatives are either domain-narrow (InclusionAI's
-  # health/finance Ling variants), coding-specific (Poolside's Laguna
-  # models), or lack explicit reasoning support (Meituan LongCat).
-  default: upstage/solar-pro4:free
+  # entirely ("This model's free period has ended"), and its replacement
+  # upstage/solar-pro4:free was itself retired the same way on 2026-10-07
+  # ("This model's free period has ended" — confirmed live against
+  # hermes-gateway pod logs and Nous's own /v1/models listing, not guessed).
+  # meituan/longcat-2.0:free is the best match among Nous's currently-live
+  # free models: 1,048,756-token context window (2x solar-pro4's 524K), and
+  # its own description explicitly says it is "suited for coding,
+  # repository-level changes, long-horizon problem solving, and agentic
+  # [workflows]" — the closest match to what Hermes actually does of any
+  # free model currently returned. The alternatives are either domain-narrow
+  # (InclusionAI's health/finance Ling variants), coding-only with a smaller
+  # 262K context (Poolside's Laguna models), or an explicitly-preview build
+  # with no agentic-task language in its own description
+  # (meituan/longcat-2.5-preview:free — same context size, preview/terser).
+  default: meituan/longcat-2.0:free
   provider: custom:nous
 
 fallback_providers:
