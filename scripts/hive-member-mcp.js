@@ -36,6 +36,61 @@ async function request(path, options = {}) {
   return body;
 }
 
+// Client-side fail-fast for the hive_complete feedback contract
+// (HIVE-GUIDANCE-FEEDBACK.md section 3): reject before any Hive HTTP.
+const FEEDBACK_NUMBERS = ["estimated_cost", "actual_cost", "estimated_benefit", "actual_benefit"];
+
+function validateFeedback(result) {
+  const feedback = result?.feedback;
+  if (!feedback || typeof feedback !== "object") throw new Error("hive_complete requires result.feedback { calibration, friction, suggested_guidance_change? } — see HIVE-GUIDANCE-FEEDBACK.md section 3");
+  if (!feedback.calibration || typeof feedback.calibration !== "object" || FEEDBACK_NUMBERS.some((key) => typeof feedback.calibration[key] !== "number" || Number.isNaN(feedback.calibration[key]))) {
+    throw new Error(`result.feedback.calibration requires numeric ${FEEDBACK_NUMBERS.join(", ")}`);
+  }
+  if (typeof feedback.friction !== "string") throw new Error('result.feedback.friction must be a string ("" if none)');
+  if (feedback.suggested_guidance_change !== undefined && typeof feedback.suggested_guidance_change !== "string") throw new Error("result.feedback.suggested_guidance_change must be a string (omit or empty if none)");
+}
+
+// Fire-and-forget Steward forwarding (HIVE-GUIDANCE-FEEDBACK.md section 4):
+// guidance change -> specs_propose review flow; calibration/friction only ->
+// submit_task_feedback. Never blocks or fails hive_complete.
+async function requestSteward(tool, args) {
+  const response = await fetch(process.env.STEWARD_MCP_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(process.env.STEWARD_TOKEN ? { authorization: `Bearer ${process.env.STEWARD_TOKEN}` } : {}) },
+    body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name: tool, arguments: args } }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error?.message || `Steward returned ${response.status}`);
+  if (body.error) throw new Error(body.error.message || "Steward MCP error");
+  return body.result;
+}
+
+function forwardFeedbackToSteward(taskId, state, feedback) {
+  const hasChange = typeof feedback.suggested_guidance_change === "string" && feedback.suggested_guidance_change.trim() !== "";
+  if (!process.env.STEWARD_MCP_URL || (!hasChange && feedback.friction === "")) return;
+  void (async () => {
+    try {
+      if (hasChange) {
+        await requestSteward("specs_propose", {
+          app: "hive",
+          path: `hive_guidance/${taskId}-${Date.now()}`,
+          document_type: "hive_guidance",
+          title: `hive_guidance change suggested by ${consumerId} for ${taskId}`,
+          content: "```json\n" + JSON.stringify({ task_id: taskId, state, feedback }, null, 2) + "\n```",
+        });
+      } else {
+        await requestSteward("submit_task_feedback", {
+          agent_id: consumerId,
+          task_id: taskId,
+          learned_for_agents: `hive calibration=${JSON.stringify(feedback.calibration)}; friction=${feedback.friction}`,
+        });
+      }
+    } catch (error) {
+      console.error(`[hive-member] steward feedback forwarding failed for ${taskId}: ${error.message}`);
+    }
+  })();
+}
+
 function safeErrorDetails(error, stage) {
   const clean = (value) => String(value || "")
     .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
@@ -155,7 +210,7 @@ const tools = [
   { name: "hive_agents", description: "List registered Hive agents with their A2A endpoint and declared capabilities. Call before hive_submit when you need to route or verify a target agent.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "hive_allocate", description: "Allocate available Hive work to its highest-ranked interested bidder (creates a lease). The allocated agent should hive_heartbeat the returned task_id while working and hive_complete when done.", inputSchema: { type: "object", required: ["work_id"], properties: { work_id: { type: "string" }, lease_seconds: { type: "integer", minimum: 60, maximum: 3600 } }, additionalProperties: false } },
   { name: "hive_heartbeat", description: "Renew this agent's temporary Hive work lease (default 900s). Call every few minutes while still working, always before lease_seconds elapse — an expired lease lets the task be re-allocated. When finished, call hive_complete instead.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, lease_seconds: { type: "integer", minimum: 60, maximum: 3600 } }, additionalProperties: false } },
-  { name: "hive_complete", description: "Record terminal completion or failure for work held by this agent; exactly one call per task, and the lease ends. result must include the required feedback object (calibration, friction, optional suggested_guidance_change). After this, hive_wait on the task returns immediately — use hive_status only to verify the recorded state.", inputSchema: { type: "object", required: ["task_id", "state"], properties: { task_id: { type: "string" }, state: { type: "string" }, result: { type: "object" } }, additionalProperties: false } },
+  { name: "hive_complete", description: "Record terminal completion or failure for work held by this agent; exactly one call per task, and the lease ends. result must include the required feedback object (calibration, friction, optional suggested_guidance_change). After this, hive_wait on the task returns immediately — use hive_status only to verify the recorded state.", inputSchema: { type: "object", required: ["task_id", "state", "result"], properties: { task_id: { type: "string" }, state: { type: "string" }, result: { type: "object", required: ["feedback"], additionalProperties: true, properties: { feedback: { type: "object", required: ["calibration", "friction"], additionalProperties: false, properties: { calibration: { type: "object", required: ["estimated_cost", "actual_cost", "estimated_benefit", "actual_benefit"], additionalProperties: false, properties: { estimated_cost: { type: "number" }, actual_cost: { type: "number" }, estimated_benefit: { type: "number" }, actual_benefit: { type: "number" } } }, friction: { type: "string", description: "What guidance was missing or wrong; \"\" if none." }, suggested_guidance_change: { type: "string", description: "Concrete change to guidance/specs; omit or empty if none." } } } } } }, additionalProperties: false } },
   { name: "hive_status", description: "Read the durable status of a Hive task — one-off inspection only, never poll in a loop. To block on completion use hive_wait; for the event history use hive_events.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" } }, additionalProperties: false } },
   { name: "hive_events", description: "Replay durable lifecycle events for a task (bids, allocation, heartbeats, completion). Use to debug a stuck task, then hive_status for current state or hive_wait to block on the outcome.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
   { name: "hive_wait", description: "Wait for a task's completion/failure event over SSE without polling (timeout up to 900s; re-call to keep waiting). This is the default way to await any task you submitted or hold — on timeout, re-call rather than switching to hive_status polling.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
@@ -175,7 +230,12 @@ async function call(name, args) {
   if (name === "hive_agents") return request("/agents");
   if (name === "hive_allocate") return request(`/work/${encodeURIComponent(args.work_id)}/allocate`, { method: "POST", body: JSON.stringify({ lease_seconds: args.lease_seconds || 900 }) });
   if (name === "hive_heartbeat") return request(`/work/${encodeURIComponent(args.task_id)}/heartbeat`, { method: "POST", body: JSON.stringify({ agent_id: consumerId, lease_seconds: args.lease_seconds || 900 }) });
-  if (name === "hive_complete") return request(`/work/${encodeURIComponent(args.task_id)}/complete`, { method: "POST", body: JSON.stringify({ agent_id: consumerId, state: args.state, result: args.result || {} }) });
+  if (name === "hive_complete") {
+    validateFeedback(args.result);
+    const work = await request(`/work/${encodeURIComponent(args.task_id)}/complete`, { method: "POST", body: JSON.stringify({ agent_id: consumerId, state: args.state, result: args.result }) });
+    forwardFeedbackToSteward(args.task_id, args.state, args.result.feedback);
+    return work;
+  }
   if (name === "hive_status") return request(`/tasks/${encodeURIComponent(args.task_id)}`);
   if (name === "hive_events") return request(`/events?task_id=${encodeURIComponent(args.task_id)}&limit=${args.limit || 100}`);
   if (name === "hive_wait") return waitForEvent(args.task_id, args.timeout_seconds || 900);

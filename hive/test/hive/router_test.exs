@@ -219,7 +219,7 @@ defmodule Hive.RouterTest do
       Jason.encode!(%{
         "agent_id" => "agent-1",
         "state" => "completed",
-        "result" => %{"ok" => true}
+        "result" => %{"ok" => true, "feedback" => valid_feedback()}
       })
 
     completed =
@@ -251,8 +251,10 @@ defmodule Hive.RouterTest do
              "work.created"
            ]
 
+    replay_result = %{"ok" => true, "feedback" => valid_feedback()}
+
     assert {:ok, _already_completed} =
-             Hive.Work.complete("queued", "agent-1", "completed", %{"ok" => true})
+             Hive.Work.complete("queued", "agent-1", "completed", replay_result)
 
     assert {:ok, retry_events} = Hive.Work.events("queued")
     assert Enum.map(retry_events, & &1["topic"]) == Enum.map(events, & &1["topic"])
@@ -278,6 +280,79 @@ defmodule Hive.RouterTest do
       |> Jason.decode!()
 
     assert ack["acknowledged"] == true
+  end
+
+  defp valid_feedback do
+    %{
+      "calibration" => %{
+        "estimated_cost" => 2.0,
+        "actual_cost" => 3.0,
+        "estimated_benefit" => 5.0,
+        "actual_benefit" => 4.0
+      },
+      "friction" => "",
+      "suggested_guidance_change" => ""
+    }
+  end
+
+  test "complete rejects missing feedback with 422 before touching the lease" do
+    body =
+      Jason.encode!(%{"agent_id" => "agent-1", "state" => "completed", "result" => %{"ok" => true}})
+
+    conn =
+      conn(:post, "/work/never-claimed/complete", body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+
+    assert conn.status == 422
+    assert %{"error" => error} = Jason.decode!(conn.resp_body)
+    assert error =~ "feedback"
+  end
+
+  test "complete rejects feedback calibration without all four numbers" do
+    body =
+      Jason.encode!(%{
+        "agent_id" => "agent-1",
+        "state" => "completed",
+        "result" => %{"feedback" => %{"calibration" => %{"estimated_cost" => 1}, "friction" => ""}}
+      })
+
+    conn =
+      conn(:post, "/work/never-claimed/complete", body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+
+    assert conn.status == 422
+  end
+
+  test "complete rejects feedback with non-string friction" do
+    body =
+      Jason.encode!(%{
+        "agent_id" => "agent-1",
+        "state" => "completed",
+        "result" => %{
+          "feedback" => %{"calibration" => valid_feedback()["calibration"], "friction" => 7}
+        }
+      })
+
+    conn =
+      conn(:post, "/work/never-claimed/complete", body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+
+    assert conn.status == 422
+  end
+
+  test "hive.feedback_recorded telemetry payload carries task, agent, and calibration numbers" do
+    payload = Hive.Router.feedback_telemetry_payload("queued", "agent-1", valid_feedback())
+
+    assert payload["event"] == "hive.feedback_recorded"
+    assert payload["task_id"] == "queued"
+    assert payload["agent_id"] == "agent-1"
+    assert payload["estimated_cost"] == 2.0
+    assert payload["actual_cost"] == 3.0
+    assert payload["estimated_benefit"] == 5.0
+    assert payload["actual_benefit"] == 4.0
   end
 
   test "allocates available work to the highest-ranked bidder" do
