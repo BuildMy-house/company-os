@@ -151,6 +151,16 @@ mcp_servers:
       Authorization: "Bearer ${STEWARD_TOKEN}"
     connect_timeout: 30
     timeout: 300
+  # Official Axiom-hosted MCP (queryApl, listDatasets, getDatasetInfoAndSchema).
+  # AXIOM_QUERY_TOKEN is a read-only query credential, deliberately separate
+  # from the ingest AXIOM_TOKEN the axiom_usage plugin writes with.
+  axiom:
+    url: "https://mcp.axiom.co/mcp"
+    headers:
+      Authorization: "Bearer ${AXIOM_QUERY_TOKEN}"
+      x-axiom-org-id: "${AXIOM_ORG_ID}"
+    connect_timeout: 30
+    timeout: 300
   # Connects as hermes_analytics: SELECT-only, no write access to either
   # the company or observer schema. Production self-hosted Postgres.
   postgres_analytics:
