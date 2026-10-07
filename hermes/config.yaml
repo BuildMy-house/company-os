@@ -125,6 +125,7 @@ plugins:
   # activate through their own env-var detection, not this generic registry).
   enabled:
     - axiom_usage
+    - model_retirement_watch
 
 terminal:
   backend: local
