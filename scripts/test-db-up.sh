@@ -25,7 +25,7 @@ for i in $(seq 1 "$MAX_RETRIES"); do
 done
 
 # Apply schema files if they exist.
-for sql_file in sql/company_schema.sql sql/observer_schema.sql; do
+for sql_file in sql/company_schema.sql sql/observer_schema.sql sql/pm_schema.sql; do
     if [ -f "$sql_file" ]; then
         echo "==> Applying $sql_file ..."
         docker exec -i company-ops-test-postgres psql -U postgres -d homely_company -f - < "$sql_file"

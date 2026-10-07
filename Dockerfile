@@ -42,6 +42,7 @@ RUN chmod 755 /opt/company-ops/scripts/hive-member-mcp.js
 COPY hermes/config.yaml /opt/data/config.yaml
 COPY hermes/SOUL.md /root/.hermes/SOUL.md
 COPY hermes-plugins/axiom_usage /opt/hermes/plugins/observability/axiom_usage
+COPY hermes-plugins/model_retirement_watch /opt/hermes/plugins/observability/model_retirement_watch
 RUN python3 -m venv /opt/company-ops-venv \
   && /opt/company-ops-venv/bin/pip install --no-cache-dir -e '/opt/company-ops[backup]'
 

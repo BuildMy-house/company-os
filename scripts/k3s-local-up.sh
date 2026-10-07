@@ -15,6 +15,7 @@ kubectl create configmap postgres-init \
   --namespace company-ops \
   --from-file=01-company_schema.sql=sql/company_schema.sql \
   --from-file=02-observer_schema.sql=sql/observer_schema.sql \
+  --from-file=03-pm_schema.sql=sql/pm_schema.sql \
   --from-file=03-roles.sql=sql/roles.sql \
   --from-file=04-set-role-passwords.sh=scripts/04-set-role-passwords.sh \
   --dry-run=client -o yaml | kubectl apply -f -

@@ -61,3 +61,21 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA company
   GRANT SELECT ON TABLES TO hermes_analytics;
 ALTER DEFAULT PRIVILEGES IN SCHEMA observer
   GRANT SELECT ON TABLES TO hermes_analytics;
+
+-- =============================================================================
+-- 5. pm_agent_writer: INSERT/SELECT on the two pm-agent tables only
+--    (no UPDATE, DELETE, or TRUNCATE — append/dedupe-only by permission)
+-- =============================================================================
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'pm_agent_writer') THEN
+    CREATE ROLE pm_agent_writer LOGIN PASSWORD 'CHANGE_ME_PM_AGENT_WRITER_PASSWORD';
+  END IF;
+END $$;
+
+GRANT USAGE ON SCHEMA company TO pm_agent_writer;
+GRANT SELECT, INSERT ON company.pm_conversations, company.feedback_signals TO pm_agent_writer;
+
+-- Defense-in-depth: explicitly revoke write operations even though they were
+-- never granted. Makes the append-only intent unambiguous to future readers.
+REVOKE UPDATE, DELETE, TRUNCATE ON company.pm_conversations, company.feedback_signals FROM pm_agent_writer;

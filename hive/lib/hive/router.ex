@@ -123,6 +123,11 @@ defmodule Hive.Router do
     end
   end
 
+  get "/agents" do
+    {:ok, agents} = Hive.Work.agents()
+    json(conn, %{"agents" => agents})
+  end
+
   post "/work/:work_id/bids" do
     with %{"agent_id" => agent_id} <- conn.body_params,
          {:ok, bid} <-
@@ -148,6 +153,9 @@ defmodule Hive.Router do
           Enum.with_index(bids, 1) |> Enum.map(fn {bid, rank} -> Map.put(bid, "rank", rank) end)
 
         json(conn, %{"work_id" => work_id, "bids" => ranked})
+
+      {:error, reason} when reason in [:not_found, :work_not_found] ->
+        json(conn, %{"error" => "work not found"}, 404)
 
       _ ->
         json(conn, %{"error" => "unable to rank bids"}, 500)

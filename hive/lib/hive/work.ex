@@ -23,6 +23,7 @@ defmodule Hive.Work do
       end)
 
   def register_agent(agent), do: GenServer.call(__MODULE__, {:register_agent, agent})
+  def agents, do: GenServer.call(__MODULE__, :agents)
 
   def prompt(work_ref, requester_id),
     do: with_id(work_ref, fn id -> GenServer.call(__MODULE__, {:prompt, id, requester_id}) end)
@@ -385,6 +386,20 @@ defmodule Hive.Work do
         db,
         "SELECT event_id, topic, task_id, sender, occurred_at, payload, attempt FROM company.hive_events WHERE task_id = $1 ORDER BY occurred_at DESC LIMIT $2",
         [task_id, limit]
+      )
+
+    {:reply, {:ok, rows(result)}, state}
+  end
+
+  def handle_call(:agents, _from, %{memory: memory} = state),
+    do: {:reply, {:ok, Map.values(memory.agents)}, state}
+
+  def handle_call(:agents, _from, %{db: db} = state) do
+    result =
+      Postgrex.query!(
+        db,
+        "SELECT id, endpoint, capabilities, last_seen_at FROM company.hive_agents ORDER BY id",
+        []
       )
 
     {:reply, {:ok, rows(result)}, state}

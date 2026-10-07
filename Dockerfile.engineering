@@ -49,9 +49,16 @@ RUN npm install -g opencode-ai@latest ai-cli-mcp@latest \
      fi \
   && mkdir -p /opt/company-ops/.claude/agents /opt/company-ops/.claude/skills /opt/company-ops/.config/opencode
 
-# Headless Chromium for screenshot capability: installed as root at build
-# time into a shared path so the unprivileged engineering user can launch it
-# at runtime without sudo. Chromium only to keep image size down.
+# Headless Chromium for screenshot capability AND the app repo's Playwright e2e
+# suite (run by the pre-push hook): installed as root at build time into a
+# shared, persistent path (/opt/ms-playwright, not /tmp or $HOME) so the
+# unprivileged engineering user can launch it at runtime without sudo and no
+# session has to re-download it. `--with-deps` installs the Chromium system
+# libraries (glib, nss, atk, cups, drm, xkb, ...) via apt, which needs root and
+# is therefore impossible at runtime; without them every e2e test fails with
+# "libglib-2.0.so.0: cannot open shared object file" and pushes needed
+# `--no-verify`. Chromium only to keep image size down. A rootless launch
+# smoke test at the end of this file fails the build if any lib is missing.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
       npm install -g playwright \
@@ -101,6 +108,13 @@ COPY scripts/opencode-plugins/axiom-usage.js /opt/company-ops/scripts/opencode-p
 
 ENV HOME=/home/engineering
 USER engineering
+
+# Build-time e2e smoke test, run as the unprivileged user (no root, no
+# --no-verify): launch Chromium, load a data: URL, assert the title.
+RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
+      npx playwright install --dry-run chromium \
+      && node -e "const {chromium}=require('playwright');(async()=>{const b=await chromium.launch();const p=await b.newPage();await p.goto('data:text/html,<title>e2e-ok</title>');const t=await p.title();await b.close();if(t!=='e2e-ok'){console.error('bad title',t);process.exit(1)}console.log('playwright smoke ok:',t)})().catch(e=>{console.error(e);process.exit(1)})"; \
+    fi
 
 EXPOSE 8000 8001
 ENTRYPOINT ["bash", "/opt/company-ops/scripts/engineering-entrypoint.sh"]

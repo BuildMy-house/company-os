@@ -37,6 +37,35 @@ SSE and `LISTEN/NOTIFY` are wake-up hints. Postgres work and event rows are
 the recovery source of truth. Agent identity does not grant resource ownership;
 leases are temporary and expire.
 
+## Prompting workers to bid (manager call order)
+
+Passive polling can leave available work with no interested bids (for
+example after a worker run exits and its lease is released, and a restart
+produces no fresh bid). A manager can deliberately ask workers to bid with
+the engineering-manager MCP tool `hive_prompt_workers`:
+
+1. `hive_prompt_workers({ work: "<human-readable slug>", worker_ids?: [...], timeout_seconds?: 1-300 })`
+   resolves the slug to the durable available Hive item, then sends each
+   eligible registered worker (endpoint + `bid` and `execute` modes; `GET /agents`)
+   an A2A fit-assessment request addressed to that worker's own id.
+2. Each worker assesses fit itself (its own capabilities, health, and load;
+   task text is fenced as untrusted data; only shared Steward guidance, never
+   another pool's personal memories) and submits its **own** `hive_bid` with
+   confidence, benefit, cost, risk, approach, and `evidence`. The manager never
+   submits or edits a bid; a reported bid only counts if Hive holds it under
+   that worker's id.
+3. The tool returns per-worker `bid` / `declined` / `unavailable` (with a
+   `reason`, e.g. `assessment_invalid`, `worker_busy`, `bid_not_recorded`) /
+   `timeout` outcomes, including each stored rationale. It never allocates
+   (`allocated: false`) and each worker call is bounded by `timeout_seconds`
+   (default 120).
+4. Review `hive_work_bids` (ranked, with stored rationale), then call
+   `hive_allocate` separately. A prompted worker keeps its assessment and, when it
+   runs the allocated work, forwards the same rationale into its execution prompt
+   instead of re-assessing.
+
+Order: `hive_prompt_workers` → inspect outcomes / `hive_work_bids` → `hive_allocate`.
+
 ## Runtime configuration
 
 The same adapter can run different phenotypes without changing the Hive:

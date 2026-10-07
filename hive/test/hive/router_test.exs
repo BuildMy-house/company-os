@@ -90,6 +90,20 @@ defmodule Hive.RouterTest do
     assert submit.(invalid).status == 422
   end
 
+  test "lists registered agents with endpoint and capabilities" do
+    :ok =
+      Hive.Work.register_agent(%{
+        "id" => "listed-worker",
+        "endpoint" => "http://listed-worker:8001",
+        "capabilities" => %{"modes" => ["bid", "execute"]}
+      })
+
+    conn = conn(:get, "/agents") |> Hive.Router.call(@opts)
+    assert conn.status == 200
+    agents = Jason.decode!(conn.resp_body)["agents"]
+    assert %{"endpoint" => "http://listed-worker:8001"} = Enum.find(agents, &(&1["id"] == "listed-worker"))
+  end
+
   test "bids and lifecycle events accept the readable slug" do
     task_id = create_task!("Readable work slug")
     slug = "readable-work-slug"
@@ -102,6 +116,14 @@ defmodule Hive.RouterTest do
     {:ok, events} = Hive.Work.events(slug)
     assert Enum.map(events, & &1["topic"]) == ["work.started", "work.allocated", "work.created"]
     assert hd(events)["payload"]["slug"] == slug
+  end
+
+  test "GET bids for unknown work returns 404 instead of 500" do
+    for work_id <- ["no-such-work-slug", "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)] do
+      conn = conn(:get, "/work/#{work_id}/bids") |> Hive.Router.call(@opts)
+      assert conn.status == 404
+      assert Jason.decode!(conn.resp_body) == %{"error" => "work not found"}
+    end
   end
 
   test "restores an A2A task read from durable work" do

@@ -436,3 +436,46 @@ Already set: `DISCORD_HIL_CHANNEL=1546470198825975961`
 **RESOLVED — Channel ID provided 2026-09-07:**
 - `DISCORD_FINANCE_CHANNEL=1546550455813931128` (set in production `.env`)
 
+
+## Group L — pm-agent production credential gap (PM-C, 2026-10-06)
+
+PM-C adds a new least-privilege Postgres role, `pm_agent_writer`
+(`sql/roles.sql`: INSERT/SELECT only on `company.pm_conversations` and
+`company.feedback_signals`), and `pm-agent/agent.py` reads its DSN from
+`PM_DATABASE_URL`. Two things still need real production values before
+pm-agent can actually run against production Postgres (not required to land
+the code/manifests, which are complete and locally verified):
+
+#### L1. Real `pm_agent_writer` password
+`sql/roles.sql` creates the role with a placeholder password
+(`CHANGE_ME_PM_AGENT_WRITER_PASSWORD`). `scripts/04-set-role-passwords.sh`
+now accepts an optional `PM_AGENT_WRITER_PASSWORD` env var to rotate it
+(mirrors the existing `COMPANY_PASSWORD`/`OBSERVER_PASSWORD`/
+`ANALYTICS_PASSWORD` pattern exactly) — set a real password in production
+`.env` and re-run the script once ready to deploy pm-agent.
+
+#### L2. `PM_DATABASE_URL` not yet in `company-ops-secrets`
+`k8s/pm-agent.yaml`'s Deployment relies on `envFrom: company-ops-secrets`
+for `PM_DATABASE_URL`, but that key does not exist in the live Secret yet.
+Add `PM_DATABASE_URL=postgresql://pm_agent_writer:<L1 password>@<postgres
+host>:5432/homely_company` to `company-ops-secrets` before rolling out
+`k8s/pm-agent.yaml` — not attempted here since this repo's standing policy
+is no live secret-store writes from this session (see
+`docs/DEPLOY-ENGINEERING.md`).
+
+### P10-C follow-up: enable the `model_retirement_watch` plugin
+
+The plugin code ships in `hermes-plugins/model_retirement_watch/` but is
+NOT loaded yet — two config changes are required, both of which need a
+normal pipeline redeploy (builder_build_and_push → container_test →
+container_upgrade):
+
+1. `Dockerfile` (hermes-agent image): add
+   `COPY hermes-plugins/model_retirement_watch /opt/hermes/plugins/observability/model_retirement_watch`
+   next to the existing `axiom_usage` COPY line.
+2. `hermes/config.yaml`: add `model_retirement_watch` to the
+   `plugins.enabled` list.
+
+Pod env already provides `STEWARD_URL`/`STEWARD_TOKEN`; the plugin also
+reads `NOUS_API_KEY` (from the matching `custom_providers` entry's
+`key_env`) to list models when filing a replacement suggestion.
