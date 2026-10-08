@@ -613,6 +613,18 @@ async function recordDecline(hiveCallDep, candidate, reason) {
 // keyed by work id, so a later allocation forwards that same rationale
 // instead of re-assessing into a different one.
 const promptedAssessments = new Map();
+// Consecutive task-fit assessment failures per candidate id. Without this,
+// an assessment that throws immediately every time (e.g. the runner CLI
+// can't start) never trips subscribeHive's own connection-level backoff
+// (that only triggers on hiveCall failures) and, if Hive keeps re-offering
+// the same declined candidate, the hive_next_work loop spins unthrottled
+// (incident 2026-10-05: 193k retries/day for one task id). Cleared once an
+// assessment for that task id succeeds.
+const assessmentFailures = new Map();
+// Past this many consecutive failures for the same task id, escalate the
+// telemetry severity so it is grep-able as urgent instead of blending into
+// routine bid_skipped noise.
+const ASSESSMENT_FAILURE_WARN_THRESHOLD = 5;
 export async function runHiveWork(candidate, deps = {}) {
   if (!candidate?.id) return;
   if (!acquireHiveSlot()) {
@@ -635,6 +647,7 @@ export async function runHiveWork(candidate, deps = {}) {
     const priorAssessments = deps.promptedAssessments ?? promptedAssessments;
     let assessment = priorAssessments.get(candidate.id) ?? null;
     priorAssessments.delete(candidate.id);
+    const failuresDep = deps.assessmentFailures ?? assessmentFailures;
     const assessmentStartedAt = Date.now();
     if (!assessment) try {
       const taskPrompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
@@ -650,13 +663,23 @@ export async function runHiveWork(candidate, deps = {}) {
         load: { load_average: stats.load_average, process_count: stats.process_count, memory: stats.memory },
       });
       emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "completed", stage: "task_fit", runner_agent: MANAGER.agent, provider: MANAGER.model.split("/")[0], model: MANAGER.model, duration_ms: Date.now() - assessmentStartedAt });
+      failuresDep.delete(candidate.id);
     } catch (error) {
-      emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "failed", stage: "task_fit", runner_agent: MANAGER.agent, provider: MANAGER.model.split("/")[0], model: MANAGER.model, duration_ms: Date.now() - assessmentStartedAt, ...errorTelemetry(error) });
+      const consecutiveFailures = (failuresDep.get(candidate.id)?.count ?? 0) + 1;
+      failuresDep.set(candidate.id, { count: consecutiveFailures });
+      const severe = consecutiveFailures >= ASSESSMENT_FAILURE_WARN_THRESHOLD;
+      emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "failed", stage: "task_fit", runner_agent: MANAGER.agent, provider: MANAGER.model.split("/")[0], model: MANAGER.model, duration_ms: Date.now() - assessmentStartedAt, consecutive_failures: consecutiveFailures, ...(severe ? { severity: "warning" } : {}), ...errorTelemetry(error) });
+      // Block the return on an increasing per-task backoff so a candidate that
+      // fails assessment instantly every time cannot spin subscribeHive's
+      // while(true) loop unthrottled if Hive keeps re-offering it immediately.
+      await (deps.wait ?? delay)(retryDelayMs(consecutiveFailures, deps.random ?? Math.random));
     }
     const decision = evaluateFit({ assessment, healthStatus: healthState.status });
     if (decision.skip) {
+      const failureCount = failuresDep.get(candidate.id)?.count ?? 0;
+      const severe = failureCount >= ASSESSMENT_FAILURE_WARN_THRESHOLD;
       await recordDecline(hiveCallDep, candidate, decision.reason);
-      emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_declined", agent_id: agentId, reason: decision.reason });
+      emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_declined", agent_id: agentId, reason: decision.reason, ...(severe ? { severity: "warning", consecutive_failures: failureCount } : {}) });
       return;
     }
     await hiveCallDep("hive_bid", { work_id: candidate.id, ...decision.bid });

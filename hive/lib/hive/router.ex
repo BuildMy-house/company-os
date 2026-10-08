@@ -262,17 +262,24 @@ defmodule Hive.Router do
   end
 
   post "/work/:work_id/complete" do
+    result = conn.body_params["result"] || %{}
+
     with %{"agent_id" => agent_id, "state" => state} <- conn.body_params,
+         :ok <- validate_feedback(result["feedback"]),
          {:ok, work} <-
-           Hive.Work.complete(work_id, agent_id, state, conn.body_params["result"] || %{}) do
+           Hive.Work.complete(work_id, agent_id, state, result) do
       Hive.Tasks.attach_remote(work["id"] || work[:id] || work_id, %{
         "id" => work["id"] || work[:id] || work_id,
         "status" => %{"state" => state},
         "result" => work["result"] || work[:result]
       })
 
+      emit_feedback_telemetry(work_id, agent_id, result["feedback"])
       json(conn, work)
     else
+      {:error, :invalid_feedback} ->
+        json(conn, %{"error" => "result.feedback requires calibration {estimated_cost, actual_cost, estimated_benefit, actual_benefit (numbers)} and friction (string)"}, 422)
+
       {:error, :not_owner} ->
         json(conn, %{"error" => "agent does not hold lease"}, 409)
 
@@ -461,5 +468,48 @@ defmodule Hive.Router do
           {:error, :closed} -> conn
         end
     end
+  end
+
+  @feedback_numbers ["estimated_cost", "actual_cost", "estimated_benefit", "actual_benefit"]
+
+  # Server-side schema validation for the hive_complete feedback contract
+  # (HIVE-GUIDANCE-FEEDBACK.md section 3/4). Public for tests.
+  def validate_feedback(nil), do: {:error, :invalid_feedback}
+
+  def validate_feedback(feedback) when is_map(feedback) do
+    calibration = feedback["calibration"]
+
+    numbers_ok =
+      is_map(calibration) and
+        Enum.all?(@feedback_numbers, fn key -> is_number(calibration[key]) end)
+
+    if numbers_ok and is_binary(feedback["friction"]) do
+      :ok
+    else
+      {:error, :invalid_feedback}
+    end
+  end
+
+  def validate_feedback(_), do: {:error, :invalid_feedback}
+
+  # Telemetry seam at the HTTP boundary (never inside Hive.Work) so the four
+  # calibration numbers land in Axiom as "hive.feedback_recorded". Public for
+  # tests to assert event shape.
+  def feedback_telemetry_payload(work_id, agent_id, feedback) do
+    calibration = feedback["calibration"]
+
+    %{
+      "event" => "hive.feedback_recorded",
+      "task_id" => work_id,
+      "agent_id" => agent_id,
+      "estimated_cost" => calibration["estimated_cost"],
+      "actual_cost" => calibration["actual_cost"],
+      "estimated_benefit" => calibration["estimated_benefit"],
+      "actual_benefit" => calibration["actual_benefit"]
+    }
+  end
+
+  defp emit_feedback_telemetry(work_id, agent_id, feedback) do
+    Hive.Telemetry.emit(feedback_telemetry_payload(work_id, agent_id, feedback))
   end
 end

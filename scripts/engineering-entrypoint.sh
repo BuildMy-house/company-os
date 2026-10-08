@@ -79,12 +79,14 @@ node "$SCRIPT_DIR/check-advertised-mcp-tools.js" || echo "[mcp-config] WARN: see
 # CODEX_HOME may be mounted as an empty, not-yet-created directory.
 if command -v codex >/dev/null 2>&1; then mkdir -p "${CODEX_HOME:-$HOME/.codex}"; fi
 
-if [ -n "${AXIOM_TOKEN:-}" ] && command -v codex >/dev/null 2>&1; then
+# Official Axiom-hosted MCP with the read-only AXIOM_QUERY_TOKEN (not the
+# ingest AXIOM_TOKEN). `codex mcp add` can't template custom headers, so the
+# non-secret org id rides in Axiom's documented ?org-id= URL parameter and the
+# token is read from the env var at connect time.
+if [ -n "${AXIOM_QUERY_TOKEN:-}" ] && [ -n "${AXIOM_ORG_ID:-}" ] && command -v codex >/dev/null 2>&1; then
   codex mcp add axiom \
-    --env AXIOM_TOKEN="$AXIOM_TOKEN" \
-    --env AXIOM_ORG_ID="${AXIOM_ORG_ID:-}" \
-    --env AXIOM_URL="${AXIOM_ENDPOINT:-https://api.axiom.co}" \
-    -- npx -y mcp-server-axiom >/dev/null 2>&1 \
+    --url "https://mcp.axiom.co/mcp?org-id=${AXIOM_ORG_ID}" \
+    --bearer-token-env-var AXIOM_QUERY_TOKEN >/dev/null 2>&1 \
     && echo "[mcp-config] wrote axiom to codex" \
     || echo "[mcp-config] WARN: codex mcp add axiom failed" >&2
 fi

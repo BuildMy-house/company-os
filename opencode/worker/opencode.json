@@ -23,16 +23,11 @@
       }
     },
     "axiom": {
-      "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "mcp-server-axiom"
-      ],
-      "environment": {
-        "AXIOM_TOKEN": "{env:AXIOM_TOKEN}",
-        "AXIOM_ORG_ID": "{env:AXIOM_ORG_ID}",
-        "AXIOM_URL": "{env:AXIOM_URL}"
+      "type": "remote",
+      "url": "https://mcp.axiom.co/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:AXIOM_QUERY_TOKEN}",
+        "x-axiom-org-id": "{env:AXIOM_ORG_ID}"
       }
     }
   },

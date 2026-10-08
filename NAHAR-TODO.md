@@ -378,10 +378,11 @@ an Axiom organization ID:
    (used by `company-ops telemetry-query`, which all dispatched coding
    agents should use to check real app telemetry before guessing at root
    cause on a Homely bug — see `.claude/agents/agent-manager.md` — and by
-   the `axiom` MCP server `mcp-server-axiom` registered for Claude, Codex,
-   OpenCode, and Hermes).
-3. **Organization ID** -> `company-ops/.env`'s `AXIOM_ORG_ID` (required by
-   the `axiom` MCP server `mcp-server-axiom`). `AXIOM_URL` is optional and
+   the ingest side of the agent telemetry plugins). The `axiom` MCP server
+   (official `https://mcp.axiom.co/mcp`, registered for Claude, Codex,
+   OpenCode, and Hermes) uses its own query-only `AXIOM_QUERY_TOKEN` (2026-10-07).
+3. **Organization ID** -> `company-ops/.env`'s `AXIOM_ORG_ID` (sent as the
+   `x-axiom-org-id` header by the `axiom` MCP server). `AXIOM_URL` is optional and
    defaults to `https://api.axiom.co`.
 
 Both can point at the same dataset (`homely-telemetry` by default, both

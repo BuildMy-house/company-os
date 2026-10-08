@@ -40,14 +40,18 @@ function writeJson(filePath, data) {
 function buildServers() {
   const servers = {};
 
-  if (process.env.AXIOM_TOKEN) {
+  // Official Axiom-hosted MCP (tools: queryApl, listDatasets,
+  // getDatasetInfoAndSchema). Query access uses its OWN read-only credential,
+  // AXIOM_QUERY_TOKEN — never AXIOM_TOKEN, which is the ingest token the
+  // telemetry plugins write with. Credentials stay as env placeholders so
+  // they are never written into the generated files.
+  if (process.env.AXIOM_QUERY_TOKEN && process.env.AXIOM_ORG_ID) {
     servers.axiom = {
-      kind: 'stdio',
-      command: ['npx', '-y', 'mcp-server-axiom'],
-      environment: {
-        AXIOM_TOKEN: process.env.AXIOM_TOKEN,
-        AXIOM_ORG_ID: process.env.AXIOM_ORG_ID || '',
-        AXIOM_URL: process.env.AXIOM_ENDPOINT || 'https://api.axiom.co',
+      kind: 'http',
+      url: 'https://mcp.axiom.co/mcp',
+      headers: {
+        Authorization: 'Bearer {env:AXIOM_QUERY_TOKEN}',
+        'x-axiom-org-id': '{env:AXIOM_ORG_ID}',
       },
     };
   }
