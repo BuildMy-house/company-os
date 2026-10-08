@@ -9,18 +9,39 @@ import { createConnection } from "node:net";
 const base = process.env.HIVE_URL || "http://hive-coordinator:4100";
 const consumerId = process.env.HIVE_AGENT_ID || "hermees";
 
-try {
-  await request("/agents/register", {
-    method: "POST",
-    body: JSON.stringify({
-      id: consumerId,
-      endpoint: process.env.A2A_ENDPOINT || "http://hermes-gateway:8642",
-      capabilities: { profile: process.env.AGENT_PROFILE || "communicator", modes: ["observe", "propose", "bid", "execute", "review"] },
-    }),
-  });
-} catch (error) {
-  console.error(`[hive-member] registration failed: ${error.message}`);
+// Register with Hive in the background with indefinite exponential-backoff
+// retry (2s, 4s, 8s, 16s, capped at 60s). Never awaited at startup: the MCP
+// stdio server below must come up immediately even while this is still
+// retrying, so a transient hive-coordinator outage (e.g. ImagePullBackOff at
+// pod boot) can't leave this worker permanently unregistered and silently
+// unable to bid on Hive work (2026-10-08 incident).
+const REGISTER_ESCALATE_AFTER = 5;
+
+async function registerWithHive() {
+  let attempt = 0;
+  for (;;) {
+    attempt += 1;
+    try {
+      await request("/agents/register", {
+        method: "POST",
+        body: JSON.stringify({
+          id: consumerId,
+          endpoint: process.env.A2A_ENDPOINT || "http://hermes-gateway:8642",
+          capabilities: { profile: process.env.AGENT_PROFILE || "communicator", modes: ["observe", "propose", "bid", "execute", "review"] },
+        }),
+      });
+      console.error(`[hive-member] registered with Hive after ${attempt} attempt${attempt === 1 ? "" : "s"}`);
+      return;
+    } catch (error) {
+      const delayMs = Math.min(60_000, 2_000 * 2 ** (attempt - 1));
+      const prefix = attempt >= REGISTER_ESCALATE_AFTER ? "[hive-member] WARNING:" : "[hive-member]";
+      console.error(`${prefix} registration attempt ${attempt} failed: ${error.message}; retrying in ${Math.round(delayMs / 1000)}s`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
+
+void registerWithHive();
 
 async function request(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
