@@ -464,6 +464,47 @@ host>:5432/homely_company` to `company-ops-secrets` before rolling out
 is no live secret-store writes from this session (see
 `docs/DEPLOY-ENGINEERING.md`).
 
+#### L-runbook. Exact steps to complete L1 + L2 (run by Nahar; not automated)
+
+Verified 2026-10-11: nothing here has been run; the live `pm_agent_writer`
+password and `company-ops-secrets` are untouched. Never paste the password
+into chat or commit it.
+
+1. Generate (or fetch) the password and keep it in Infisical project
+   `8806c2b0-73d2-4bea-8537-5b874c5ff592`, env `dev`, path `/infra`, key
+   `PM_AGENT_WRITER_PASSWORD`. Use a URL-safe value (`openssl rand -hex 24`)
+   so it needs no escaping inside the DSN.
+2. Apply it to the live role (the script runs `psql` as `postgres`, so run
+   it inside the postgres pod; `POSTGRES_PASSWORD`, `COMPANY_PASSWORD`,
+   `OBSERVER_PASSWORD`, `ANALYTICS_PASSWORD` are also required by the
+   script and must match what is already live, or those roles get changed
+   too). Simplest and safest is to alter only this role directly:
+
+   ```bash
+   kubectl -n company-ops exec -i deploy/postgres -- \
+     psql -U postgres -d homely_company -v ON_ERROR_STOP=1 \
+     -c "ALTER ROLE pm_agent_writer WITH PASSWORD '$PM_AGENT_WRITER_PASSWORD';"
+   ```
+
+   (Equivalent via `scripts/04-set-role-passwords.sh` only if all four
+   password env vars are exported with their current live values.)
+3. Add the DSN to the live Secret (merge-patch, leaves other keys alone):
+
+   ```bash
+   kubectl -n company-ops patch secret company-ops-secrets --type merge -p \
+     "{\"stringData\":{\"PM_DATABASE_URL\":\"postgresql://pm_agent_writer:${PM_AGENT_WRITER_PASSWORD}@postgres:5432/homely_company\"}}"
+   ```
+
+   Confirm the Postgres Service name/port in `k8s/postgres.yaml` matches
+   `postgres:5432` before running.
+4. Restart pm-agent so it re-reads the Secret:
+   `kubectl -n company-ops rollout restart deploy/pm-agent && kubectl -n company-ops rollout status deploy/pm-agent`
+5. Verify: `kubectl -n company-ops logs deploy/pm-agent --tail=50` shows no
+   authentication error, and `kubectl -n company-ops get secret
+   company-ops-secrets -o json | jq '.data | has("PM_DATABASE_URL")'`
+   prints `true` (do not print the value).
+6. Rotate/re-run any time with the same steps; the ALTER is idempotent.
+
 ### P10-C follow-up: enable the `model_retirement_watch` plugin
 
 The plugin code ships in `hermes-plugins/model_retirement_watch/` but is
