@@ -13,8 +13,21 @@ defmodule Hive.Work do
     do: GenServer.call(__MODULE__, {:enqueue, id, parts, metadata})
 
   def available(limit \\ 10), do: GenServer.call(__MODULE__, {:available, limit})
+
+  def available_for(agent_id, limit \\ 100),
+    do: GenServer.call(__MODULE__, {:available_for, agent_id, limit})
+
+  def available_for_work(work_ref, agent_id),
+    do:
+      with_id(work_ref, fn id ->
+        GenServer.call(__MODULE__, {:available_for_work, id, agent_id})
+      end)
+
   def register_agent(agent), do: GenServer.call(__MODULE__, {:register_agent, agent})
   def agents, do: GenServer.call(__MODULE__, :agents)
+
+  def prompt(work_ref, requester_id),
+    do: with_id(work_ref, fn id -> GenServer.call(__MODULE__, {:prompt, id, requester_id}) end)
 
   def resolve_id(id_or_slug), do: GenServer.call(__MODULE__, {:resolve_id, id_or_slug})
 
@@ -322,69 +335,45 @@ defmodule Hive.Work do
     {:reply, if(resolved, do: {:ok, resolved}, else: {:error, :not_found}), state}
   end
 
-  def handle_call({:available, limit}, _from, %{memory: memory} = state) do
-    now = DateTime.utc_now()
+  def handle_call({:available, limit}, _from, %{memory: _memory} = state) do
+    {items, state} = available_memory(state, limit, nil)
+    {:reply, {:ok, items}, state}
+  end
 
-    expired =
-      memory.work
-      |> Enum.filter(fn {_id, item} ->
-        lease = Map.get(item, :lease_expires_at)
-
-        item.state == "claimed" and is_struct(lease, DateTime) and
-          DateTime.compare(lease, now) == :lt
-      end)
-
-    {work, failure_events} =
-      Enum.reduce(expired, {memory.work, []}, fn {id, item}, {items, events} ->
-        failure = %{
-          "agent_id" => item.claimed_by,
-          "reason" => "lease_expired",
-          "retry_state" => "available",
-          "slug" => item["slug"]
-        }
-
-        failed =
-          Map.merge(item, %{
-            state: "available",
-            claimed_by: nil,
-            lease_expires_at: nil,
-            last_failure: failure
-          })
-
-        event = event("engineering.failed", id, failure, item.attempt || 0)
-        {Map.put(items, id, failed), [event | events]}
-      end)
-
-    bids =
-      Enum.reduce(expired, memory.bids, fn {id, item}, acc ->
-        Map.delete(acc, {id, item.claimed_by})
-      end)
-
-    items = work |> Map.values() |> Enum.filter(&(&1.state == "available")) |> Enum.take(limit)
-    Enum.each(failure_events, &notify_event_subscribers/1)
-
-    next_memory = %{
-      memory
-      | work: work,
-        bids: bids,
-        events: Enum.reverse(failure_events) ++ memory.events
-    }
-
-    {:reply, {:ok, items}, %{state | memory: next_memory}}
+  def handle_call({:available_for, agent_id, limit}, _from, %{memory: _memory} = state) do
+    {items, state} = available_memory(state, limit, agent_id)
+    {:reply, {:ok, items}, state}
   end
 
   def handle_call({:available, limit}, _from, %{db: db} = state) do
-    failure_events = transaction!(db, &recover_expired_db/1)
-    Enum.each(failure_events, &notify_event_subscribers/1)
+    {:reply, {:ok, available_db(db, limit, nil)}, state}
+  end
 
+  def handle_call({:available_for, agent_id, limit}, _from, %{db: db} = state) do
+    {:reply, {:ok, available_db(db, limit, agent_id)}, state}
+  end
+
+  def handle_call({:available_for_work, id, agent_id}, _from, %{memory: memory} = state) do
+    item = memory.work[id]
+
+    if item && item.state == "available" && not Map.has_key?(memory.bids, {id, agent_id}) do
+      {:reply, {:ok, item}, state}
+    else
+      {:reply, {:ok, nil}, state}
+    end
+  end
+
+  def handle_call({:available_for_work, id, agent_id}, _from, %{db: db} = state) do
     result =
       Postgrex.query!(
         db,
-        "SELECT id, payload, state, claimed_by, lease_expires_at, attempt, last_failure FROM company.hive_work_items WHERE state = 'available' ORDER BY created_at LIMIT $1",
-        [limit]
+        "SELECT w.id, w.payload, w.state, w.claimed_by, w.lease_expires_at, w.attempt, w.last_failure FROM company.hive_work_items w WHERE w.id = $1 AND w.state = 'available' AND NOT EXISTS (SELECT 1 FROM company.hive_work_bids b WHERE b.work_id = w.id AND b.agent_id = $2)",
+        [id, agent_id]
       )
+      |> rows()
+      |> List.first()
 
-    {:reply, {:ok, rows(result)}, state}
+    {:reply, {:ok, result}, state}
   end
 
   def handle_call({:events, task_id, limit}, _from, %{memory: memory} = state) do
@@ -429,6 +418,46 @@ defmodule Hive.Work do
     )
 
     {:reply, :ok, state}
+  end
+
+  def handle_call({:prompt, id, requester_id}, _from, %{memory: memory} = state) do
+    case memory.work[id] do
+      %{state: "available"} ->
+        existing_bids =
+          memory.bids
+          |> Enum.filter(fn {{work_id, _agent_id}, _bid} -> work_id == id end)
+          |> Enum.map(fn {{_work_id, agent_id}, _bid} -> agent_id end)
+
+        prompt_subscribers(id, requester_id, existing_bids)
+        |> then(&{:reply, {:ok, &1}, state})
+
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
+      _ ->
+        {:reply, {:error, :unavailable}, state}
+    end
+  end
+
+  def handle_call({:prompt, id, requester_id}, _from, %{db: db} = state) do
+    case get_db(db, id) do
+      {:ok, %{"state" => "available"}} ->
+        existing_bids =
+          Postgrex.query!(db, "SELECT agent_id FROM company.hive_work_bids WHERE work_id = $1", [
+            id
+          ])
+          |> rows()
+          |> Enum.map(& &1["agent_id"])
+
+        prompt_subscribers(id, requester_id, existing_bids)
+        |> then(&{:reply, {:ok, &1}, state})
+
+      {:ok, _work} ->
+        {:reply, {:error, :unavailable}, state}
+
+      _ ->
+        {:reply, {:error, :not_found}, state}
+    end
   end
 
   def handle_call({:submit_bid, work_id, agent_id, bid}, _from, %{memory: memory} = state) do
@@ -1206,6 +1235,106 @@ defmodule Hive.Work do
     GenServer.call(__MODULE__, {:available, 0})
   end
 
+  defp available_memory(state, limit, agent_id) do
+    memory = state.memory
+    now = DateTime.utc_now()
+
+    expired =
+      memory.work
+      |> Enum.filter(fn {_id, item} ->
+        lease = Map.get(item, :lease_expires_at)
+
+        item.state == "claimed" and is_struct(lease, DateTime) and
+          DateTime.compare(lease, now) == :lt
+      end)
+
+    {work, failure_events} =
+      Enum.reduce(expired, {memory.work, []}, fn {id, item}, {items, events} ->
+        failure = %{
+          "agent_id" => item.claimed_by,
+          "reason" => "lease_expired",
+          "retry_state" => "available",
+          "slug" => item["slug"]
+        }
+
+        failed =
+          Map.merge(item, %{
+            state: "available",
+            claimed_by: nil,
+            lease_expires_at: nil,
+            last_failure: failure
+          })
+
+        event = event("engineering.failed", id, failure, item.attempt || 0)
+        {Map.put(items, id, failed), [event | events]}
+      end)
+
+    bids =
+      Enum.reduce(expired, memory.bids, fn {id, item}, acc ->
+        Map.delete(acc, {id, item.claimed_by})
+      end)
+
+    items =
+      work
+      |> Map.values()
+      |> Enum.filter(fn item ->
+        item.state == "available" and
+          (is_nil(agent_id) or not Map.has_key?(bids, {item.id, agent_id}))
+      end)
+      |> Enum.take(limit)
+
+    Enum.each(failure_events, &notify_event_subscribers/1)
+
+    next_memory = %{
+      memory
+      | work: work,
+        bids: bids,
+        events: Enum.reverse(failure_events) ++ memory.events
+    }
+
+    {items, %{state | memory: next_memory}}
+  end
+
+  defp available_db(db, limit, agent_id) do
+    failure_events = transaction!(db, &recover_expired_db/1)
+    Enum.each(failure_events, &notify_event_subscribers/1)
+
+    {query, params} =
+      if is_nil(agent_id) do
+        {"SELECT id, payload, state, claimed_by, lease_expires_at, attempt, last_failure FROM company.hive_work_items WHERE state = 'available' ORDER BY created_at LIMIT $1",
+         [limit]}
+      else
+        {"SELECT w.id, w.payload, w.state, w.claimed_by, w.lease_expires_at, w.attempt, w.last_failure FROM company.hive_work_items w WHERE w.state = 'available' AND NOT EXISTS (SELECT 1 FROM company.hive_work_bids b WHERE b.work_id = w.id AND b.agent_id = $1) ORDER BY w.created_at LIMIT $2",
+         [agent_id, limit]}
+      end
+
+    Postgrex.query!(db, query, params) |> rows()
+  end
+
+  defp prompt_subscribers(work_id, requester_id, existing_bids) do
+    already_bid = MapSet.new(existing_bids)
+
+    agent_ids =
+      :ets.tab2list(:hive_subscribers)
+      |> Enum.flat_map(fn
+        {:work, _pid, agent_id} when agent_id != requester_id -> [agent_id]
+        _ -> []
+      end)
+      |> Enum.uniq()
+
+    prompted = Enum.reject(agent_ids, &MapSet.member?(already_bid, &1))
+
+    for {:work, pid, agent_id} <- :ets.tab2list(:hive_subscribers),
+        agent_id in prompted,
+        do: send(pid, {:hive_work_prompt, work_id})
+
+    %{
+      "task_id" => work_id,
+      "prompted_agent_ids" => prompted,
+      "already_bid_agent_ids" => Enum.filter(agent_ids, &MapSet.member?(already_bid, &1))
+    }
+  end
+
   defp allocate_after_expiry_recovery(ref, lease_seconds) do
     _ = recover_expired()
     with_id(ref, fn id -> GenServer.call(__MODULE__, {:allocate, id, lease_seconds}) end)
@@ -1361,7 +1490,7 @@ defmodule Hive.Work do
 
   defp ensure_subscribers_table do
     case :ets.whereis(:hive_subscribers) do
-      :undefined -> :ets.new(:hive_subscribers, [:named_table, :public, :set])
+      :undefined -> :ets.new(:hive_subscribers, [:named_table, :public, :bag])
       _ -> :hive_subscribers
     end
   end

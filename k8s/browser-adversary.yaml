@@ -23,7 +23,7 @@ spec:
             periodSeconds: 5
           env:
             - name: ADVERSARY_ALLOWED_ORIGINS
-              value: "https://app.buildmy.house"
+              value: "https://app.buildmy.house,http://buildmyhouse-dev-app.buildmyhouse-dev.svc.cluster.local:3000"
             - name: ADVERSARY_MODEL
               value: "glm-5.3-flash"
             - name: OPENAI_BASE_URL

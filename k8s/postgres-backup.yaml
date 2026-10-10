@@ -16,8 +16,8 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: backup
-              image: docker.io/library/company-ops-company-ops:latest
-              imagePullPolicy: IfNotPresent
+              image: localhost:30500/company-os@sha256:527382b201dd815d5d25eccd8f9e7bb20c20eee12ebc4063d760bfa98c8dac78
+              imagePullPolicy: Always
               command: ["/opt/company-ops-venv/bin/python", "-m", "company_ops.backup"]
               envFrom:
                 - secretRef:

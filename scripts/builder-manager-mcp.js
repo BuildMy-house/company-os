@@ -150,7 +150,7 @@ function readToken() {
   return fs.readFileSync(TOKEN_PATH, "utf8").trim();
 }
 
-function k8sRequest(method, path_, body) {
+function k8sRequest(method, path_, body, contentType = "application/json") {
   return new Promise((resolve, reject) => {
     const token = readToken();
     const data = body ? Buffer.from(JSON.stringify(body)) : null;
@@ -162,7 +162,7 @@ function k8sRequest(method, path_, body) {
       ca: fs.readFileSync(CA_PATH),
       headers: {
         Authorization: `Bearer ${token}`,
-        ...(data ? { "Content-Type": "application/json", "Content-Length": data.length } : {}),
+        ...(data ? { "Content-Type": contentType, "Content-Length": data.length } : {}),
       },
     };
     const request = https.request(options, (response) => {
@@ -652,19 +652,29 @@ async function call(name, args) {
   throw new Error(`unknown tool: ${name}`);
 }
 
-const input = readline.createInterface({ input: process.stdin });
-for await (const line of input) {
-  let request;
-  try { request = JSON.parse(line); } catch { continue; }
-  if (request.method === "initialize") { send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: request.params?.protocolVersion || "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: process.env.BUILDER_SCOPE === "company-os" ? "hermes-build-dispatcher" : "builder-manager", version: "0.2.0" } } }); continue; }
-  if (request.method === "notifications/initialized") continue;
-  // See container-manager-mcp.js for the full explanation: MCP's optional "ping"
-  // utility must get an immediate empty result or Hermes's keepalive probe hangs for
-  // its 30s RPC timeout and this connection flaps connected/degraded/parked forever.
-  if (request.method === "ping") { send({ jsonrpc: "2.0", id: request.id, result: {} }); continue; }
-  if (request.method === "tools/list") { send({ jsonrpc: "2.0", id: request.id, result: { tools } }); continue; }
-  if (request.method === "tools/call") {
-    try { send(text(request.id, await call(request.params.name, request.params.arguments || {}))); }
-    catch (error) { send(fail(request.id, error.message)); }
+// Guarded so this module can also be `import`-ed for its buildJobManifest/
+// buildAndPush functions (e.g. scripts/dev-deploy-poller.js) without
+// starting the stdio MCP server loop below, which would otherwise hang
+// forever waiting on stdin in a non-MCP caller. The live production
+// stdio-MCP behavior (run via k8s/hermes-build-dispatcher.yaml) is
+// unchanged: this file is still its own entrypoint when executed directly.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const input = readline.createInterface({ input: process.stdin });
+  for await (const line of input) {
+    let request;
+    try { request = JSON.parse(line); } catch { continue; }
+    if (request.method === "initialize") { send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: request.params?.protocolVersion || "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: process.env.BUILDER_SCOPE === "company-os" ? "hermes-build-dispatcher" : "builder-manager", version: "0.2.0" } } }); continue; }
+    if (request.method === "notifications/initialized") continue;
+    // See container-manager-mcp.js for the full explanation: MCP's optional "ping"
+    // utility must get an immediate empty result or Hermes's keepalive probe hangs for
+    // its 30s RPC timeout and this connection flaps connected/degraded/parked forever.
+    if (request.method === "ping") { send({ jsonrpc: "2.0", id: request.id, result: {} }); continue; }
+    if (request.method === "tools/list") { send({ jsonrpc: "2.0", id: request.id, result: { tools } }); continue; }
+    if (request.method === "tools/call") {
+      try { send(text(request.id, await call(request.params.name, request.params.arguments || {}))); }
+      catch (error) { send(fail(request.id, error.message)); }
+    }
   }
 }
+
+export { buildJobManifest, buildAndPush, k8sRequest, NAMESPACE };

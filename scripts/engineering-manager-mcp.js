@@ -242,7 +242,13 @@ if (isMain) {
       }
       visible.push(tool("team_health", `Check ${MANAGER.flavor} ${MANAGER.role}, workspace, identity, and worker-binary health.`, { type: "object", properties: {}, additionalProperties: false }));
       visible.push(tool("container_telemetry", "Get lightweight engineering-container uptime, load, memory, process, and disk telemetry.", { type: "object", properties: {}, additionalProperties: false }));
-      if (hiveMember) visible.push(tool("hive_prompt_workers", "Ask each eligible registered Hive worker to assess one available work item (by human slug or id) and submit its OWN hive_bid. Returns per-worker bid/declined/unavailable/timeout outcomes with stored rationale. Never allocates; call hive_allocate separately afterwards.", { type: "object", required: ["work"], properties: { work: { type: "string", description: "Work slug (or durable id)" }, worker_ids: { type: "array", items: { type: "string" } }, timeout_seconds: { type: "integer", minimum: 1, maximum: 300 } }, additionalProperties: false }));
+      if (hiveMember && MANAGER.role === "manager") {
+        visible.push(tool(
+          "hive_prompt_workers",
+          "Ask each eligible registered Hive worker to assess one available work item (by human slug or id) and submit its OWN hive_bid. Returns per-worker bid/declined/unavailable/timeout outcomes with stored rationale. Never allocates; call hive_allocate separately afterwards.",
+          { type: "object", required: ["work"], properties: { work: { type: "string", description: "Work slug (or durable id)" }, worker_ids: { type: "array", items: { type: "string" } }, timeout_seconds: { type: "integer", minimum: 1, maximum: 300 } }, additionalProperties: false },
+        ));
+      }
       message.result.tools = visible;
     }
     send(message);
@@ -491,11 +497,10 @@ export function evaluateFit({ assessment, busy = false, healthStatus = "healthy"
   if (healthStatus !== "healthy") return { skip: true, reason: "worker_unhealthy" };
   if (!assessment) return { skip: true, reason: "assessment_unavailable" };
   if (!isValidAssessment(assessment)) return { skip: true, reason: "assessment_invalid" };
-  if (!assessment.interested) return { skip: true, reason: "not_interested" };
   const approach = [assessment.approach, assessment.evidence].find((value) => typeof value === "string" && value.trim());
   return {
     bid: {
-      interested: true,
+      interested: assessment.interested,
       confidence: assessment.confidence,
       estimated_cost: assessment.estimated_cost * costFactor * tierAffinityMultiplier(taskTier, poolTier),
       expected_benefit: assessment.expected_benefit,
@@ -513,6 +518,64 @@ export async function assessTaskFit({ run, prompt, capabilities, health, load, t
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function collectPromptOutcomes({ agentIds, readBids, timeoutMs = 30_000, wait = delay, now = Date.now }) {
+  const targets = [...new Set((agentIds || []).filter((id) => typeof id === "string" && id.length > 0))];
+  if (targets.length === 0) return [];
+  const deadline = now() + timeoutMs;
+  const bidsByAgent = new Map();
+  let readError = null;
+  do {
+    try {
+      const response = await readBids();
+      const bids = Array.isArray(response) ? response : response?.bids;
+      if (!Array.isArray(bids)) throw new Error("Hive returned an invalid bids response");
+      for (const bid of bids) {
+        if (targets.includes(bid.agent_id)) bidsByAgent.set(bid.agent_id, bid);
+      }
+      readError = null;
+    } catch (error) {
+      readError = error;
+    }
+    if (targets.every((agentId) => bidsByAgent.has(agentId)) || now() >= deadline) break;
+    await wait(Math.min(250, Math.max(0, deadline - now())));
+  } while (now() < deadline);
+
+  return targets.map((agentId) => {
+    const bid = bidsByAgent.get(agentId);
+    if (bid) {
+      return {
+        agent_id: agentId,
+        state: bid.interested ? "bid" : "declined",
+        confidence: bid.confidence,
+        estimated_cost: bid.estimated_cost,
+        expected_benefit: bid.expected_benefit,
+        risk: bid.risk,
+        approach: bid.approach,
+      };
+    }
+    return { agent_id: agentId, state: readError ? "unavailable" : "timeout", ...(readError ? { reason: errorTelemetry(readError).error } : {}) };
+  });
+}
+
+async function promptHiveWorkers({ work_slug, timeout_seconds = 30 }) {
+  if (typeof work_slug !== "string" || work_slug.trim().length === 0) throw new Error("work_slug is required");
+  const timeoutSeconds = Math.min(120, Math.max(5, Number(timeout_seconds) || 30));
+  const prompt = await hiveCall("hive_prompt_workers", { work_slug: work_slug.trim() });
+  const agentIds = prompt?.prompted_agent_ids || [];
+  const outcomes = await collectPromptOutcomes({
+    agentIds,
+    timeoutMs: timeoutSeconds * 1000,
+    readBids: () => hiveCall("hive_work_bids", { work_slug: work_slug.trim(), limit: 100 }),
+  });
+  const alreadyBid = (prompt?.already_bid_agent_ids || []).map((agent_id) => ({ agent_id, state: "already_bid" }));
+  return {
+    work_slug: work_slug.trim(),
+    task_id: prompt.task_id,
+    status: agentIds.length ? "prompted" : "no_idle_workers",
+    outcomes: [...outcomes, ...alreadyBid],
+  };
 }
 
 // A stuck assessment run must never hang the Hive subscription forever.
@@ -538,6 +601,40 @@ async function runPromptToCompletion(prompt, context) {
 }
 
 let hiveBusy = false;
+let hiveIdle = Promise.resolve();
+let releaseHiveIdle = null;
+
+function acquireHiveSlot() {
+  if (hiveBusy) return false;
+  hiveBusy = true;
+  hiveIdle = new Promise((resolve) => { releaseHiveIdle = resolve; });
+  return true;
+}
+
+function freeHiveSlot() {
+  if (!hiveBusy) return;
+  hiveBusy = false;
+  releaseHiveIdle?.();
+  releaseHiveIdle = null;
+  hiveIdle = Promise.resolve();
+}
+
+async function waitForHiveSlot() {
+  while (hiveBusy) await hiveIdle;
+}
+
+async function recordDecline(hiveCallDep, candidate, reason) {
+  await hiveCallDep("hive_bid", {
+    work_id: candidate.id,
+    interested: false,
+    confidence: 0,
+    approach: `Declined: ${reason}`,
+    estimated_cost: 0,
+    expected_benefit: 0,
+    risk: reason,
+  });
+}
+
 // Assessments this worker already turned into a bid after a manager prompt,
 // keyed by work id, so a later allocation forwards that same rationale
 // instead of re-assessing into a different one.
@@ -555,74 +652,85 @@ const assessmentFailures = new Map();
 // routine bid_skipped noise.
 const ASSESSMENT_FAILURE_WARN_THRESHOLD = 5;
 export async function runHiveWork(candidate, deps = {}) {
-  if (!candidate?.id || hiveBusy) return;
+  if (!candidate?.id) return;
+  if (!acquireHiveSlot()) {
+    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "deferred", reason: "worker_busy" });
+    return;
+  }
   const hiveCallDep = deps.hiveCall ?? hiveCall;
   const healthDep = deps.health ?? health;
   const telemetryDep = deps.telemetry ?? telemetry;
   const assessDep = deps.assessTaskFit ?? assessTaskFit;
   const agentId = deps.agentId ?? (process.env.HIVE_AGENT_ID || "engineering-agent");
-  const healthState = healthDep();
-  if (healthState.status !== "healthy") {
-    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: "worker_unhealthy" });
-    return;
-  }
-  const taskTier = taskTierOf(candidate);
-  const poolTier = deps.poolTier ?? POOL_TIER;
-  // Tier head start: a pool whose tier does not match a non-standard task lets the
-  // matching pool claim first, then bids only if the item is still unclaimed.
-  const graceMs = deps.tierGraceMs ?? TIER_GRACE_MS;
-  if (taskTier !== "standard" && taskTier !== poolTier && graceMs > 0) {
-    await (deps.wait ?? delay)(graceMs);
-    let stillAvailable = true;
-    try {
-      const available = await hiveCallDep("hive_available_work", { limit: 100 });
-      stillAvailable = (available?.work || []).some((item) => item.id === candidate.id);
-    } catch {}
-    if (!stillAvailable) {
-      emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: "claimed_by_preferred_tier", task_tier: taskTier, pool_tier: poolTier });
+  let keepBusy = false;
+  try {
+    const healthState = healthDep();
+    if (healthState.status !== "healthy") {
+      await recordDecline(hiveCallDep, candidate, "worker_unhealthy");
+      emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_declined", agent_id: agentId, reason: "worker_unhealthy" });
       return;
     }
-  }
-  const priorAssessments = deps.promptedAssessments ?? promptedAssessments;
-  let assessment = priorAssessments.get(candidate.id) ?? null;
-  priorAssessments.delete(candidate.id);
-  const failuresDep = deps.assessmentFailures ?? assessmentFailures;
-  const assessmentStartedAt = Date.now();
-  if (!assessment) try {
-    const taskPrompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
-    const stats = telemetryDep();
-    assessment = await assessDep({
-      run: (fitPrompt) => runPromptToCompletion(fitPrompt, { task_id: candidate.id, purpose: "task_fit" }),
-      prompt: taskPrompt,
-      capabilities,
-      health: {
-        status: healthState.status,
-        manager: { flavor: healthState.manager.flavor, role: healthState.manager.role, agent: healthState.manager.agent, model: healthState.manager.model },
-      },
-      load: { load_average: stats.load_average, process_count: stats.process_count, memory: stats.memory },
-      tier: { task: taskTier, pool: poolTier },
-    });
-    emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "completed", stage: "task_fit", runner_agent: MANAGER.agent, provider: MANAGER.model.split("/")[0], model: MANAGER.model, duration_ms: Date.now() - assessmentStartedAt });
-    failuresDep.delete(candidate.id);
-  } catch (error) {
-    const consecutiveFailures = (failuresDep.get(candidate.id)?.count ?? 0) + 1;
-    failuresDep.set(candidate.id, { count: consecutiveFailures });
-    const severe = consecutiveFailures >= ASSESSMENT_FAILURE_WARN_THRESHOLD;
-    emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "failed", stage: "task_fit", runner_agent: MANAGER.agent, provider: MANAGER.model.split("/")[0], model: MANAGER.model, duration_ms: Date.now() - assessmentStartedAt, consecutive_failures: consecutiveFailures, ...(severe ? { severity: "warning" } : {}), ...errorTelemetry(error) });
-    // Block the return on an increasing per-task backoff so a candidate that
-    // fails assessment instantly every time cannot spin subscribeHive's
-    // while(true) loop unthrottled if Hive keeps re-offering it immediately.
-    await (deps.wait ?? delay)(retryDelayMs(consecutiveFailures, deps.random ?? Math.random));
-  }
-  const decision = evaluateFit({ assessment, busy: hiveBusy, healthStatus: healthState.status, taskTier, poolTier, ...(deps.costFactor !== undefined ? { costFactor: deps.costFactor } : {}) });
-  if (decision.skip) {
-    const failureCount = failuresDep.get(candidate.id)?.count ?? 0;
-    const severe = failureCount >= ASSESSMENT_FAILURE_WARN_THRESHOLD;
-    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: decision.reason, ...(severe ? { severity: "warning", consecutive_failures: failureCount } : {}) });
-    return;
-  }
-  try {
+    const taskTier = taskTierOf(candidate);
+    const poolTier = deps.poolTier ?? POOL_TIER;
+    // Tier head start: a pool whose tier does not match a non-standard task lets the
+    // matching pool claim first, then bids only if the item is still unclaimed.
+    const graceMs = deps.tierGraceMs ?? TIER_GRACE_MS;
+    if (taskTier !== "standard" && taskTier !== poolTier && graceMs > 0) {
+      await (deps.wait ?? delay)(graceMs);
+      let stillAvailable = true;
+      try {
+        const available = await hiveCallDep("hive_available_work", { limit: 100 });
+        stillAvailable = (available?.work || []).some((item) => item.id === candidate.id);
+      } catch {}
+      if (!stillAvailable) {
+        emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: "claimed_by_preferred_tier", task_tier: taskTier, pool_tier: poolTier });
+        return;
+      }
+    }
+    const priorAssessments = deps.promptedAssessments ?? promptedAssessments;
+    let assessment = priorAssessments.get(candidate.id) ?? null;
+    priorAssessments.delete(candidate.id);
+    const failuresDep = deps.assessmentFailures ?? assessmentFailures;
+    const assessmentStartedAt = Date.now();
+    if (!assessment) try {
+      const taskPrompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
+      const stats = telemetryDep();
+      assessment = await assessDep({
+        run: (fitPrompt) => runPromptToCompletion(fitPrompt, { task_id: candidate.id, purpose: "task_fit" }),
+        prompt: taskPrompt,
+        capabilities,
+        health: {
+          status: healthState.status,
+          manager: { flavor: healthState.manager.flavor, role: healthState.manager.role, agent: healthState.manager.agent, model: healthState.manager.model },
+        },
+        load: { load_average: stats.load_average, process_count: stats.process_count, memory: stats.memory },
+        tier: { task: taskTier, pool: poolTier },
+      });
+      emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "completed", stage: "task_fit", runner_agent: MANAGER.agent, provider: MANAGER.model.split("/")[0], model: MANAGER.model, duration_ms: Date.now() - assessmentStartedAt });
+      failuresDep.delete(candidate.id);
+    } catch (error) {
+      const consecutiveFailures = (failuresDep.get(candidate.id)?.count ?? 0) + 1;
+      failuresDep.set(candidate.id, { count: consecutiveFailures });
+      const severe = consecutiveFailures >= ASSESSMENT_FAILURE_WARN_THRESHOLD;
+      emitTelemetry({ event: "hive_bid_assessment", task_id: candidate.id, state: "failed", stage: "task_fit", runner_agent: MANAGER.agent, provider: MANAGER.model.split("/")[0], model: MANAGER.model, duration_ms: Date.now() - assessmentStartedAt, consecutive_failures: consecutiveFailures, ...(severe ? { severity: "warning" } : {}), ...errorTelemetry(error) });
+      // Block the return on an increasing per-task backoff so a candidate that
+      // fails assessment instantly every time cannot spin subscribeHive's
+      // while(true) loop unthrottled if Hive keeps re-offering it immediately.
+      await (deps.wait ?? delay)(retryDelayMs(consecutiveFailures, deps.random ?? Math.random));
+    }
+    const decision = evaluateFit({ assessment, healthStatus: healthState.status, taskTier, poolTier, ...(deps.costFactor !== undefined ? { costFactor: deps.costFactor } : {}) });
+    if (decision.skip) {
+      const failureCount = failuresDep.get(candidate.id)?.count ?? 0;
+      const severe = failureCount >= ASSESSMENT_FAILURE_WARN_THRESHOLD;
+      await recordDecline(hiveCallDep, candidate, decision.reason);
+      emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_declined", agent_id: agentId, reason: decision.reason, ...(severe ? { severity: "warning", consecutive_failures: failureCount } : {}) });
+      return;
+    }
     await hiveCallDep("hive_bid", { work_id: candidate.id, ...decision.bid });
+    if (!decision.bid.interested) {
+      emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_declined", agent_id: agentId, reason: assessment.risk });
+      return;
+    }
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_submitted", agent_id: agentId });
     // hive_allocate leases the item to the top-ranked bidder, not the caller. If a
     // better-ranked bid (e.g. the tier-preferred pool) exists, leave it to that
@@ -639,7 +747,7 @@ export async function runHiveWork(candidate, deps = {}) {
       return;
     }
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "allocated", agent_id: agentId });
-    hiveBusy = true;
+    keepBusy = true;
     const task = { id: candidate.id, state: "working", startedAt: Date.now() };
     const taskPrompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
     const bidContext = {
@@ -670,17 +778,18 @@ export async function runHiveWork(candidate, deps = {}) {
         } catch (error) {
           emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", stage: "complete", ...errorTelemetry(error) });
         } finally {
-          hiveBusy = false;
+          freeHiveSlot();
         }
       }, deps.trackOptions);
     }).catch((error) => {
       completeWithRetry(hiveCallDep, { task_id: candidate.id, state: "failed", result: { error: error.message } })
         .catch((completionError) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", stage: "runner_start", ...errorTelemetry(completionError) }))
-        .finally(() => { hiveBusy = false; });
+        .finally(freeHiveSlot);
     });
   } catch (error) {
-    hiveBusy = false;
-    emitTelemetry({ event: "hive_work_dispatch", state: "failed", stage: "dispatch", ...errorTelemetry(error) });
+    emitTelemetry({ event: "hive_work_dispatch", task_id: candidate.id, state: "failed", stage: "dispatch", ...errorTelemetry(error) });
+  } finally {
+    if (!keepBusy) freeHiveSlot();
   }
 }
 
@@ -803,6 +912,7 @@ async function subscribeHive() {
   try {
     emitTelemetry({ event: "hive_subscription", state: "connecting", agent_id: agentId, attempt: hiveRetryAttempt + 1 });
     while (true) {
+      await waitForHiveSlot();
       const candidate = await hiveCall("hive_next_work", { timeout_seconds: 900 });
       hiveRetryAttempt = 0;
       emitTelemetry({ event: "hive_subscription", state: "work_received", task_id: candidate?.id, agent_id: agentId, duration_ms: Date.now() - startedAt });
@@ -826,10 +936,10 @@ if (isMain) {
     if (message.method === "tools/call") {
       const name = message.params?.name;
       if (name === "team_health" || name === "container_telemetry") return localCall(message.id, name);
-      if (name === "hive_prompt_workers") {
-        promptWorkers(message.params.arguments ?? {})
-          .then((value) => send(result(message.id, { content: [{ type: "text", text: JSON.stringify(value) }] })))
-          .catch((err) => send(error(message.id, -32000, err.message)));
+      if (name === "hive_prompt_workers" && MANAGER.role === "manager" && hiveMember) {
+        promptWorkers(message.params?.arguments ?? {}).then((value) => {
+          send(result(message.id, { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] }));
+        }).catch((err) => send(error(message.id, -32000, err.message)));
         return;
       }
       if (name === "engineering") {

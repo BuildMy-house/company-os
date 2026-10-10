@@ -120,6 +120,26 @@ function buildServers() {
   // pod's default in-cluster ServiceAccount token, which is what these two
   // scripts actually authenticate with.
   if (fs.existsSync('/var/run/secrets/kubernetes.io/serviceaccount/token')) {
+    // Same kubernetes-mcp-server Hermes already runs (hermes/config.yaml's
+    // k8s_deployment entry) and the same "company-ops" ServiceAccount/RBAC
+    // (k8s/rbac.yaml) -- gives the engineering-agent itself live cluster
+    // visibility for docs/DEV-CLUSTER-GATE.md's runbook (poller
+    // CronJob/Job status and logs, buildmyhouse-dev pods/deploy-state
+    // configmap) instead of only the scoped container-manager/
+    // builder-manager wrappers. --disable-destructive is a second layer on
+    // top of the RBAC grant, same as Hermes's copy. Kept out of the
+    // OpenCode skip-list below for the same reason container-manager is
+    // Claude-manager-only: this SA can create/patch/delete
+    // Deployments/ReplicaSets in company-ops, which is more than a worker
+    // needs for read-only debugging.
+    servers['kubernetes'] = {
+      kind: 'stdio',
+      command: ['npx', '-y', 'kubernetes-mcp-server@latest', '--disable-destructive', '--log-file', 'stderr', '--cluster-provider', 'in-cluster'],
+      environment: {
+        KUBERNETES_SERVICE_HOST: process.env.KUBERNETES_SERVICE_HOST || '10.43.0.1',
+        KUBERNETES_SERVICE_PORT: process.env.KUBERNETES_SERVICE_PORT || '443',
+      },
+    };
     servers['container-manager'] = {
       kind: 'stdio',
       command: ['node', '/opt/company-ops/scripts/container-manager-mcp.js'],
@@ -228,7 +248,7 @@ function updateOpencode(servers) {
   const config = readJson(filePath);
   config.mcp = config.mcp || {};
   for (const [name, server] of Object.entries(servers)) {
-    if (name === 'container-manager' || name === 'registry-manager' || name === 'hermes-messenger') continue;
+    if (name === 'container-manager' || name === 'registry-manager' || name === 'hermes-messenger' || name === 'kubernetes') continue;
     config.mcp[name] = toOpencodeServer(server);
   }
   updateOpencodePlugins(config);

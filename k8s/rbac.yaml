@@ -1,10 +1,21 @@
-# RBAC for Hermes's kubernetes-mcp-server (hermes/config.yaml's
-# k8s_deployment MCP entry), replacing the never-reachable companyd_deployment.
-# Scoped to the company-ops namespace only. No delete verb anywhere, no
-# secrets resource at all — Hermes can see pod/deployment/event state and
-# trigger rollouts (a patch to a Deployment's pod template annotations),
-# nothing more. kubernetes-mcp-server also runs with --disable-destructive
-# as a second layer on top of this.
+# RBAC for the shared "company-ops" ServiceAccount, used by both Hermes's
+# kubernetes-mcp-server (hermes/config.yaml's k8s_deployment MCP entry) and
+# the in-cluster engineering-agent pod (k8s/engineering.yaml's
+# serviceAccountName: company-ops) — see
+# scripts/generate-agent-mcp-config.js, which wires the same
+# kubernetes-mcp-server into the engineering-agent's own Claude/OpenCode MCP
+# config whenever this ServiceAccount's token is present
+# (/var/run/secrets/kubernetes.io/serviceaccount/token). Replaces the
+# never-reachable companyd_deployment. No delete verb on pods/events, no
+# secrets resource at all. kubernetes-mcp-server also runs with
+# --disable-destructive as a second layer on top of this.
+#
+# batch/jobs + batch/cronjobs (company-ops) and the buildmyhouse-dev grant
+# below exist specifically so this SA can drive docs/DEV-CLUSTER-GATE.md's
+# runbook: read the buildmyhouse-dev-deployer CronJob/poller pod logs,
+# trigger an on-demand rebuild (`kubectl create job --from=cronjob/...`),
+# and read buildmyhouse-dev's pods/deploy-state configmap for debugging. No
+# access to buildmyhouse-dev Secrets, and no delete verb on batch/cronjobs.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -23,6 +34,9 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets"]
     verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -36,4 +50,40 @@ subjects:
 roleRef:
   kind: Role
   name: company-ops-k8s-mcp
+  apiGroup: rbac.authorization.k8s.io
+---
+# Read-only visibility into buildmyhouse-dev for the same company-ops SA —
+# deliberately narrower than buildmyhouse-dev-deployer-rollout
+# (k8s/buildmyhouse-dev-deployer-rbac.yaml): get/list/watch only, no patch,
+# no Secrets, and the configmap grant is restricted by resourceNames to the
+# one state configmap the gate flow's runbook reads.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: company-ops-k8s-mcp-dev-reader
+  namespace: buildmyhouse-dev
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["buildmyhouse-dev-deploy-state"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: company-ops-k8s-mcp-dev-reader
+  namespace: buildmyhouse-dev
+subjects:
+  - kind: ServiceAccount
+    name: company-ops
+    namespace: company-ops
+roleRef:
+  kind: Role
+  name: company-ops-k8s-mcp-dev-reader
   apiGroup: rbac.authorization.k8s.io

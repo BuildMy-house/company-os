@@ -1,0 +1,102 @@
+# Dedicated ServiceAccount + RBAC for CO-DEV3's dev-deploy-poller
+# (scripts/dev-deploy-poller.js, run on schedule by
+# k8s/buildmyhouse-dev-deployer-cronjob.yaml). Separate from the
+# "builder-manager" SA in k8s/builder-rbac.yaml because this workload needs
+# permissions in TWO namespaces (company-ops, to drive the same ephemeral
+# BuildKit Job path builder-manager-mcp.js uses; buildmyhouse-dev, to roll
+# out the deployed images and track last-deployed state) and is not the
+# general-purpose engineering/Hermes builder.
+#
+# company-ops grant mirrors builder-manager-jobs exactly (same least-
+# privilege rationale documented in k8s/builder-rbac.yaml: create/get/list/
+# watch/delete on batch Jobs, get/list/watch on pods/pods-log, create/delete
+# (never get/list/watch/patch) on Secrets for the ephemeral per-build
+# git-token Secret).
+#
+# buildmyhouse-dev grant is scoped to exactly the 3 Deployments this poller
+# manages (get+patch, by resourceNames) plus the one ConfigMap it uses to
+# track the last-deployed SHA (get/update restricted by resourceNames;
+# create cannot be resourceNames-restricted since the object doesn't exist
+# yet, but this Role has no other access to any other ConfigMap once it
+# exists). No access to Secrets, Pods, or anything else in buildmyhouse-dev.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: buildmyhouse-dev-deployer
+  namespace: company-ops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: buildmyhouse-dev-deployer-builder
+  namespace: company-ops
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: buildmyhouse-dev-deployer-builder
+  namespace: company-ops
+subjects:
+  - kind: ServiceAccount
+    name: buildmyhouse-dev-deployer
+    namespace: company-ops
+roleRef:
+  kind: Role
+  name: buildmyhouse-dev-deployer-builder
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: buildmyhouse-dev-deployer-rollout
+  namespace: buildmyhouse-dev
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["buildmyhouse-dev-app", "buildmyhouse-dev-mcp", "buildmyhouse-dev-luxcore"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["buildmyhouse-dev-deploy-state"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: buildmyhouse-dev-deployer-rollout
+  namespace: buildmyhouse-dev
+subjects:
+  - kind: ServiceAccount
+    name: buildmyhouse-dev-deployer
+    namespace: company-ops
+roleRef:
+  kind: Role
+  name: buildmyhouse-dev-deployer-rollout
+  apiGroup: rbac.authorization.k8s.io
+---
+# Legacy-style bound Secret token — same pattern as k8s/builder-rbac.yaml's
+# builder-manager-token, mounted into the CronJob pod at
+# /var/run/secrets/buildmyhouse-dev-deployer/token (set via
+# BUILDER_MANAGER_TOKEN_PATH, which k8sRequest in builder-manager-mcp.js
+# already reads from the environment).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: buildmyhouse-dev-deployer-token
+  namespace: company-ops
+  annotations:
+    kubernetes.io/service-account.name: buildmyhouse-dev-deployer
+type: kubernetes.io/service-account-token

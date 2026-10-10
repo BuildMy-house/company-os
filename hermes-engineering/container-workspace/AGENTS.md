@@ -169,3 +169,19 @@ memories are isolated from other pools. Never store credentials or secrets
 in memory. Shared wake-up guidance belongs in the tracked
 `HIVE_WORKER_MEMORY.md`; generated `/workspace` copies are overwritten at
 container startup.
+
+## Dev-cluster gate flow (buildmyhouse-dev)
+
+`buildmyhouse-dev` is a disposable, auto-deployed copy of the `app` stack
+used for pre-merge testing and adversarial UI testing against `app`'s
+`dev` branch. Full runbook: `company-os-checkout/docs/DEV-CLUSTER-GATE.md`
+(poller verdicts, manual on-demand rebuild, testing via `browser-adversary`).
+
+Use the `kubernetes` MCP tool (present whenever the in-cluster
+ServiceAccount token is mounted — see
+`scripts/generate-agent-mcp-config.js`) for every step in that runbook
+instead of a `kubectl` binary, which this image does not include. It is
+Claude-manager only (not advertised to OpenCode workers), matches
+Hermes's own `k8s_deployment` tool, and is read/limited-write per
+`k8s/rbac.yaml`: no Secrets access anywhere, no delete on
+batch/cronjobs, no write access at all in `buildmyhouse-dev`.
