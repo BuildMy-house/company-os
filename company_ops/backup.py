@@ -1,7 +1,9 @@
 """Scheduled pg_dump backup of company+observer schemas to Cloudflare R2.
 
-Pure module — no dependency on Ledger/ObserverWriter. Run directly via
-``python -m company_ops.backup`` or import ``run_backup`` from scripts/cron.
+Also archives the hermes-data PVC contents (Hermes state/memory/sessions)
+as a tar.gz under a distinct top-level prefix. Run directly via
+``python -m company_ops.backup`` (postgres) or with ``--hermes-data DIR``
+(hermes-data archive), or import ``run_backup``/``run_hermes_backup``.
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import gzip
 import os
 import subprocess
+import tarfile
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +20,9 @@ import boto3
 
 SCHEMAS = ["company", "observer"]
 BACKUP_PREFIX = "backups/"
+# Must stay top-level: enforce_retention on "backups/" lists all nested keys,
+# so a nested prefix would get deleted by the postgres retention pass.
+HERMES_BACKUP_PREFIX = "hermes-data-backups/"
 
 
 def run_pg_dump(dsn: str, dump_path: str, schemas: list[str] = SCHEMAS) -> None:
@@ -65,6 +71,18 @@ def compress_file(path: str) -> str:
             dst.write(chunk)
     os.remove(path)
     return gz_path
+
+
+def archive_dir(data_dir: str, archive_path: str) -> str:
+    """Create a gzipped tar of data_dir at archive_path (stdlib tarfile).
+
+    Returns the archive path. Relative entry names (no leading '/') so a
+    restore unpacks into the target directory directly.
+    """
+    with tarfile.open(archive_path, "w:gz") as tar:
+        for entry in sorted(Path(data_dir).iterdir()):
+            tar.add(entry, arcname=entry.name)
+    return archive_path
 
 
 def upload_to_r2(
@@ -171,7 +189,65 @@ def run_backup(
     }
 
 
+def run_hermes_backup(
+    data_dir: str,
+    r2_endpoint: str | None = None,
+    r2_bucket: str | None = None,
+    r2_access_key_id: str | None = None,
+    r2_secret_access_key: str | None = None,
+    keep_last: int | None = None,
+    work_dir: str | None = None,
+) -> dict:
+    """Archive data_dir as tar.gz and upload under HERMES_BACKUP_PREFIX.
+
+    Same env vars / keep_last default as run_backup (retention policy
+    matches the postgres backups: R2_BACKUP_KEEP_LAST, default 7).
+    """
+    r2_endpoint = _require(r2_endpoint, "R2_ENDPOINT")
+    r2_bucket = _require(r2_bucket, "R2_BUCKET")
+    access_key_id = _require(r2_access_key_id, "R2_ACCESS_KEY_ID")
+    secret_access_key = _require(r2_secret_access_key, "R2_SECRET_ACCESS_KEY")
+    if keep_last is None:
+        keep_last = int(os.environ.get("R2_BACKUP_KEEP_LAST", "7"))
+    if keep_last < 0:
+        raise ValueError("keep_last must be >= 0")
+    if not Path(data_dir).is_dir():
+        raise ValueError(f"hermes data dir does not exist: {data_dir}")
+
+    work_dir_path = Path(work_dir or tempfile.gettempdir())
+    work_dir_path.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"hermes-data-{stamp}.tar.gz"
+    archive_path = work_dir_path / filename
+
+    archive_dir(data_dir, str(archive_path))
+    key = f"{HERMES_BACKUP_PREFIX}{filename}"
+    upload_to_r2(str(archive_path), r2_bucket, key, r2_endpoint, access_key_id, secret_access_key)
+    deleted_keys = enforce_retention(
+        r2_bucket, HERMES_BACKUP_PREFIX, keep_last, r2_endpoint, access_key_id, secret_access_key
+    )
+
+    bytes_uploaded = os.path.getsize(archive_path)
+    os.remove(archive_path)
+    return {
+        "uploaded_key": key,
+        "deleted_keys": deleted_keys,
+        "bytes_uploaded": bytes_uploaded,
+    }
+
+
 if __name__ == "__main__":
+    import argparse
     import json
 
-    print(json.dumps(run_backup(), default=str))
+    parser = argparse.ArgumentParser(description="Back up postgres schemas or hermes-data to R2.")
+    parser.add_argument(
+        "--hermes-data",
+        metavar="DIR",
+        help="archive this directory instead of running the postgres dump",
+    )
+    args = parser.parse_args()
+    if args.hermes_data:
+        print(json.dumps(run_hermes_backup(args.hermes_data), default=str))
+    else:
+        print(json.dumps(run_backup(), default=str))
