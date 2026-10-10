@@ -155,7 +155,7 @@ docker images --digests | grep localhost:30500   # record new digests
 ```
 
 The manifest image pins (`k8s/*.yaml`, e.g. `company-os@sha256:3362faca…`)
-reference old digests. After rebuilding, update the pins to the new digests in
+reference old digests (company-ops.yaml, postgres-backup.yaml and hermes-data-backup.yaml must move together; see docs/IMAGES.md). After rebuilding, update the pins to the new digests in
 one commit on prod, then re-apply: `kubectl apply -k k8s/`. (Alternative —
 restore the old registry PVC — is deliberately not used: images are
 reproducible from git and the 20 Gi PVC transfer is not worth it.)
