@@ -183,6 +183,11 @@ mcp_servers:
   # ServiceAccount token (RBAC: company-ops/k8s/rbac.yaml — read-only on
   # pods/events, patch-only on deployments/replicasets, no delete, no
   # secrets). --disable-destructive is defense in depth on top of that RBAC.
+  # RBAC was extended 2026-10 (k8s/rbac.yaml) with batch/jobs+cronjobs in
+  # company-ops and read-only access to buildmyhouse-dev, specifically so
+  # this tool can drive docs/DEV-CLUSTER-GATE.md's runbook (poller
+  # status/logs, manual rebuild trigger, buildmyhouse-dev pod/configmap
+  # reads). Still no Secrets access anywhere, still --disable-destructive.
   k8s_deployment:
     command: "npx"
     args: ["-y", "kubernetes-mcp-server@latest", "--disable-destructive", "--log-file", "stderr", "--cluster-provider", "in-cluster"]

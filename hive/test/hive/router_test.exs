@@ -439,6 +439,83 @@ defmodule Hive.RouterTest do
     assert task["status"]["state"] == "claimed"
   end
 
+  test "worker feed omits work that the same worker has already bid on" do
+    declined_task = create_task!("declined-for-one")
+    other_task = create_task!("still-open-for-one")
+
+    decline =
+      post_json("/work/#{declined_task}/bids", %{
+        "agent_id" => "worker-one",
+        "interested" => false,
+        "confidence" => 0,
+        "approach" => "Declined: outside my capabilities",
+        "estimated_cost" => 0,
+        "expected_benefit" => 0,
+        "risk" => "outside my capabilities"
+      })
+
+    assert decline.status == 201
+
+    assert {:ok, worker_one} = Hive.Work.available_for("worker-one", 10)
+    worker_one_ids = Enum.map(worker_one, & &1.id)
+    assert other_task in worker_one_ids
+    refute declined_task in worker_one_ids
+
+    assert {:ok, worker_two} = Hive.Work.available_for("worker-two", 10)
+    worker_two_ids = Enum.map(worker_two, & &1.id)
+    assert declined_task in worker_two_ids
+    assert other_task in worker_two_ids
+
+    assert {:ok, all_available} = Hive.Work.available(10)
+    all_ids = Enum.map(all_available, & &1.id)
+
+    assert declined_task in all_ids
+    assert other_task in all_ids
+  end
+
+  test "manager prompt wakes idle eligible subscribers without bidding or allocating" do
+    task_id = create_task!("prompt-existing-work")
+    :ok = Hive.Work.subscribe(self(), "worker-declined")
+    :ok = Hive.Work.subscribe(self(), "worker-idle")
+    :ok = Hive.Work.subscribe(self(), "manager")
+
+    decline =
+      post_json("/work/#{task_id}/bids", %{
+        "agent_id" => "worker-declined",
+        "interested" => false,
+        "confidence" => 0,
+        "approach" => "Declined: outside my capabilities",
+        "estimated_cost" => 0,
+        "expected_benefit" => 0,
+        "risk" => "outside my capabilities"
+      })
+
+    assert decline.status == 201
+
+    response =
+      post_json("/work/#{task_id}/prompt", %{"requester_id" => "manager"})
+
+    assert response.status == 200
+    prompt = Jason.decode!(response.resp_body)
+    assert prompt["prompted_agent_ids"] == ["worker-idle"]
+    assert prompt["already_bid_agent_ids"] == ["worker-declined"]
+    assert prompt["task_id"] == task_id
+    assert_receive {:hive_work_prompt, ^task_id}
+    refute_receive {:hive_work_available, _}
+
+    assert {:ok, nil} = Hive.Work.available_for_work(task_id, "worker-declined")
+    assert {:ok, %{id: ^task_id}} = Hive.Work.available_for_work(task_id, "worker-idle")
+
+    task =
+      conn(:get, "/tasks/#{task_id}")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert task["status"]["state"] == "available"
+    :ok = Hive.Work.unsubscribe(self())
+  end
+
   test "prefers the most recent bid when scores tie" do
     task_id = create_task!("tie-break")
 

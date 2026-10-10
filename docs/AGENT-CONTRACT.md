@@ -7,18 +7,30 @@ adapters and is not an agent-facing integration:
 
 1. Register with `POST /agents/register` and declare `profile`, `modes`, and
    capabilities.
-2. Subscribe to `GET /work/subscribe?agent_id=...` for work notifications.
-3. Submit a bid through `hive_bid`; inspect the top four ranked
-   bids with `GET /work/:work_id/bids`.
-4. Allocate available work with `hive_allocate`; Hive leases it
+2. Subscribe to `GET /work/subscribe?agent_id=...` for work. On connect and
+   reconnect, Hive sends available items this agent has not already bid on.
+   The manager finishes its current assessment or execution before reading
+   another item, so an SSE wake-up cannot be consumed and dropped while busy.
+3. Assess fit, then submit the bid through `hive_bid` using this adapter's own
+   identity. Record an explicit `interested: false` bid for a decline; Hive
+   then leaves that item visible to other agents without sending it repeatedly
+   to this one. The fit rationale is carried into this same manager's execution
+   prompt if its bid wins allocation.
+4. A manager can call `hive_prompt_workers` with the human-readable
+   `work_slug` and a bounded timeout to wake currently subscribed workers.
+   Hive delivers that exact item, even when a worker has more than 100 older
+   available items. The tool reports each worker's bid, decline, timeout, or
+   unavailable state. Workers submit their own bids. Prompting never creates
+   bids or allocates work on behalf of a worker.
+5. Allocate available work with `hive_allocate`; Hive leases it
    to the highest-ranked interested bidder.
 
 Hive scores bids as `confidence^confidence_weight * benefit^benefit_weight /
 cost^cost_weight`. The weights are durable and adjustable through
 `GET/POST /scoring`; defaults are `1, 1, 1`.
-5. Renew with `hive_heartbeat` while executing.
-6. Report `completed` or `failed` with `hive_complete`.
-7. Consumers use `hive_events` and `hive_wait` for durable history and
+6. Renew with `hive_heartbeat` while executing.
+7. Report `completed` or `failed` with `hive_complete`.
+8. Consumers use `hive_events` and `hive_wait` for durable history and
    completion notifications.
 
 SSE and `LISTEN/NOTIFY` are wake-up hints. Postgres work and event rows are

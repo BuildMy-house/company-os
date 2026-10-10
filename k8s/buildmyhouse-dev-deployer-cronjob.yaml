@@ -1,0 +1,94 @@
+# CO-DEV3: polls BuildMy-house/app's `dev` branch and auto-deploys new
+# commits into buildmyhouse-dev. See scripts/dev-deploy-poller.js for the
+# full logic (NOOP/PASS/FAIL verdicts) and k8s/buildmyhouse-dev-deployer-rbac.yaml
+# for its ServiceAccount/RBAC. Pattern-matched on k8s/dns-healthcheck.yaml's
+# CronJob structure.
+#
+# This cluster has no inbound webhook reachability, so GitHub polling
+# (every 3 minutes) is the trigger, not a push event.
+#
+# Image choice, documented: runs on the stock `node:22-bookworm-slim` image
+# (the same base Dockerfile.engineering uses) rather than the built
+# company-os-engineering image, because the 3 scripts this CronJob needs
+# (builder-manager-mcp.js, github-app-token.js, dev-deploy-poller.js) are
+# all zero-dependency (node builtins only — no npm install step) and are
+# mounted from a ConfigMap instead of requiring an image rebuild just to
+# pick up this one new file. This keeps CO-DEV3 deployable without a
+# chicken-and-egg dependency on rebuilding company-os-engineering first.
+#
+# The ConfigMap is NOT committed here (embedding generated file content in
+# a manifest drifts from the real scripts/ source). Regenerate and apply it
+# whenever any of the 3 scripts change:
+#   kubectl create configmap buildmyhouse-dev-deployer-scripts -n company-ops \
+#     --from-file=scripts/builder-manager-mcp.js \
+#     --from-file=scripts/github-app-token.js \
+#     --from-file=scripts/dev-deploy-poller.js \
+#     --dry-run=client -o yaml | kubectl apply -f -
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: buildmyhouse-dev-deployer
+  namespace: company-ops
+spec:
+  schedule: "*/3 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: buildmyhouse-dev-deployer
+          containers:
+            - name: buildmyhouse-dev-deployer
+              image: node:22-bookworm-slim
+              command: ["node", "/app/dev-deploy-poller.js"]
+              env:
+                - name: BUILDER_MANAGER_TOKEN_PATH
+                  value: /var/run/secrets/buildmyhouse-dev-deployer/token
+                - name: BUILDER_SCOPE
+                  value: engineering
+              envFrom:
+                - secretRef:
+                    name: company-ops-secrets
+              volumeMounts:
+                - name: scripts
+                  mountPath: /app
+                  readOnly: true
+                - name: deployer-token
+                  mountPath: /var/run/secrets/buildmyhouse-dev-deployer
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          volumes:
+            - name: scripts
+              configMap:
+                name: buildmyhouse-dev-deployer-scripts
+                defaultMode: 0555
+            - name: deployer-token
+              secret:
+                secretName: buildmyhouse-dev-deployer-token
+---
+# Manual on-demand "rebuild now" path for agents (PLAN.md CO-DEV3's
+# fallback/secondary mechanism): any agent with kubectl access to
+# company-ops can trigger an immediate run without waiting for the next
+# poll, by creating a one-off Job from this CronJob's template:
+#
+#   kubectl create job -n company-ops buildmyhouse-dev-deploy-manual-$(date +%s) \
+#     --from=cronjob/buildmyhouse-dev-deployer
+#
+# This was chosen over adding a new MCP tool because every agent in this
+# workspace already has kubectl/hive access to company-ops (see
+# k8s/hive.yaml, k8s/engineering-opencode.yaml), while extending a second
+# MCP server's surface (companyos-engineering-builder) for a single,
+# rarely-used manual trigger would be more code for no real benefit over
+# the one-liner above, and the CronJob is already the single source of
+# truth for the image/command/RBAC this manual run should use.
