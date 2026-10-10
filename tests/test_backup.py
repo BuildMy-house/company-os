@@ -1,5 +1,6 @@
 import gzip
 import os
+import tarfile
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,31 @@ class CompressFileTests(unittest.TestCase):
             self.assertFalse(os.path.exists(path))
             with gzip.open(gz_path, "rb") as f:
                 self.assertEqual(f.read(), b"CREATE TABLE x ();\n" * 100)
+
+
+class ArchiveDirTests(unittest.TestCase):
+    def test_archives_dir_contents_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = os.path.join(tmp, "data")
+            os.makedirs(os.path.join(data_dir, "sessions"))
+            with open(os.path.join(data_dir, "memory.json"), "w") as f:
+                f.write('{"key": "value"}')
+            with open(os.path.join(data_dir, "sessions", "s1.json"), "w") as f:
+                f.write("{}")
+
+            archive_path = os.path.join(tmp, "hermes-data.tar.gz")
+            backup.archive_dir(data_dir, archive_path)
+
+            with tarfile.open(archive_path, "r:gz") as tar:
+                names = sorted(tar.getnames())
+            self.assertEqual(names, ["memory.json", "sessions", "sessions/s1.json"])
+
+            extract_dir = os.path.join(tmp, "restored")
+            os.makedirs(extract_dir)
+            with tarfile.open(archive_path, "r:gz") as tar:
+                tar.extractall(extract_dir)
+            with open(os.path.join(extract_dir, "memory.json")) as f:
+                self.assertEqual(f.read(), '{"key": "value"}')
 
 
 class UploadToR2Tests(unittest.TestCase):
@@ -166,6 +192,59 @@ class RunBackupTests(unittest.TestCase):
         retention.assert_called_once_with(
             "homely-company", "backups/", 7,
             "https://example.r2.cloudflarestorage.com", "key-id", "secret",
+        )
+
+
+class RunHermesBackupTests(unittest.TestCase):
+    def _env_without(self, key):
+        return {k: v for k, v in _REQUIRED_ENV.items() if k != key}
+
+    def test_raises_value_error_when_r2_endpoint_missing(self):
+        with tempfile.TemporaryDirectory() as data_dir, \
+             mock.patch.dict(os.environ, self._env_without("R2_ENDPOINT"), clear=True), \
+             mock.patch.object(backup, "archive_dir"), \
+             mock.patch.object(backup, "upload_to_r2"), \
+             mock.patch.object(backup, "enforce_retention", return_value=[]):
+            with self.assertRaises(ValueError) as ctx:
+                backup.run_hermes_backup(data_dir)
+        self.assertIn("R2_ENDPOINT", str(ctx.exception))
+
+    def test_raises_value_error_when_data_dir_missing(self):
+        with mock.patch.dict(os.environ, _REQUIRED_ENV, clear=True):
+            with self.assertRaises(ValueError) as ctx:
+                backup.run_hermes_backup("/nonexistent/hermes-data")
+        self.assertIn("hermes data dir", str(ctx.exception))
+
+    def test_success_uploads_under_hermes_prefix(self):
+        with tempfile.TemporaryDirectory() as data_dir, \
+             tempfile.TemporaryDirectory() as work_dir:
+            with mock.patch.dict(os.environ, _REQUIRED_ENV, clear=True), \
+                 mock.patch("company_ops.backup.archive_dir") as archive, \
+                 mock.patch("company_ops.backup.upload_to_r2") as upload, \
+                 mock.patch("company_ops.backup.enforce_retention",
+                            return_value=["hermes-data-backups/old.tar.gz"]) as retention, \
+                 mock.patch("company_ops.backup.os.path.getsize",
+                            return_value=4321), \
+                 mock.patch("company_ops.backup.os.remove") as remove:
+                # A real file so getsize/remove see something plausible.
+                summary = backup.run_hermes_backup(
+                    data_dir, work_dir=work_dir, keep_last=5
+                )
+
+        archive.assert_called_once()
+        upload.assert_called_once()
+        self.assertEqual(upload.call_args[0][2].startswith(
+            backup.HERMES_BACKUP_PREFIX), True)
+        retention.assert_called_once_with(
+            "homely-company", "hermes-data-backups/", 5,
+            "https://example.r2.cloudflarestorage.com", "key-id", "secret",
+        )
+        remove.assert_called_once()
+        self.assertEqual(summary["deleted_keys"], ["hermes-data-backups/old.tar.gz"])
+        self.assertEqual(summary["bytes_uploaded"], 4321)
+        self.assertRegex(
+            summary["uploaded_key"],
+            r"^hermes-data-backups/hermes-data-\d{8}-\d{6}\.tar\.gz$",
         )
 
 
