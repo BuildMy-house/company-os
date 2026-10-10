@@ -10,7 +10,9 @@
  * built-in fetch only.
  *
  * Usage:
- *   node fetch-infisical-secrets.js > secrets.env
+ *   node fetch-infisical-secrets.js > secrets.env        (dotenv lines)
+ *   node fetch-infisical-secrets.js --json > secrets.json (JSON array of
+ *     {secretKey, secretValue}, for scripts/bootstrap-secrets.sh)
  *
  * Required environment variables:
  *   INFISICAL_HOST_URL                    e.g. https://eu.infisical.com
@@ -28,6 +30,7 @@ const CLIENT_SECRET = process.env.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET;
 const PROJECT_ID = process.env.INFISICAL_PROJECT_ID;
 const ENVIRONMENT = process.env.INFISICAL_ENV || 'dev';
 const SECRET_PATH = process.env.INFISICAL_SECRET_PATH || '/';
+const JSON_OUT = process.argv.includes('--json');
 
 function dotenvEscape(value) {
   // Wrap in double quotes and escape embedded quotes/backslashes/newlines so
@@ -80,8 +83,12 @@ async function main() {
   try {
     const accessToken = await login();
     const secrets = await listSecrets(accessToken);
-    for (const secret of secrets) {
-      process.stdout.write(`${secret.secretKey}=${dotenvEscape(secret.secretValue)}\n`);
+    if (JSON_OUT) {
+      process.stdout.write(JSON.stringify(secrets.map(({ secretKey, secretValue }) => ({ secretKey, secretValue })), null, 2));
+    } else {
+      for (const secret of secrets) {
+        process.stdout.write(`${secret.secretKey}=${dotenvEscape(secret.secretValue)}\n`);
+      }
     }
     console.error(`[fetch-infisical-secrets] OK: fetched ${secrets.length} secret(s) from ${ENVIRONMENT}${SECRET_PATH}`);
   } catch (err) {
