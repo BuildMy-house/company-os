@@ -57,6 +57,10 @@ spec:
               value: builder
             - name: AGENT_CAPABILITIES
               value: execute,review
+            - name: AGENT_TIER
+              value: cheap
+            - name: AGENT_COST_FACTOR
+              value: "0.05"
             - name: RUNNER_AGENT
               value: opencode
             - name: RUNNER_MODEL

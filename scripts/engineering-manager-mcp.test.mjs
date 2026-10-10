@@ -13,6 +13,9 @@ import {
   handleBidPrompt,
   promptWorkers,
   trackProcess,
+  tierAffinityMultiplier,
+  taskTierOf,
+  normalizeTier,
 } from "./engineering-manager-mcp.js";
 
 // Checks execute at top level when this file is loaded, so `node --test`
@@ -495,6 +498,83 @@ check("telemetry correlation: started emit spreads context and work_received car
   const source = readFileSync(new URL("./engineering-manager-mcp.js", import.meta.url), "utf8");
   assert.match(source, /state: "started", \.\.\.context \}/);
   assert.match(source, /state: "work_received", task_id: candidate\?\.id/);
+});
+
+
+check("tier: unknown or missing tiers normalize to standard", () => {
+  assert.equal(normalizeTier(undefined), "standard");
+  assert.equal(normalizeTier("GPU"), "standard");
+  assert.equal(normalizeTier(" Cheap "), "cheap");
+  assert.equal(taskTierOf({ payload: { tier: "power" } }), "power");
+  assert.equal(taskTierOf({ payload: {} }), "standard");
+});
+
+check("tier: affinity multiplier prefers the matching pool and is neutral for standard tasks", () => {
+  assert.equal(tierAffinityMultiplier("cheap", "cheap"), 1);
+  assert.equal(tierAffinityMultiplier("cheap", "power"), 4);
+  assert.equal(tierAffinityMultiplier("power", "cheap"), 4);
+  assert.equal(tierAffinityMultiplier("power", "standard"), 2);
+  assert.equal(tierAffinityMultiplier("standard", "cheap"), 1);
+  assert.equal(tierAffinityMultiplier(undefined, "power"), 1);
+});
+
+check("tier: bid cost carries the pool's true cost factor and the tier affinity", () => {
+  const cheapOnCheap = evaluateFit({ assessment: validAssessment, taskTier: "cheap", poolTier: "cheap", costFactor: 0.1 });
+  const cheapOnPower = evaluateFit({ assessment: validAssessment, taskTier: "cheap", poolTier: "power", costFactor: 1 });
+  assert.ok(Math.abs(cheapOnCheap.bid.estimated_cost - 0.15) < 1e-9);
+  assert.ok(Math.abs(cheapOnPower.bid.estimated_cost - 6) < 1e-9);
+  assert.equal(cheapOnCheap.bid.confidence, validAssessment.confidence);
+});
+
+check("tier: an unqualified assessment is still skipped regardless of tier", () => {
+  const decision = evaluateFit({ assessment: { ...validAssessment, interested: false }, taskTier: "cheap", poolTier: "cheap", costFactor: 0.1 });
+  assert.equal(decision.skip, true);
+  assert.equal(decision.reason, "not_interested");
+});
+
+check("tier: non-matching pool waits, then skips when the preferred pool already claimed the item", async () => {
+  const hive = fakeHive("other-agent");
+  const waits = [];
+  const hiveCall = async (name, args) => (name === "hive_available_work" ? (hive.calls.push({ name, args }), { work: [] }) : hive.hiveCall(name, args));
+  await runHiveWork({ ...candidate, payload: { ...candidate.payload, tier: "cheap" } }, {
+    ...healthyDeps, hiveCall, poolTier: "power", tierGraceMs: 5, wait: async (ms) => { waits.push(ms); },
+    assessTaskFit: async () => { throw new Error("must not assess"); },
+  });
+  assert.deepEqual(waits, [5]);
+  assert.equal(hive.calls.some((call) => call.name === "hive_bid"), false);
+});
+
+check("tier: non-matching pool still bids (with the affinity penalty) when the item stays unclaimed", async () => {
+  const hive = fakeHive("other-agent");
+  const hiveCall = async (name, args) => (name === "hive_available_work" ? { work: [{ id: "work-1" }] } : hive.hiveCall(name, args));
+  await runHiveWork({ ...candidate, payload: { ...candidate.payload, tier: "cheap" } }, {
+    ...healthyDeps, hiveCall, poolTier: "power", costFactor: 1, tierGraceMs: 5, wait: async () => {},
+    assessTaskFit: async () => validAssessment,
+  });
+  const bid = hive.calls.find((call) => call.name === "hive_bid");
+  assert.ok(bid, "unqualified-pool exclusion must not apply; a fit pool still bids");
+  assert.ok(Math.abs(bid.args.estimated_cost - 6) < 1e-9);
+});
+
+check("tier: matching pool does not wait and never allocates over a better-ranked bidder", async () => {
+  const calls = [];
+  const hiveCall = async (name, args) => {
+    calls.push(name);
+    if (name === "hive_work_bids") return { bids: [{ agent_id: "someone-better", interested: true }] };
+    return { ok: true };
+  };
+  await runHiveWork({ ...candidate, payload: { ...candidate.payload, tier: "cheap" } }, {
+    ...healthyDeps, hiveCall, poolTier: "cheap", tierGraceMs: 5, wait: async () => { throw new Error("matching pool must not wait"); },
+    assessTaskFit: async () => validAssessment,
+  });
+  assert.ok(calls.includes("hive_bid"));
+  assert.equal(calls.includes("hive_allocate"), false);
+});
+
+check("tier: fit prompt tells the assessor tiering is preference only", () => {
+  const prompt = buildFitPrompt({ prompt: "x", capabilities: [], health: {}, load: {}, tier: { task: "cheap", pool: "power" } });
+  assert.match(prompt, /task tier=cheap, this pool's tier=power/);
+  assert.match(prompt, /never a reason to claim fit you lack/);
 });
 
 const failures = [];

@@ -4,6 +4,7 @@ defmodule Hive.Work do
   use GenServer
 
   @channel "hive_work"
+  @tiers ~w(cheap standard power)
   @default_scoring %{"confidence_weight" => 1.0, "benefit_weight" => 1.0, "cost_weight" => 1.0}
 
   def start_link(_), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
@@ -1237,7 +1238,14 @@ defmodule Hive.Work do
     slug = metadata["slug"] || slugify(title)
 
     if is_binary(title) and is_binary(slug) and Regex.match?(~r/^[a-z0-9]+(?:-[a-z0-9]+)*$/, slug) do
-      {:ok, %{"parts" => parts, "title" => String.trim(title), "slug" => slug}}
+      payload = %{"parts" => parts, "title" => String.trim(title), "slug" => slug}
+
+      # Worker tiering (hive/README.md "Worker tiers"): only a known tier is stored;
+      # absent/unknown means "standard" to workers, so existing queued items are unaffected.
+      case metadata["tier"] do
+        tier when tier in @tiers -> {:ok, Map.put(payload, "tier", tier)}
+        _ -> {:ok, payload}
+      end
     else
       {:error, :invalid_slug}
     end

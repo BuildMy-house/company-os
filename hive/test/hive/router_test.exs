@@ -66,6 +66,38 @@ defmodule Hive.RouterTest do
     assert by_slug["slug"] == "test"
   end
 
+  test "stores a known worker tier on the work payload and ignores unknown tiers" do
+    submit = fn slug, tier ->
+      body =
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "message/send",
+          "params" => %{
+            "message" => %{"parts" => [%{"text" => slug}]},
+            "metadata" => %{"slug" => slug, "tier" => tier}
+          }
+        })
+
+      conn(:post, "/", body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+    end
+
+    submit.("tier-cheap-item", "cheap")
+    submit.("tier-bogus-item", "gpu")
+
+    {:ok, work} = Hive.Work.available(100)
+    by_slug =
+      Map.new(work, fn item ->
+        payload = item[:payload] || item["payload"]
+        {payload["slug"], payload}
+      end)
+
+    assert by_slug["tier-cheap-item"]["tier"] == "cheap"
+    refute Map.has_key?(by_slug["tier-bogus-item"], "tier")
+  end
+
   test "rejects duplicate and invalid human-readable slugs" do
     submit = fn params ->
       conn(

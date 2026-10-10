@@ -57,6 +57,10 @@ spec:
               value: generalist
             - name: AGENT_CAPABILITIES
               value: execute,review
+            - name: AGENT_TIER
+              value: cheap
+            - name: AGENT_COST_FACTOR
+              value: "0.1"
             - name: RUNNER_AGENT
               value: opencode
             - name: RUNNER_MODEL

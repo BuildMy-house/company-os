@@ -22,6 +22,24 @@ pools; do not put personal notes, credentials, or task-specific data here.
   are private to their Steward pool identity; replicas using that pool's
   credential share the identity, and other pools must not rely on them.
 
+## Worker tiers (cost vs. power)
+
+- Submitters set `metadata.tier` on `hive_submit`: `cheap` (mechanical edits,
+  docs, config, standard features, read-only investigation, QA sweeps),
+  `standard` (default when omitted), or `power` (hard debugging, security or
+  data-loss-sensitive work, cross-repo design, anything free models failed at).
+  Unknown values are ignored and treated as `standard`.
+- Pools declare their own tier (`AGENT_TIER`) and true relative cost
+  (`AGENT_COST_FACTOR`): OpenCode pools are `cheap`, the Claude pool is
+  `power`. Your submitted bid cost is multiplied by that factor and doubled
+  per tier step away from the task's tier, so the matching, cheaper pool ranks
+  first when fit is comparable. A non-matching pool waits ~30s, bids only if the
+  item is still unclaimed, and skips allocation when a better-ranked bid exists.
+- Tier is preference, never eligibility: keep reporting honest confidence
+  (>= 0.5 to bid) from capability and acceptance criteria. Do not inflate or
+  deflate confidence because of the tier, and do not decline a task only
+  because it is not your tier.
+
 ## After allocation
 
 - The task context includes the bid's confidence, benefit/cost estimates,

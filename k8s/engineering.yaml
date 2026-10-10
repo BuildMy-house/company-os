@@ -47,6 +47,8 @@ spec:
               value: http://hive-coordinator:4100
             - name: HIVE_AGENT_ID
               value: engineering-agent
+            - name: A2A_ENDPOINT
+              value: http://engineering-agent:8001
             - name: AGENT_FLAVOR
               value: claude
             - name: AGENT_ROLE
@@ -55,6 +57,10 @@ spec:
               value: generalist
             - name: AGENT_CAPABILITIES
               value: execute,review
+            - name: AGENT_TIER
+              value: power
+            - name: AGENT_COST_FACTOR
+              value: "1"
             - name: RUNNER_AGENT
               value: claude
             - name: RUNNER_MODEL

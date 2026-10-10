@@ -27,7 +27,15 @@ async function registerWithHive() {
         body: JSON.stringify({
           id: consumerId,
           endpoint: process.env.A2A_ENDPOINT || "http://hermes-gateway:8642",
-          capabilities: { profile: process.env.AGENT_PROFILE || "communicator", modes: ["observe", "propose", "bid", "execute", "review"] },
+          capabilities: {
+            profile: process.env.AGENT_PROFILE || "communicator",
+            modes: ["observe", "propose", "bid", "execute", "review"],
+            // Tiering (hive/README.md "Worker tiers"): declared so the pool shows up in
+            // hive_agents with its real flavor/tier/cost, not just the generic profile.
+            flavor: process.env.AGENT_FLAVOR || "hermes",
+            tier: ["cheap", "standard", "power"].includes(process.env.AGENT_TIER) ? process.env.AGENT_TIER : undefined,
+            cost_factor: Number(process.env.AGENT_COST_FACTOR) > 0 ? Number(process.env.AGENT_COST_FACTOR) : undefined,
+          },
         }),
       });
       console.error(`[hive-member] registered with Hive after ${attempt} attempt${attempt === 1 ? "" : "s"}`);
