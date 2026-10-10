@@ -41,8 +41,6 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | AXIOM_DASHBOARD_TOKEN | company-ops-secrets | Axiom dashboard sharing | yes | `/` |
 | AXIOM_DATASET | local .env only (live Secret has orphaned copy) | axiom_client.py, engineering-manager-mcp.js, opencode-plugins/axiom-usage.js | **NO — gap** | `/hermes` |
 | AXIOM_ENDPOINT | local .env only | axiom_client.py | **NO — gap** | `/hermes` |
-| AXIOM_CEO_DATASET | local .env only | nothing (no consumers found) | no — dead key, do not migrate | drop it |
-| DEBUG, LOG_LEVEL | local .env only | nothing in code (config knobs) | no — optional | `/hermes` if ever consumed |
 | BUILDMYHOUSE_APP_URL, BUILDMYHOUSE_MCP_URL, BUILDMYHOUSE_MCP_BEARER_TOKEN, BUILDMYHOUSE_TEST_EMAIL, BUILDMYHOUSE_TEST_PASSWORD (= certs/buildmyhouse-test-account.env) | company-ops-secrets | buildmy.house MCP test account (AGENTS.md contract) | yes | `/` |
 | R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_API_TOKEN | company-ops-secrets | pg-backup.sh, git-backup.sh (R2 backups) | yes | `/infra` |
 | CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN | company-ops-secrets | Cloudflare/DNS ops | yes | `/infra` |
@@ -68,8 +66,7 @@ Until added, `AXIOM_DATASET`/`AXIOM_ENDPOINT` reach pods only via the legacy
 local `.env` path (scripts/k3s-local-up.sh, not usable on a new host), and
 `PM_DATABASE_URL` survives in the live Secret only as drift from an older sync.
 
-Do NOT migrate: `AXIOM_CEO_DATASET` (dead), `DEBUG`/`LOG_LEVEL` (unconsumed
-config). Optional additions if those features are used:
+Optional additions if those features are used:
 `DISCORD_ALLOWED_USERS`, `DISCORD_HOME_CHANNEL` (forwarded by entrypoint.sh
 when set; currently empty everywhere). Note: entrypoint.sh also forwards
 `STEWARD_MCP_URL`, but the real key is `STEWARD_URL` — entrypoint-side naming

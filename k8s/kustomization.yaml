@@ -15,6 +15,7 @@ resources:
   - engineering-opencode.yaml
   - engineering-opencode-direct.yaml
   - hive.yaml
+  - pm-agent.yaml
   - postgres-backup.yaml
   - hermes-data-backup.yaml
   - dns-healthcheck.yaml

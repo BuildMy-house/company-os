@@ -139,8 +139,7 @@ helm install operator-namespaced infisical-helm-charts/secrets-operator \
 kubectl apply -f k8s/infisical-sync.yaml
 kubectl get secret company-ops-secrets -n company-ops -o json | jq -r '.data|keys[]' | wc -l   # expect 44
 # 5. Core manifests
-kubectl apply -k k8s/          # waits not required; pods will CrashLoop until secrets/images exist — expected
-kubectl apply -f k8s/pm-agent.yaml
+kubectl apply -k k8s/          # includes pm-agent; waits not required; pods will CrashLoop until secrets/images exist — expected (pm-agent also needs PM_DATABASE_URL, see NAHAR-TODO.md Group L)
 ```
 
 ### Step 4 — Build and push images into the new in-cluster registry
@@ -380,14 +379,12 @@ deployment's `envFrom` depends on. Install order on the new host is Step 3
 cutover: raise its 500m CPU limit, or pass
 `--set leaderElect=false` for a guaranteed-single-node install.
 
-## 6. Engineering-agent replica drift
+## 6. Engineering-agent replicas
 
-Live `engineering-agent` runs **3 replicas**; `k8s/engineering.yaml` declares
-1. The drift was created live (`kubectl scale`) and will be silently reset to
-1 by `kubectl apply -k k8s/` on the new host. **Decision (documented, per
-ticket authority):** after cutover verification, decide deliberately — either
-bump `replicas: 3` in the manifest (commit it, no more drift) or accept 1.
-This runbook does not restore the live-3 state silently.
+Decision: the manifest value is authoritative. `k8s/engineering.yaml` declares
+`replicas: 1`, and `kubectl apply -k k8s/` on the new host yields 1 replica
+regardless of any live `kubectl scale` on the old cluster. To run more, change
+`replicas:` in the manifest and commit it.
 
 ## 7. buildmyhouse-dev-deployer CronJob (suspended)
 
