@@ -52,7 +52,7 @@ spec:
             - name: AGENT_FLAVOR
               value: opencode
             - name: AGENT_ROLE
-              value: direct
+              value: manager
             - name: AGENT_PROFILE
               value: builder
             - name: AGENT_CAPABILITIES
