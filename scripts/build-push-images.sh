@@ -50,7 +50,9 @@ run() {
 
 builder=company-os-images
 if [ "$dry_run" != 1 ] && ! docker buildx inspect "$builder" >/dev/null 2>&1; then
-  docker buildx create --name "$builder" >/dev/null
+  # network=host so the builder container can reach a host-published registry
+  # at localhost:30500 (otherwise "localhost" is the builder container itself).
+  docker buildx create --name "$builder" --driver-opt network=host >/dev/null
 fi
 
 # name|image repo|dockerfile|mutable tag referenced by manifests|extra buildx args
