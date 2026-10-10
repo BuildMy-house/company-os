@@ -37,15 +37,17 @@ Upstream images, never built here: `postgres:16-alpine` (postgres.yaml),
 If you change a mutable tag in a manifest, update the matching entry in
 `scripts/build-push-images.sh`'s image table in the same commit.
 
-## Convention for RM3 (`k8s/postgres-backup.yaml`)
+## Digest pins that must move together
 
-postgres-backup.yaml still references `docker.io/library/company-ops-company-ops:latest`
-— a docker-compose-style local-only name that does not exist in the cluster
-registry. RM3 owns that file; when touching it, point it at
-`localhost:30500/company-os@sha256:<digest>` (digest from
-`scripts/build-push-images.sh --only company-os --print-digests`) or at
-minimum `localhost:30500/company-os:latest`. Do not introduce new
-`docker.io/library/…` references anywhere.
+`localhost:30500/company-os@sha256:<digest>` is referenced by three manifests:
+`k8s/company-ops.yaml`, `k8s/postgres-backup.yaml` and
+`k8s/hermes-data-backup.yaml`. The backup CronJobs run `company_ops.backup`
+from the same image, so after any rebuild that changes `company_ops/` (the
+`--hermes-data` mode exists only in images built from this branch or later)
+get the new digest from `scripts/build-push-images.sh --only company-os
+--print-digests` and update all three in the same commit. An older pinned image
+silently ignores `--hermes-data` and would run the Postgres dump instead.
+Do not introduce `docker.io/library/…` references for repo-owned images.
 
 ## Not reproducible from this repo
 

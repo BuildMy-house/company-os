@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Bring up the local k3s company-ops stack from any checkout path.
-# - Secrets are provisioned by scripts/bootstrap-secrets.sh (ticket RM1) —
+# - Secrets are provisioned by scripts/bootstrap-secrets.sh (see docs/SECRETS-INFISICAL.md) —
 #   never from a local .env.
 # - Images are built from this repo and pushed to the in-cluster registry
 #   (localhost:30500) by scripts/build-push-images.sh — no locally pre-built
@@ -31,8 +31,8 @@ if [ -x scripts/bootstrap-secrets.sh ]; then
   scripts/bootstrap-secrets.sh
 else
   echo "ERROR: scripts/bootstrap-secrets.sh not found or not executable." >&2
-  echo "Secrets provisioning belongs to ticket RM1 (Infisical bootstrap)." >&2
-  echo "Run/sync that script first; this stack cannot start without its secrets." >&2
+  echo "Secrets are provisioned from Infisical only; see docs/SECRETS-INFISICAL.md." >&2
+  echo "This stack cannot start without its secrets." >&2
   exit 1
 fi
 

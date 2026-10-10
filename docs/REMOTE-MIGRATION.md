@@ -4,7 +4,7 @@ Move the single-node k3s cluster (host `pop-os`, namespace `company-ops`) to a
 remote machine. Old host stays **scaled to 0, not deleted**, until the new
 host is verified end-to-end.
 
-Companion docs (sibling tickets, planned filenames): `docs/SECRETS-INFISICAL.md`
+Companion docs: `docs/SECRETS-INFISICAL.md`
 + `scripts/bootstrap-secrets.sh` (secret bootstrap), `docs/IMAGES.md` +
 `scripts/build-push-images.sh` (image build/push into the in-cluster registry),
 `docs/BACKUP.md` (Postgres→R2 backups), `docs/RESTORE.md` +
