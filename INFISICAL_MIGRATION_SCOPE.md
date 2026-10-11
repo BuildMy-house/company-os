@@ -68,10 +68,10 @@ adding new secrets.
 
 ## What remains (Nahar actions)
 
-1. **Import the three gap keys** into `Build My house`/dev `/hermes`:
-   `AXIOM_DATASET`, `AXIOM_ENDPOINT`, `PM_DATABASE_URL` (see gap list in
-   docs/SECRETS-INFISICAL.md). Until then a new host cannot serve
-   `PM_DATABASE_URL` from Infisical.
+1. **Import the remaining gap key** into `Build My house`/dev `/hermes`:
+   `PM_DATABASE_URL` (see gap list in docs/SECRETS-INFISICAL.md). Until then
+   a new host cannot serve it from Infisical. (`AXIOM_DATASET` and
+   `AXIOM_ENDPOINT` are already present; `AXIOM_TELEMETRY_DATASET` is optional.)
 2. **Machine identity provisioning** for new hosts (Universal Auth identity
    with read access to both projects).
 3. Rotation/audit runbook is covered by the rotation section of

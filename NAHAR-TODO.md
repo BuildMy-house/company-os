@@ -363,7 +363,7 @@ a different ticket.
 
 ## Group I — Axiom telemetry credentials needed (2026-09-07)
 
-The app-side Axiom telemetry pipeline (`homely/src/telemetry/{config,transport,events,logger,context}.ts`)
+The app-side Axiom telemetry pipeline (`app/src/telemetry/{config,transport,events,logger,context}.ts`)
 and the query-side client (`company_ops/axiom_client.py`, `company-ops telemetry-query`
 CLI verb) were both already fully built before this session — they just have
 no real Axiom account behind them yet, so telemetry silently no-ops (`if
@@ -378,7 +378,7 @@ an Axiom organization ID:
 2. **Query/read token** (read scope) -> `company-ops/.env`'s `AXIOM_TOKEN`
    (used by `company-ops telemetry-query`, which all dispatched coding
    agents should use to check real app telemetry before guessing at root
-   cause on a Homely bug — see `.claude/agents/agent-manager.md` — and by
+   cause on an app bug — see `.claude/agents/agent-manager.md` — and by
    the ingest side of the agent telemetry plugins). The `axiom` MCP server
    (official `https://mcp.axiom.co/mcp`, registered for Claude, Codex,
    OpenCode, and Hermes) uses its own query-only `AXIOM_QUERY_TOKEN` (2026-10-07).
@@ -386,9 +386,11 @@ an Axiom organization ID:
    `x-axiom-org-id` header by the `axiom` MCP server). `AXIOM_URL` is optional and
    defaults to `https://api.axiom.co`.
 
-Both can point at the same dataset (`homely-telemetry` by default, both
-sides already agree on this name) — it's the token *scope* that must differ,
-not necessarily the dataset.
+The app writes to the `buildmy-house-telemetry` dataset and the query client
+reads it via `AXIOM_TELEMETRY_DATASET` (default `buildmy-house-telemetry`).
+Agent usage events go to a separate dataset, `bmh-company`, via `AXIOM_DATASET`.
+See `docs/SECRETS-INFISICAL.md` for which variable drives which. The ingest and
+query tokens must differ in *scope*, not necessarily in dataset.
 
 ## Group J — Postgres backups: Cloudflare R2 credentials + scheduler wiring (2026-09-07)
 

@@ -46,21 +46,6 @@ spec:
                 secretKeyRef:
                   name: company-ops-secrets
                   key: POSTGRES_PASSWORD
-            - name: COMPANY_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: company-ops-secrets
-                  key: COMPANY_PASSWORD
-            - name: OBSERVER_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: company-ops-secrets
-                  key: OBSERVER_PASSWORD
-            - name: ANALYTICS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: company-ops-secrets
-                  key: ANALYTICS_PASSWORD
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data

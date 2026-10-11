@@ -1,4 +1,4 @@
-"""Portable company operations primitives for Homely."""
+"""Portable company operations primitives for buildmy.house."""
 
 from .ledger import Ledger
 

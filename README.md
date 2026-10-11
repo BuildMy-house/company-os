@@ -1,6 +1,6 @@
-# Homely Company Ops
+# buildmy.house Company Ops
 
-Small, portable control-plane foundation for the autonomous Homely workflow.
+Small, portable control-plane foundation for the autonomous buildmy.house workflow.
 It keeps exact company state in Postgres (the `company`/`observer` schemas) and emits separate JSONL telemetry. The
 R2, Hermes, Claude, and OpenCode integrations are intentionally
 adapters/configuration points until credentials and deployment policy exist.
