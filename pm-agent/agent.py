@@ -11,9 +11,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from company_ops import axiom_emit
 from company_ops.hive_client import HiveClientError, file_feedback_work
 from company_ops.pm_store import PmStore
 
@@ -164,6 +167,10 @@ def make_handler(store: Any, hive_url: str) -> type[BaseHTTPRequestHandler]:
                 self._send(400, {"error": "invalid JSON body"})
                 return
             status, body = handle_chat(store, hive_url, payload)
+            # Counts/status only -- never the message text or app_user_id.
+            axiom_emit.emit_background(
+                "chat", role="agent", service="pm-agent", status=status
+            )
             self._send(status, body)
 
         def _send(self, status: int, body: dict[str, Any]) -> None:
@@ -180,6 +187,26 @@ def make_handler(store: Any, hive_url: str) -> type[BaseHTTPRequestHandler]:
     return ChatHandler
 
 
+HEARTBEAT_SECONDS = 300
+
+
+def _start_heartbeat() -> None:
+    """Daemon thread: one `heartbeat` event per HEARTBEAT_SECONDS (fail-open)."""
+    started = time.monotonic()
+
+    def loop() -> None:
+        while True:
+            time.sleep(HEARTBEAT_SECONDS)
+            axiom_emit.emit(
+                "heartbeat",
+                role="agent",
+                service="pm-agent",
+                uptime_s=int(time.monotonic() - started),
+            )
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     store = PmStore(os.environ.get("PM_DATABASE_URL"))
@@ -187,6 +214,8 @@ def main() -> None:
     port = int(os.environ.get("PORT", str(DEFAULT_PORT)))
     server = ThreadingHTTPServer(("0.0.0.0", port), make_handler(store, hive_url))
     log.info("pm-agent listening on port %d", port)
+    axiom_emit.emit_background("startup", role="agent", service="pm-agent", port=port)
+    _start_heartbeat()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

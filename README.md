@@ -5,6 +5,10 @@ It keeps exact company state in Postgres (the `company`/`observer` schemas) and 
 R2, Hermes, Claude, and OpenCode integrations are intentionally
 adapters/configuration points until credentials and deployment policy exist.
 
+**New here? Start with [`docs/OPERATING.md`](docs/OPERATING.md)** (one-page
+quick start), then [`docs/TAILSCALE.md`](docs/TAILSCALE.md) for remote access
+and [`docs/TELEMETRY.md`](docs/TELEMETRY.md) for Axiom coverage and queries.
+
 ## Runtime direction
 
 Hermes is the primary agent and the only conversational entry point:
@@ -36,7 +40,7 @@ in-cluster registry (`k8s/registry.yaml`), creates the Postgres init
 ConfigMap, and deploys persistent Postgres and Hermes data. See
 `docs/DEPLOY-ENGINEERING.md` for the full build/push/deploy/rollback flow.
 
-Spin up a local Postgres first (see `company-ops/scripts/test-db-up.sh`,
+Spin up a local Postgres first (see `scripts/test-db-up.sh`,
 which uses `docker-compose.test.yml` — a throwaway test-only Postgres
 container, not a Company OS deployment):
 

@@ -27,6 +27,11 @@ spec:
                 - company_ops.backup
                 - --hermes-data
                 - /mnt/hermes-data
+              env:
+                - name: AXIOM_SERVICE_NAME
+                  value: hermes-data-backup-k8s
+                - name: DEPLOYMENT_ENVIRONMENT
+                  value: local-k8s
               envFrom:
                 - secretRef:
                     name: company-ops-secrets

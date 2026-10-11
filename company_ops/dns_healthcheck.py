@@ -528,4 +528,20 @@ if __name__ == "__main__":
         # against a live cluster repeatedly).
         print(json.dumps(check_coredns_logs(), default=str))
     else:
-        print(json.dumps(run_healthcheck(), default=str))
+        _result = run_healthcheck()
+        try:
+            from company_ops import axiom_emit
+
+            axiom_emit.emit(
+                "dns_healthcheck",
+                role="job",
+                service="dns-healthcheck",
+                outcome=(
+                    "error"
+                    if _result.get("error")
+                    else "stale_dns_detected" if _result.get("detected") else "ok"
+                ),
+            )
+        except Exception:  # telemetry must never fail the healthcheck
+            pass
+        print(json.dumps(_result, default=str))

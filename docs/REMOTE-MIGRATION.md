@@ -9,7 +9,9 @@ Companion docs: `docs/SECRETS-INFISICAL.md`
 `scripts/build-push-images.sh` (image build/push into the in-cluster registry),
 `docs/BACKUP.md` (Postgres→R2 backups), `docs/RESTORE.md` +
 `scripts/restore-postgres.sh` + `scripts/verify-offsite-backup.sh` (restore and
-offsite verification).
+offsite verification), `docs/TAILSCALE.md` + `scripts/tailscale-setup.sh`
+(remote access; install **first**, see Step -1) and `docs/TELEMETRY.md`
+(post-cutover Axiom checks).
 
 Facts this runbook is built on (verified read-only, 2026-10-10):
 
@@ -40,7 +42,8 @@ Facts this runbook is built on (verified read-only, 2026-10-10):
 | kubectl | `v1.36.4+k3s1` (bundled with k3s) | `kubectl version --client` |
 | kustomize | v5.x (bundled with kubectl) | `kubectl kustomize --help` |
 | Docker + buildx | ≥29.x / buildx ≥0.38 (used by `scripts/build-push-images.sh` and BuildKit Jobs) | `docker version && docker buildx version` |
-| Ports | 6443 (API server), 10250 (kubelet), 30500 NodePort (registry); free of firewalls **from the operator's workstation** | `nc -vz <new-host> 6443` etc. after install |
+| Tailscale | Installed and joined to the tailnet **before** k3s (`docs/TAILSCALE.md` sections 2, 7, 8); default-deny public firewall | `tailscale status`; `ssh <host>` over the tailnet |
+| Ports | 6443 (API server), 10250 (kubelet), 30500 NodePort (registry) reachable **only over the tailnet/LAN, never public** | `nc -vz <tailnet-name> 6443` from a tailnet machine; the same must time out on the public IP |
 | Storage | k3s default `local-path` StorageClass present, disk sized ≥ 32 GiB for PVCs (hermes-data 5Gi + postgres-data 5Gi + registry-data 20Gi) + headroom | `kubectl get storageclass` |
 | Infisical | One manual credential: `infisical-bootstrap-credentials` Secret (keys `clientId`/`clientSecret`) from the Infisical project `8806c2b0-...` universal-auth identity (see `docs/SECRETS-INFISICAL.md`) | only manual secret — everything else syncs |
 | DNS / inbound | **None required.** No Ingress, no public listeners. Discord (outbound websocket), Steward, Infisical, Axiom, R2, LLM providers are all outbound HTTPS from the new host | verify outbound 443 works |
@@ -49,12 +52,22 @@ Facts this runbook is built on (verified read-only, 2026-10-10):
 Install k3s pinned to the current version:
 
 ```bash
-curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.36.4+k3s1 sh -s - --write-kubeconfig-mode 600
+# Write the tailnet SANs BEFORE installing so no restart is needed
+# (name and 100.x address from `tailscale status` on the new host):
+sudo mkdir -p /etc/rancher/k3s && sudo tee /etc/rancher/k3s/config.yaml >/dev/null <<'YAML'
+write-kubeconfig-mode: "0600"
+tls-san:
+  - <new-host>.<tailnet>.ts.net
+  - <100.x.y.z>
+YAML
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.36.4+k3s1 sh -
 sudo k3s --version   # must print v1.36.4+k3s1
 ```
 
-Copy `/etc/rancher/k3s/k3s.yaml` off the new host; change `server: https://127.0.0.1:6443`
-to `https://<new-host-ip>:6443` in your workstation kubeconfig.
+Copy `/etc/rancher/k3s/k3s.yaml` off the new host (over Tailscale SSH); change
+`server: https://127.0.0.1:6443` to `https://<new-host>.<tailnet>.ts.net:6443`
+and import it as a second context (`docs/TAILSCALE.md` section 4). Do not use
+the LAN/public IP in the kubeconfig.
 
 Service CIDR defaults to `10.43.0.0/16` — identical to the old cluster, so the
 hardcoded `KUBERNETES_SERVICE_HOST=10.43.0.1` in
@@ -63,6 +76,13 @@ hardcoded `KUBERNETES_SERVICE_HOST=10.43.0.1` in
 the default CIDR, grep for `10.43.0.1` and change every occurrence first.
 
 ## 2. Cutover runbook (execute in order)
+
+### Step -1 — Tailscale on both hosts (before anything else)
+
+Follow `docs/TAILSCALE.md` sections 2-4 and 7-8: install Tailscale on the new
+host first (and on `pop-os` if not already there), join both to the tailnet,
+firewall the new host, and add the new cluster as a second kubeconfig context.
+Every later step is run with `--context <new>` over the tailnet.
 
 ### Step 0 — Pre-flight on the old cluster (read-only)
 
@@ -248,6 +268,7 @@ kubectl logs deploy/hermes-gateway -n company-ops | grep -i 'gateway'
 | Discord: hermes replies to a test message, exactly once | one reply | if two/duplicate or none → exactly one cluster at 1 replica; old must be 0 |
 | `dns-healthcheck` next scheduled run (*/15) | completes, no coredns restart | check its pod logs; new host resolver differs |
 | `postgres-backup` at 03:00 | R2 upload logged | check R2_* secret keys |
+| Axiom: every expected service has an event in the last hour (`docs/TELEMETRY.md` "last event per service") | none missing | check `AXIOM_TOKEN` in the synced secret; heartbeats are 5-minutely |
 | Infisical sync refresh (60s) | secret `resourceVersion` bumps on change | §5 |
 
 Do not proceed to §3–§4 repointing or resume `buildmyhouse-dev-deployer` until
@@ -307,7 +328,9 @@ Three entries run commands on the operator host that talk to the cluster via
 They follow the kubeconfig's **current context**. Repointing = add the new
 host's kubeconfig and switch context (`kubectl config use-context <new>`). No
 `.mcp.json` edits needed. Confirm `kubectl config current-context` before any
-post-cutover workspace work.
+post-cutover workspace work. The context's server must be the tailnet name
+(`docs/TAILSCALE.md` section 5), which is what the `kubernetes` MCP and Claude
+Code sessions also follow.
 
 Other operator-host entries (steward sse, opencode, infisical, axiom, neon,
 ai-cli, kubernetes MCP, and the host-local `buildmyhouse` run.sh) never touch

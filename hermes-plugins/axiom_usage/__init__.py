@@ -138,6 +138,18 @@ def _flush_loop() -> None:
         _flush_once()
 
 
+_HEARTBEAT_INTERVAL = float(os.environ.get("AXIOM_HEARTBEAT_SECONDS", "300"))
+_STARTED_AT = time.monotonic()
+
+
+def _heartbeat_loop() -> None:
+    """Liveness signal: without it an idle gateway emits nothing at all, so
+    'no events in 24h' cannot be told apart from 'plugin not firing'."""
+    while True:
+        time.sleep(_HEARTBEAT_INTERVAL)
+        _push({"event": "heartbeat", "uptime_s": int(time.monotonic() - _STARTED_AT)})
+
+
 def _flush_all_atexit() -> None:
     # Short-lived processes (e.g. `hermes chat --oneshot`) can exit well
     # before the 5s daemon timer ever fires, silently dropping queued
@@ -154,6 +166,7 @@ def _ensure_started() -> None:
         if _started:
             return
         threading.Thread(target=_flush_loop, name="axiom-usage-flush", daemon=True).start()
+        threading.Thread(target=_heartbeat_loop, name="axiom-usage-heartbeat", daemon=True).start()
         atexit.register(_flush_all_atexit)
         _started = True
 
@@ -296,6 +309,8 @@ def on_session_end(*, platform: str = "", **_: Any) -> None:
 
 
 def register(ctx) -> None:
+    _ensure_started()
+    _push({"event": "startup"})
     hooks = (
         ("pre_api_request", on_pre_api_request),
         ("post_api_request", on_post_api_request),
