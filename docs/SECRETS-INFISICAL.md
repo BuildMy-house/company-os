@@ -39,8 +39,9 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | company-ops-steward-engineering-opencode-direct → STEWARD_TOKEN | dedicated Secret | engineering-opencode-direct pod | yes | `/infra/steward/engineering-opencode-direct` |
 | AXIOM_TOKEN, AXIOM_ORG_ID | company-ops-secrets | company_ops/axiom_client.py, OTLP telemetry (engineering-entrypoint.sh) | yes | `/` + `/infra` |
 | AXIOM_DASHBOARD_TOKEN | company-ops-secrets | Axiom dashboard sharing | yes | `/` |
-| AXIOM_DATASET | local .env only (live Secret has orphaned copy) | axiom_client.py, engineering-manager-mcp.js, opencode-plugins/axiom-usage.js | **NO — gap** | `/hermes` |
-| AXIOM_ENDPOINT | local .env only | axiom_client.py | **NO — gap** | `/hermes` |
+| AXIOM_DATASET | Infisical `/hermes` (dev) = `bmh-company` | agent-usage ingest: hermes-plugins/axiom_usage, opencode-plugins/axiom-usage.js, engineering-manager-mcp.js (default `bmh-company`, ingest edge eu-central-1) | yes (optional) | `/hermes` |
+| AXIOM_ENDPOINT | Infisical `/hermes` (dev) = `https://api.axiom.co` | axiom_client.py query endpoint (default `https://api.axiom.co`) | yes (optional) | `/hermes` |
+| AXIOM_TELEMETRY_DATASET | not set (default applies) | axiom_client.py / `company-ops telemetry-query`: the APP's telemetry dataset (default `buildmy-house-telemetry`) | optional — add only to override the default | `/hermes` |
 | BUILDMYHOUSE_APP_URL, BUILDMYHOUSE_MCP_URL, BUILDMYHOUSE_MCP_BEARER_TOKEN, BUILDMYHOUSE_TEST_EMAIL, BUILDMYHOUSE_TEST_PASSWORD (= certs/buildmyhouse-test-account.env) | company-ops-secrets | buildmy.house MCP test account (AGENTS.md contract) | yes | `/` |
 | R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_API_TOKEN | company-ops-secrets | pg-backup.sh, git-backup.sh (R2 backups) | yes | `/infra` |
 | CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN | company-ops-secrets | Cloudflare/DNS ops | yes | `/infra` |
@@ -54,6 +55,19 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | browser-adversary-auth | referenced optional:true in browser-adversary.yaml; absent live | browser-adversary auth mount | no keys defined yet | out of scope until keys are defined; then `/infra/browser-adversary` |
 | mcp-workers.json | tracked in git, verified identical to mcp-workers.example.json (commands/models only — no secret values) | company_ops/cli.py worker subcommand | n/a — contains no secrets | if tokens are ever added: `/infra` + env injection, never the JSON file |
 
+## Axiom datasets and which variable drives which
+
+Two Axiom datasets exist; each has exactly one variable:
+
+| Dataset | Variable | Direction | Used by |
+|---|---|---|---|
+| `bmh-company` | `AXIOM_DATASET` (default `bmh-company`) | agent-usage ingest (write) | hermes-plugins/axiom_usage, scripts/opencode-plugins/axiom-usage.js, scripts/engineering-manager-mcp.js (ingest edge `https://eu-central-1.aws.edge.axiom.co`) |
+| `buildmy-house-telemetry` | `AXIOM_TELEMETRY_DATASET` (default `buildmy-house-telemetry`) | app telemetry (read here, written by `app/`) | `company-ops telemetry-query` via company_ops/axiom_client.py |
+
+`AXIOM_ENDPOINT` (default `https://api.axiom.co`) is the query endpoint only.
+`AXIOM_TELEMETRY_DATASET` is optional; add it to Infisical `/hermes` only to
+override the default. The website needs no Axiom configuration; the app does.
+
 ## Adding a database role (agent)
 
 Roles are declared one-per-file in `sql/roles.d/<role>.yaml` (format in
@@ -66,15 +80,13 @@ placeholder, so a blank secret can never clear a live role's password.
 
 ## Gap list — add these to Infisical (Nahar action, Infisical UI/CLI)
 
-Project **Build My house**, environment **dev**, folder **`/hermes`** — create these three keys:
+Project **Build My house**, environment **dev**, folder **`/hermes`** — create this key:
 
-1. `AXIOM_DATASET`
-2. `AXIOM_ENDPOINT`
-3. `PM_DATABASE_URL`
+1. `PM_DATABASE_URL`
 
-Until added, `AXIOM_DATASET`/`AXIOM_ENDPOINT` reach pods only via the legacy
-local `.env` path (scripts/k3s-local-up.sh, not usable on a new host), and
-`PM_DATABASE_URL` survives in the live Secret only as drift from an older sync.
+`AXIOM_DATASET` (`bmh-company`) and `AXIOM_ENDPOINT` (`https://api.axiom.co`) are
+already present in `/hermes`. `PM_DATABASE_URL` survives in the live Secret only
+as drift from an older sync.
 
 Optional additions if those features are used:
 `DISCORD_ALLOWED_USERS`, `DISCORD_HOME_CHANNEL` (forwarded by entrypoint.sh

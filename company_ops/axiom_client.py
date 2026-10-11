@@ -6,6 +6,9 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 
+DEFAULT_TELEMETRY_DATASET = "buildmy-house-telemetry"
+
+
 class AxiomClient:
     """Minimal Axiom query client using only stdlib (no requests/httpx)."""
 
@@ -17,7 +20,10 @@ class AxiomClient:
     ) -> None:
         self.token = token or os.environ.get("AXIOM_TOKEN", "")
         self.endpoint = (endpoint or os.environ.get("AXIOM_ENDPOINT", "https://api.axiom.co")).rstrip("/")
-        self.dataset = dataset or os.environ.get("AXIOM_DATASET", "homely-telemetry")
+        # Reads the APP's telemetry dataset. Deliberately NOT AXIOM_DATASET:
+        # that variable names the agent-usage *ingest* dataset (bmh-company)
+        # used by the agent emitters, which is a different dataset.
+        self.dataset = dataset or os.environ.get("AXIOM_TELEMETRY_DATASET", DEFAULT_TELEMETRY_DATASET)
 
     def query(self, aql: str, *, timeframe: str = "24h") -> dict:
         """Run an AQL query and return the raw result dict."""
