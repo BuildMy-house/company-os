@@ -1,0 +1,9 @@
+# Full CRUD on the company schema (current + future tables).
+name: hermes_company
+login: true
+password_key: COMPANY_PASSWORD
+dsn_key: COMPANY_DATABASE_URL
+grants:
+  - schema: company
+    tables: all
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

@@ -1,0 +1,9 @@
+# Append-only on the observer schema: INSERT + SELECT, no UPDATE/DELETE/TRUNCATE.
+name: hermes_observer_writer
+login: true
+password_key: OBSERVER_PASSWORD
+dsn_key: OBSERVER_DATABASE_URL
+grants:
+  - schema: observer
+    tables: all
+    privileges: [SELECT, INSERT]

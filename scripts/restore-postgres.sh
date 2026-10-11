@@ -9,8 +9,8 @@
 #   scratch (default): restore into a throwaway database and verify table
 #     presence + row counts + key-table contents. Never touches live data.
 #   live: restore over the real database. REQUIRES --yes. Re-applies
-#     sql/roles.sql afterwards (idempotent) so app roles keep their grants;
-#     role passwords are set separately (scripts/04-set-role-passwords.sh).
+#     scripts/provision-db-roles.sh afterwards (idempotent) so app roles keep
+#     their grants; it needs the role passwords (env or Infisical).
 #
 # DSN: --dsn or POSTGRES_ADMIN_DSN env (a superuser/owner DSN like
 # postgresql://postgres:PW@host:5432/postgres). Never printed.
@@ -59,7 +59,7 @@ print(re.sub(r"(//[^:/@]+:)[^@]+(@)", r"\1***\2", sys.argv[1]))
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "dry-run: target=$TARGET dumpfile=$DUMPFILE dsn=$MASKED_DSN"
   echo "  scratch_db=$SCRATCH_DB drop_schemas=$DROP_SCHEMAS allow_empty_key_tables=$ALLOW_EMPTY"
-  [[ $TARGET == live ]] && echo "  live: would require --yes, then restore + re-apply sql/roles.sql"
+  [[ $TARGET == live ]] && echo "  live: would require --yes, then restore + re-provision roles"
   exit 0
 fi
 
@@ -70,7 +70,7 @@ fi
 
 PSQL=(psql --dbname="$DSN" -v ON_ERROR_STOP=1 --quiet)
 
-# Expected tables, parsed from the schema SQL (roles.sql defines no tables).
+# Expected tables, parsed from the schema SQL.
 EXPECTED_TABLES="$(grep -hoE 'CREATE TABLE (IF NOT EXISTS )?(company|observer)\.[a-z_]+' \
   "$REPO_ROOT"/sql/company_schema.sql "$REPO_ROOT"/sql/observer_schema.sql "$REPO_ROOT"/sql/pm_schema.sql \
   | sed -E 's/CREATE TABLE (IF NOT EXISTS )?//' | sort -u)"
@@ -107,8 +107,8 @@ else
 fi
 
 if [[ $TARGET == live ]]; then
-  echo "re-applying sql/roles.sql (grants on restored tables)..."
-  psql --dbname="$DSN" -v ON_ERROR_STOP=1 --quiet --file="$REPO_ROOT/sql/roles.sql"
+  echo "re-applying role grants on restored tables (scripts/provision-db-roles.sh)..."
+  PG_ADMIN_DSN="$DSN" "$REPO_ROOT/scripts/provision-db-roles.sh"
 fi
 
 # --- Sanity checks -------------------------------------------------------

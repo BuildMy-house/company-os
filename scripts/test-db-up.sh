@@ -34,21 +34,12 @@ for sql_file in sql/company_schema.sql sql/observer_schema.sql sql/pm_schema.sql
     fi
 done
 
-# Apply roles.sql and set local dev passwords.
-if [ -f sql/roles.sql ]; then
-    echo "==> Applying sql/roles.sql ..."
-    docker exec -i company-ops-test-postgres psql -U postgres -d homely_company -f - < sql/roles.sql
-
-    echo "==> Setting local dev passwords for roles..."
-    docker exec company-ops-test-postgres psql -U postgres -d homely_company -c \
-        "ALTER ROLE hermes_company WITH PASSWORD 'localtest_company';"
-    docker exec company-ops-test-postgres psql -U postgres -d homely_company -c \
-        "ALTER ROLE hermes_observer_writer WITH PASSWORD 'localtest_observer';"
-    docker exec company-ops-test-postgres psql -U postgres -d homely_company -c \
-        "ALTER ROLE hermes_analytics WITH PASSWORD 'localtest_analytics';"
-else
-    echo "WARN: sql/roles.sql not found — skipping role setup (parallel ticket may not have landed yet)" >&2
-fi
+# Provision roles from sql/roles.d with local dev passwords (scratch DB only).
+echo "==> Provisioning roles via scripts/provision-db-roles.sh ..."
+PGHOST=localhost PGPORT=5544 PGPASSWORD=localtestpw \
+COMPANY_PASSWORD=localtest_company OBSERVER_PASSWORD=localtest_observer \
+ANALYTICS_PASSWORD=localtest_analytics PM_AGENT_WRITER_PASSWORD=localtest_pm_agent \
+    "$REPO_ROOT/scripts/provision-db-roles.sh"
 
 echo ""
 echo "=== Test Postgres is running ==="

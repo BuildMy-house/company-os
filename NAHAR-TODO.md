@@ -55,8 +55,9 @@ has any real production data to reason about.
 #### B1. ~~Production Postgres not stood up yet~~ — RESOLVED (2026-09-07)
 Self-hosted Postgres 16 container added to `company-ops/docker-compose.yml`
 as the `postgres` service (no ports exposed — internal-network-only). First
-run applies `company_schema.sql`, `observer_schema.sql`, `roles.sql`, then
-sets real passwords via `04-set-role-passwords.sh`. Schemas, roles, and
+run applies `company_schema.sql`, `observer_schema.sql`; (as of 2026-10-11) roles, passwords and grants are
+reconciled separately by `scripts/provision-db-roles.sh` (manifests in
+`sql/roles.d/`). Schemas, roles, and
 permission boundaries verified against the live container. Connection strings
 with real per-role passwords are in the production `.env`.
 
@@ -441,19 +442,20 @@ Already set: `DISCORD_HIL_CHANNEL=1546470198825975961`
 ## Group L — pm-agent production credential gap (PM-C, 2026-10-06)
 
 PM-C adds a new least-privilege Postgres role, `pm_agent_writer`
-(`sql/roles.sql`: INSERT/SELECT only on `company.pm_conversations` and
-`company.feedback_signals`), and `pm-agent/agent.py` reads its DSN from
-`PM_DATABASE_URL`. Two things still need real production values before
-pm-agent can actually run against production Postgres (not required to land
-the code/manifests, which are complete and locally verified):
+(`sql/roles.d/pm_agent_writer.yaml`: INSERT/SELECT only on
+`company.pm_conversations` and `company.feedback_signals`), and
+`pm-agent/agent.py` reads its DSN from `PM_DATABASE_URL`. Two things still
+need real production values before pm-agent can actually run against
+production Postgres (not required to land the code/manifests, which are
+complete and locally verified):
 
 #### L1. Real `pm_agent_writer` password
-`sql/roles.sql` creates the role with a placeholder password
-(`CHANGE_ME_PM_AGENT_WRITER_PASSWORD`). `scripts/04-set-role-passwords.sh`
-now accepts an optional `PM_AGENT_WRITER_PASSWORD` env var to rotate it
-(mirrors the existing `COMPANY_PASSWORD`/`OBSERVER_PASSWORD`/
-`ANALYTICS_PASSWORD` pattern exactly) — set a real password in production
-`.env` and re-run the script once ready to deploy pm-agent.
+Roles, passwords and grants are declared in `sql/roles.d/*.yaml` and
+reconciled by `scripts/provision-db-roles.sh`. The script REFUSES to run if
+any selected role's password is empty/missing/placeholder (a blank
+`PM_AGENT_WRITER_PASSWORD` once cleared the live role's password and wrote a
+broken DSN; that can no longer happen). Put the real password in Infisical
+as `PM_AGENT_WRITER_PASSWORD` and run the runbook below.
 
 #### L2. `PM_DATABASE_URL` not yet in `company-ops-secrets`
 `k8s/pm-agent.yaml`'s Deployment relies on `envFrom: company-ops-secrets`
@@ -466,29 +468,38 @@ is no live secret-store writes from this session (see
 
 #### L-runbook. Exact steps to complete L1 + L2 (run by Nahar; not automated)
 
-Verified 2026-10-11: nothing here has been run; the live `pm_agent_writer`
-password and `company-ops-secrets` are untouched. Never paste the password
-into chat or commit it.
+Nothing here has been run against the live cluster; the live
+`pm_agent_writer` role and `company-ops-secrets` are untouched. Never paste
+the password into chat or commit it.
 
-1. Generate (or fetch) the password and keep it in Infisical project
-   `8806c2b0-73d2-4bea-8537-5b874c5ff592`, env `dev`, path `/infra`, key
-   `PM_AGENT_WRITER_PASSWORD`. Use a URL-safe value (`openssl rand -hex 24`)
-   so it needs no escaping inside the DSN.
-2. Apply it to the live role (the script runs `psql` as `postgres`, so run
-   it inside the postgres pod; `POSTGRES_PASSWORD`, `COMPANY_PASSWORD`,
-   `OBSERVER_PASSWORD`, `ANALYTICS_PASSWORD` are also required by the
-   script and must match what is already live, or those roles get changed
-   too). Simplest and safest is to alter only this role directly:
+**Adding any future agent role** = add one manifest `sql/roles.d/<role>.yaml`
+(see `sql/roles.d/README.md`) + one Infisical key (its `password_key`, in
+`/hermes`) + its DSN key. No script or SQL edits.
+
+1. Generate the password and store it in Infisical project
+   `8806c2b0-73d2-4bea-8537-5b874c5ff592`, env `dev`, path **`/hermes`**
+   (not `/infra`), key `PM_AGENT_WRITER_PASSWORD`. Use a URL-safe value
+   (`openssl rand -hex 24`) so it needs no escaping inside the DSN. Also add
+   `PM_DATABASE_URL` there (`postgresql://pm_agent_writer:<pw>@postgres:5432/homely_company`).
+2. Preview, then apply only this role. The script fetches the password from
+   Infisical (needs the `INFISICAL_*` universal-auth env; path defaults to
+   `/hermes`) unless you export `PM_AGENT_WRITER_PASSWORD`. It reaches the
+   in-cluster Postgres through a port-forward, with the admin password from
+   the live Secret (read into the environment, never printed):
 
    ```bash
-   kubectl -n company-ops exec -i deploy/postgres -- \
-     psql -U postgres -d homely_company -v ON_ERROR_STOP=1 \
-     -c "ALTER ROLE pm_agent_writer WITH PASSWORD '$PM_AGENT_WRITER_PASSWORD';"
+   kubectl -n company-ops port-forward svc/postgres 55432:5432 &
+   export PGHOST=127.0.0.1 PGPORT=55432
+   export PGPASSWORD="$(kubectl -n company-ops get secret company-ops-secrets -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)"
+   scripts/provision-db-roles.sh --dry-run --only pm_agent_writer   # SQL, passwords redacted
+   scripts/provision-db-roles.sh --only pm_agent_writer             # apply + login check + DSN check
+   kill %1
    ```
 
-   (Equivalent via `scripts/04-set-role-passwords.sh` only if all four
-   password env vars are exported with their current live values.)
-3. Add the DSN to the live Secret (merge-patch, leaves other keys alone):
+   Omitting `--only` reconciles all roles and then needs all four passwords
+   (it refuses if any is missing, touching nothing). Re-running is idempotent.
+3. Add the DSN to the live Secret (merge-patch, leaves other keys alone;
+   `PM_AGENT_WRITER_PASSWORD` must be exported or read from Infisical first):
 
    ```bash
    kubectl -n company-ops patch secret company-ops-secrets --type merge -p \
@@ -496,14 +507,15 @@ into chat or commit it.
    ```
 
    Confirm the Postgres Service name/port in `k8s/postgres.yaml` matches
-   `postgres:5432` before running.
+   `postgres:5432` before running. If `PM_DATABASE_URL` is also exported when
+   step 2 runs, the script checks the DSN embeds the managed password.
 4. Restart pm-agent so it re-reads the Secret:
    `kubectl -n company-ops rollout restart deploy/pm-agent && kubectl -n company-ops rollout status deploy/pm-agent`
 5. Verify: `kubectl -n company-ops logs deploy/pm-agent --tail=50` shows no
    authentication error, and `kubectl -n company-ops get secret
    company-ops-secrets -o json | jq '.data | has("PM_DATABASE_URL")'`
    prints `true` (do not print the value).
-6. Rotate/re-run any time with the same steps; the ALTER is idempotent.
+6. Rotate any time by changing the Infisical value and repeating steps 2-4.
 
 ### P10-C follow-up: enable the `model_retirement_watch` plugin
 
