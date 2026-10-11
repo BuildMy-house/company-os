@@ -1,0 +1,12 @@
+# Read-only on both schemas (current + future tables).
+name: hermes_analytics
+login: true
+password_key: ANALYTICS_PASSWORD
+dsn_key: ANALYTICS_DATABASE_URL
+grants:
+  - schema: company
+    tables: all
+    privileges: [SELECT]
+  - schema: observer
+    tables: all
+    privileges: [SELECT]

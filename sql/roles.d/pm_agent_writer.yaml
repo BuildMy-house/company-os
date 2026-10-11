@@ -1,0 +1,9 @@
+# pm-agent: INSERT/SELECT on its two tables only (append/dedupe-only).
+name: pm_agent_writer
+login: true
+password_key: PM_AGENT_WRITER_PASSWORD
+dsn_key: PM_DATABASE_URL
+grants:
+  - schema: company
+    tables: [pm_conversations, feedback_signals]
+    privileges: [SELECT, INSERT]

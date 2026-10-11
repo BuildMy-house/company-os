@@ -1,7 +1,7 @@
 -- observer_schema.sql: Create the observer schema with append-only audit/evidence tables.
 -- Run with: psql -f observer_schema.sql <connection-string>
 -- Idempotent: safe to run multiple times.
--- UPDATE/DELETE/TRUNCATE are denied at the role level (see roles.sql).
+-- UPDATE/DELETE/TRUNCATE are denied at the role level (see sql/roles.d/).
 
 CREATE SCHEMA IF NOT EXISTS observer;
 

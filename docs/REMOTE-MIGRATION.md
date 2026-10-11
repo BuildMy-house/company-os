@@ -175,6 +175,11 @@ kubectl exec -n company-ops deploy/postgres -- dropdb -U postgres homely_company
 # 5c. Restore live DB from the same dump
 scripts/restore-postgres.sh homely_company
 
+# 5c'. Reconcile DB roles/passwords/grants from sql/roles.d/*.yaml (idempotent;
+# refuses to run if any role password is empty). Passwords come from env or
+# Infisical `/hermes`; reach the new Postgres via port-forward (PGHOST/PGPORT/PGPASSWORD).
+scripts/provision-db-roles.sh --dry-run && scripts/provision-db-roles.sh
+
 # 5d. Restore hermes-data
 D=$(ls -d /var/lib/rancher/k3s/storage/*_company-ops_hermes-data_* | head -1)
 sudo tar -xzf /tmp/hermes-data-final.tar.gz -C "$D"

@@ -22,7 +22,7 @@ by it.
 Dumped with `pg_dump --format=plain` via the **`hermes_analytics`** read-only
 role (`ANALYTICS_DATABASE_URL`). That role has SELECT across both schemas and
 can write nothing — the least-privilege choice for a backup read
-(see `sql/roles.sql`). Each run produces
+(see `sql/roles.d/`). Each run produces
 `homely-backup-YYYYMMDD-HHMMSS.sql.gz`.
 
 ## hermes-data archives

@@ -23,8 +23,6 @@ kubectl create configmap postgres-init \
   --from-file=01-company_schema.sql=sql/company_schema.sql \
   --from-file=02-observer_schema.sql=sql/observer_schema.sql \
   --from-file=03-pm_schema.sql=sql/pm_schema.sql \
-  --from-file=03-roles.sql=sql/roles.sql \
-  --from-file=04-set-role-passwords.sh=scripts/04-set-role-passwords.sh \
   --dry-run=client -o yaml | kubectl apply -f -
 
 if [ -x scripts/bootstrap-secrets.sh ]; then
@@ -63,3 +61,6 @@ done
 for dep in "${deps[@]}"; do
   kubectl rollout status "deployment/$dep" -n company-ops --timeout=180s
 done
+
+echo "NOTE: Postgres roles are no longer created by the init configmap. On a fresh"
+echo "  database run scripts/provision-db-roles.sh (see NAHAR-TODO.md Group L)."

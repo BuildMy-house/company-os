@@ -62,12 +62,12 @@ POSTGRES_ADMIN_DSN='postgresql://postgres:<pw>@<new-host>:5432/postgres' \
 
 The script: drops schemas → replays the dump (`psql -v ON_ERROR_STOP=1`, so
 it aborts on the first error rather than half-restoring silently) →
-re-applies `sql/roles.sql` (idempotent; restores GRANTs on the restored
-tables). Then set role passwords from `.env` (init only set the superuser's
-on a fresh host):
+re-runs `scripts/provision-db-roles.sh` (idempotent; restores GRANTs on the
+restored tables and sets role passwords from env/Infisical `/hermes`; refuses
+to run if any password is empty). Run it by hand if you restored elsewhere:
 
 ```bash
-bash scripts/04-set-role-passwords.sh   # reads COMPANY_PASSWORD etc. from env
+bash scripts/provision-db-roles.sh   # reads <ROLE>_PASSWORD keys from env/Infisical
 ```
 
 Rollback: if the live restore fails midway, the schemas are in a broken

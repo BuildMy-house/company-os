@@ -22,7 +22,7 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | Key | Lives today | Consumed by | In Infisical? | Target path |
 |---|---|---|---|---|
 | POSTGRES_PASSWORD | company-ops-secrets | postgres.yaml, entrypoint.sh | yes | Build My house `/hermes` |
-| COMPANY_PASSWORD, OBSERVER_PASSWORD, ANALYTICS_PASSWORD | company-ops-secrets | postgres.yaml init, entrypoint.sh | yes | `/hermes` |
+| COMPANY_PASSWORD, OBSERVER_PASSWORD, ANALYTICS_PASSWORD, PM_AGENT_WRITER_PASSWORD (each role's `password_key` in `sql/roles.d/*.yaml`) | read by `scripts/provision-db-roles.sh` from env or Infisical | role provisioning (see below) | yes | `/hermes` (NOT `/infra`) |
 | COMPANY_DATABASE_URL, OBSERVER_DATABASE_URL, ANALYTICS_DATABASE_URL | company-ops-secrets | hermes-gateway, engineering pods | yes | `/hermes` |
 | PM_DATABASE_URL | company-ops-secrets (orphaned — no live sync source) | company_ops/pm_store.py, pm-agent/agent.py | **NO — gap** | `/hermes` |
 | DISCORD_BOT_TOKEN | company-ops-secrets | hermes-gateway | yes | `/hermes` |
@@ -53,6 +53,16 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | buildmyhouse-dev-secrets (JWT_SECRET, ANALYTICS_ADMIN_TOKEN, BUILDMYHOUSE_MCP_TOKEN, LUXCORE_WORKER_TOKEN, R2_ACCOUNT_ID/R2_BUCKET_NAME/R2_PUBLIC_URL/R2_S3_ENDPOINT, VITE_AXIOM_DATASET/VITE_AXIOM_ENDPOINT, RESEND_*, plus app-side AXIOM_/CLOUDFLARE_/NEON_/R2_ keys) | dedicated Secret in buildmyhouse-dev | buildmyhouse-dev app + deployer CronJob | yes | buildmyhouse-app project `/` |
 | browser-adversary-auth | referenced optional:true in browser-adversary.yaml; absent live | browser-adversary auth mount | no keys defined yet | out of scope until keys are defined; then `/infra/browser-adversary` |
 | mcp-workers.json | tracked in git, verified identical to mcp-workers.example.json (commands/models only — no secret values) | company_ops/cli.py worker subcommand | n/a — contains no secrets | if tokens are ever added: `/infra` + env injection, never the JSON file |
+
+## Adding a database role (agent)
+
+Roles are declared one-per-file in `sql/roles.d/<role>.yaml` (format in
+`sql/roles.d/README.md`) and reconciled by `scripts/provision-db-roles.sh`.
+To add an agent: (1) add the manifest file; (2) add one Infisical key in
+`/hermes` named by its `password_key` (URL-safe, `openssl rand -hex 24`)
+plus its `dsn_key` DSN; (3) run the script (`--dry-run`, then `--only <role>`).
+The script refuses to run if any selected role's password is empty or a
+placeholder, so a blank secret can never clear a live role's password.
 
 ## Gap list — add these to Infisical (Nahar action, Infisical UI/CLI)
 
