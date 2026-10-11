@@ -18,6 +18,9 @@ set -euo pipefail
 #                      URL#<40-hex-sha> for reproducible builds)
 #   AGENT_FLAVOR       engineering build arg (default claude)
 #   INSTALL_BROWSER    engineering build arg (default true)
+#   GIT_AUTH_TOKEN     token for a private WORKSPACE_CONTEXT (e.g. a GitHub App
+#                      installation token from scripts/github-app-token.js);
+#                      passed to BuildKit as a build secret, never as an arg
 #
 # Tags: every image gets the immutable short-SHA tag of the current checkout,
 # plus the mutable tag its k8s manifests reference (see the table below; keep
@@ -64,6 +67,13 @@ images=(
   "browser-adversary|company-os-browser-adversary|Dockerfile.browser-adversary|latest|"
 )
 
+# BuildKit's git fetch runs inside the builder container, which has none of the
+# client's credentials; a GIT_AUTH_TOKEN build secret is how it authenticates.
+secret_args=()
+if [ -n "${GIT_AUTH_TOKEN:-}" ]; then
+  secret_args=(--secret id=GIT_AUTH_TOKEN,env=GIT_AUTH_TOKEN)
+fi
+
 built=()
 for entry in "${images[@]}"; do
   IFS='|' read -r name repo dockerfile mutable extra <<<"$entry"
@@ -76,6 +86,7 @@ for entry in "${images[@]}"; do
     -t "$image:$sha" \
     -t "$image:$mutable" \
     $extra \
+    ${secret_args[@]+"${secret_args[@]}"} \
     .
   built+=("$repo")
 done

@@ -57,7 +57,10 @@ Do not introduce `docker.io/library/…` references for repo-owned images.
   from this repo.
 - `company-os-engineering` requires the private `BuildMy-house/workspace` repo
   as its named `shared` build context (`WORKSPACE_CONTEXT`) — company-os alone
-  is not enough to rebuild it.
+  is not enough to rebuild it. The builder container can't see the client's
+  git credentials, so export `GIT_AUTH_TOKEN` (a GitHub App installation token,
+  see `scripts/github-app-token.js`) before running the script; it is passed to
+  BuildKit as a build secret and never lands in an image layer.
 - Digest-pinned refs (company-ops.yaml, both build dispatchers) are pinned by
   whoever upgrades those Deployments after a build; `--print-digests` exists
   for exactly that step.
