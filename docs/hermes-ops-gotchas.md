@@ -15,7 +15,7 @@ worktree-like directories such as `buildmyhouse-b1-2/3/4`) are **stale
 pre-split leftovers or independently-diverged copies** — not connected to
 the real deploy pipeline, and not kept in sync with each other.
 
-**Symptom if you miss this:** you edit `company-ops/hermes/SOUL.md` (or any
+**Symptom if you miss this:** you edit `hermes/SOUL.md` (or any
 file under a local `company-ops/`), it looks plausible, you commit it — and
 it does nothing, because the actual running image was built from a
 completely different, newer checkout of `company-os`.

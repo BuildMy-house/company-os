@@ -121,6 +121,11 @@ spec:
               image: localhost:30500/company-os:dns-remediation
               imagePullPolicy: IfNotPresent
               command: ["/opt/company-ops-venv/bin/python", "-m", "company_ops.dns_healthcheck"]
+              env:
+                - name: AXIOM_SERVICE_NAME
+                  value: dns-healthcheck-k8s
+                - name: DEPLOYMENT_ENVIRONMENT
+                  value: local-k8s
               # STEWARD_TOKEN / STEWARD_URL (+ STEWARD_MCP_URL if renamed)
               # arrive via company-ops-secrets; synced from Infisical /infra
               # ("Steward") by k8s/infisical-sync.yaml.

@@ -24,6 +24,10 @@ spec:
               value: "4200"
             - name: HIVE_URL
               value: http://hive-coordinator:4100
+            - name: AXIOM_SERVICE_NAME
+              value: pm-agent-k8s
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: local-k8s
           envFrom:
             - secretRef:
                 name: company-ops-secrets

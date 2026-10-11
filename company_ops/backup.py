@@ -236,9 +236,17 @@ def run_hermes_backup(
     }
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint used by the postgres-backup / hermes-data-backup CronJobs.
+
+    Emits one `backup` event to Axiom (success or failure, duration, size) and
+    re-raises failures so the Job still fails and Kubernetes retries it.
+    """
     import argparse
     import json
+    import time
+
+    from company_ops import axiom_emit
 
     parser = argparse.ArgumentParser(description="Back up postgres schemas or hermes-data to R2.")
     parser.add_argument(
@@ -246,8 +254,35 @@ if __name__ == "__main__":
         metavar="DIR",
         help="archive this directory instead of running the postgres dump",
     )
-    args = parser.parse_args()
-    if args.hermes_data:
-        print(json.dumps(run_hermes_backup(args.hermes_data), default=str))
-    else:
-        print(json.dumps(run_backup(), default=str))
+    args = parser.parse_args(argv)
+    kind = "hermes-data" if args.hermes_data else "postgres"
+    started = time.monotonic()
+    try:
+        result = run_hermes_backup(args.hermes_data) if args.hermes_data else run_backup()
+    except Exception as exc:
+        axiom_emit.emit(
+            "backup",
+            role="job",
+            service=f"{kind}-backup",
+            kind=kind,
+            outcome="failure",
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error_type=type(exc).__name__,
+        )
+        raise
+    axiom_emit.emit(
+        "backup",
+        role="job",
+        service=f"{kind}-backup",
+        kind=kind,
+        outcome="success",
+        duration_ms=int((time.monotonic() - started) * 1000),
+        bytes_uploaded=result.get("bytes_uploaded"),
+        deleted_count=len(result.get("deleted_keys") or []),
+    )
+    print(json.dumps(result, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
