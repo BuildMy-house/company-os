@@ -108,7 +108,8 @@ kubectl exec -n company-ops deploy/postgres -- gzip -c /tmp/final-dump.sql > /tm
 # (or trigger the R2 pipeline: kubectl create job --from=cronjob/postgres-backup postgres-final-cutover -n company-ops)
 
 # hermes-data PVC tarball (node filesystem — local-path)
-D=$(ls -d /var/lib/rancher/k3s/storage/*_company-ops_hermes-data_* | head -1)
+D=$(sudo ls -d /var/lib/rancher/k3s/storage/*_company-ops_hermes-data | head -1)
+[ -n "$D" ] || { echo "hermes-data volume dir not found"; exit 1; }
 sudo tar -czf /tmp/hermes-data-final.tar.gz -C "$D" .
 sha256sum /tmp/hermes-data-final.tar.gz
 ```
@@ -131,10 +132,10 @@ kubectl create namespace company-ops
 kubectl -n company-ops create secret generic infisical-bootstrap-credentials \
   --from-literal=clientId='<from Infisical>' --from-literal=clientSecret='<from Infisical>'
 # 3. Infisical secrets operator (helm — same flags as documented in k8s/infisical-sync.yaml)
-helm repo add infisical-helm-charts https://dl.cloudsmith.io/public/infisical/helm-charts/helm.charts/
+helm repo add infisical-helm-charts https://dl.cloudsmith.io/public/infisical/helm-charts/helm/charts/
 helm repo update
-helm install operator-namespaced infisical-helm-charts/secrets-operator \
-  -n company-ops --set scopedNamespaces=company-ops --set scopedRBAC=true
+helm install operator-namespaced infisical-helm-charts/secrets-operator --version 0.11.9 \
+  -n company-ops --set scopedNamespaces="company-ops\,buildmyhouse-dev" --set scopedRBAC=true
 # 4. Sync CRs → operator populates company-ops-secrets + company-ops-steward-*
 kubectl apply -f k8s/infisical-sync.yaml
 kubectl get secret company-ops-secrets -n company-ops -o json | jq -r '.data|keys[]' | wc -l   # expect 44
@@ -181,7 +182,8 @@ scripts/restore-postgres.sh homely_company
 scripts/provision-db-roles.sh --dry-run && scripts/provision-db-roles.sh
 
 # 5d. Restore hermes-data
-D=$(ls -d /var/lib/rancher/k3s/storage/*_company-ops_hermes-data_* | head -1)
+D=$(sudo ls -d /var/lib/rancher/k3s/storage/*_company-ops_hermes-data | head -1)
+[ -n "$D" ] || { echo "hermes-data volume dir not found"; exit 1; }
 sudo tar -xzf /tmp/hermes-data-final.tar.gz -C "$D"
 ```
 
@@ -416,3 +418,110 @@ buildmyhouse-dev-resume-$(date +%s) -n company-ops`). Regenerate its scripts
 ConfigMap from the current repo per the manifest header
 (`kubectl create configmap --from-file=scripts/…`). `buildmyhouse-dev` state
 itself is emptyDir and disposable — nothing to back up; the poller rebuilds it.
+
+## Migration log: `pop-os` → `pop-os-1` (2026-10-12)
+
+First real run of this runbook. The cluster moved from the old workstation
+(`pop-os`, Tailscale `100.104.163.67`) to `pop-os-1` (Tailscale
+`100.105.155.86`, hostname also reads `pop-os` inside k3s). The old cluster was
+scaled to zero (postgres, registry, operator left up) and is kept for
+rollback until the user decides to stop k3s there. No secret values are
+recorded here.
+
+### What was done, in order
+
+1. **Host access.** Dedicated SSH key `~/.ssh/id_ed25519_popos1`; a real
+   `sshd` is needed (Tailscale SSH needs a login-check approval and is not
+   scriptable). Agents get narrow passwordless `sudo` via a sudoers drop-in;
+   anything outside it needs the user.
+2. **k3s + operator.** k3s `v1.36.4+k3s1`, Helm, Infisical secrets operator
+   pinned `--version 0.11.9 --set scopedNamespaces="company-ops\,buildmyhouse-dev"`.
+   `infisical-bootstrap-credentials` is the only manually copied secret; the
+   operator then synced all 47 keys into `company-ops-secrets`.
+3. **Registry + images.** In-cluster registry (`localhost:30500`), images
+   rebuilt on the new host. Digest pins in `k8s/*.yaml` were repinned
+   (`company-os` → `89b92c0be5cc…`, engineering → `1dbd268bc9c8…`).
+4. **Postgres.** `postgres-init` ConfigMap must exist before the pod starts
+   (create from `sql/`). Final dump restored with `scripts/restore-postgres.sh
+   --target live --drop-schemas`; counts matched the old DB (hive_events 1311,
+   work_bids 118, work_items 58, agents 29); four role logins verified.
+5. **hermes-data.** Quiesce the old gateway, tar the volume from the node
+   directory, `scp`, create the PVC on the new cluster, mount it from a
+   short-lived holder pod, `kubectl cp` + `tar -xzf` into it, delete the pod.
+   Done before `hermes-gateway` ever started. 554M / 20,903 files.
+6. **Services.** Applied in order: `hive.yaml`, then `rbac.yaml` +
+   `builder-rbac.yaml`, then `company-ops.yaml` (hermes-gateway + PVC).
+
+### Gotchas hit (all fixed in this repo unless noted)
+
+- **Helm repo URL** in the old docs 404'd; use the `…/helm/charts/` path.
+- **Postgres admin password has URL-special characters** — URL-encode it
+  (`urllib.parse.quote`) when building a DSN. Never `sed`-mask a password.
+- **`SET transaction_timeout`**: the backup job's `pg_dump` 17 emits it, a
+  PG 16 server rejects it. `restore-postgres.sh` now filters that one line.
+- **Key-table check** used tables that are legitimately empty
+  (`company.actions`, `observer.decisions`); it now checks
+  `company.hive_events` / `company.hive_work_items`.
+- **`provision-db-roles.sh` verification** failed falsely because the DSN
+  userinfo overrode env credentials; it now rewrites the DSN to the role's own.
+- **hermes-data glob**: the runbook glob had a trailing `_*` and produced an
+  empty 20-byte tarball three times. Use
+  `sudo ls -d /var/lib/rancher/k3s/storage/*_company-ops_hermes-data` and
+  check the size before moving it.
+- **`hermes-data-backup` Job stays Pending** with the gateway at 0: its pod
+  affinity requires a running `hermes-gateway`. Use a node-disk tarball for
+  the final cutover.
+- **Hive needs `CREATE` on schema `company` and ownership of `company.hive_*`.**
+  It runs `CREATE TABLE/INDEX IF NOT EXISTS` at boot. The old production ACL
+  was `hermes_company=UC`; the manifest only produced `U`, and the restore
+  made `postgres` the table owner. Fixed by `CREATE` in
+  `sql/roles.d/hermes_company.yaml` (schema-level privilege, supported by
+  `provision-db-roles.sh`) and, **manually on `pop-os-1`**:
+  `ALTER TABLE company.<t> OWNER TO hermes_company` for each `hive_*` table.
+  **TODO:** make `restore-postgres.sh` reassign `hive_*` ownership after a
+  restore so the next migration needs no manual step.
+- **Missing ServiceAccount**: `kubectl apply -k` was not used; applying a single
+  manifest skips `rbac.yaml`/`builder-rbac.yaml`, and Deployments then sit with
+  `serviceaccount "company-ops" not found`. Apply RBAC first.
+- **`pkill -f` / `pgrep -f`** match the caller's own command line over SSH;
+  use pid files or exact process names.
+
+### Tooling notes for agents
+
+- The auto-mode classifier blocks remote shell writes, secret reads and
+  restores unless the user adds a Bash permission rule for the SSH command in
+  `.claude/settings.local.json`. Do not work around a denial; hand the user the
+  exact commands.
+- Never print `company-ops-secrets` values or DSNs.
+
+### Status at time of writing
+
+All services running on `pop-os-1` (applied individually, RBAC first):
+operator, registry, postgres, hive-coordinator, hermes-gateway, pm-agent,
+browser-adversary, engineering-agent, engineering-opencode,
+engineering-opencode-direct. Build dispatchers applied but scaled to 0 (as on
+the old cluster). Engineering pods run at the manifest's 1 replica (old live
+count was 3). Smoke checks passed: pm-agent `/healthz` 200, hive agent card
+200, hermes API `/health` 200.
+
+Not yet verified or open:
+
+- **Discord**: no connect line in the gateway log; confirm with a real message
+  that the bot answers exactly once (old gateway is scaled to 0).
+- Gateway MCP warnings seen after restart: `hermes_build_dispatcher`
+  (expected, dispatcher at 0), `k8s_deployment` (npx server closes
+  immediately), `axiom` (`AXIOM_QUERY_TOKEN` unset in the profile), and
+  "Nous Portal not configured". Compare with the old gateway's logs before
+  treating any as a migration regression.
+- CronJobs `dns-healthcheck`, `postgres-backup`, `hermes-data-backup` are
+  applied; a one-off `postgres-backup` run uploaded a dump to R2 on the new
+  host. Keep `buildmyhouse-dev-deployer` suspended.
+- `k8s/pm-agent-gateway.yaml`: nginx container (NodePort 30420) that enforces
+  `PM_AGENT_AUTH_TOKEN` in front of pm-agent, which has no auth of its own.
+  Needs `PM_AGENT_AUTH_TOKEN` in `company-ops-secrets` (Infisical `/hermes`)
+  or the pod stays in CreateContainerConfigError (intentional fail-closed).
+- Expose `pm-agent` to the site over Tailscale (NodePort or
+  `tailscale serve`; set `PM_AGENT_URL` and `PM_AGENT_AUTH_TOKEN` in the app's
+  Infisical project), repoint operator kubeconfig/`.mcp.json`, merge PR #11 and
+  promote to `prod`, rotate the secrets exposed during the migration, then stop
+  k3s on the old workstation (user runs `sudo`; keep its data for rollback).

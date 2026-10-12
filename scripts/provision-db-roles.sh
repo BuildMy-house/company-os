@@ -98,7 +98,7 @@ for f in "${files[@]}"; do
     else
       [[ "$b" =~ ^[a-z_][a-z0-9_]*$ ]] || die "$f: invalid schema '$b'"
       [[ "$c" = '*' || "$c" =~ ^[a-z_][a-z0-9_]*(,[a-z_][a-z0-9_]*)*$ ]] || die "$f: invalid tables '$c'"
-      [[ "$d" =~ ^(SELECT|INSERT|UPDATE|DELETE|TRUNCATE)(,(SELECT|INSERT|UPDATE|DELETE|TRUNCATE))*$ ]] \
+      [[ "$d" =~ ^(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|CREATE)(,(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|CREATE))*$ ]] \
         || die "$f: invalid privileges '$d'"
       GRANTS+=("$a"$'\t'"$b"$'\t'"$c"$'\t'"$d")
     fi
@@ -169,6 +169,13 @@ emit_sql() { # $1 = role, $2 = password literal (real or <redacted>)
     IFS=$'\t' read -r gr schema tables privs <<< "$line"
     [ "$gr" = "$r" ] || continue
     echo "GRANT USAGE ON SCHEMA \"$schema\" TO \"$r\";"
+    # CREATE is a schema-level privilege (e.g. hive runs CREATE TABLE IF NOT EXISTS at boot).
+    if [[ ",$privs," == *",CREATE,"* ]]; then
+      echo "GRANT CREATE ON SCHEMA \"$schema\" TO \"$r\";"
+    else
+      echo "REVOKE CREATE ON SCHEMA \"$schema\" FROM \"$r\";"
+    fi
+    privs="$(printf '%s' ",$privs," | sed 's/,CREATE,/,/; s/^,//; s/,$//')"
     denied=""
     for p in INSERT UPDATE DELETE TRUNCATE; do
       [[ ",$privs," == *",$p,"* ]] || denied="${denied:+$denied, }$p"
@@ -210,7 +217,19 @@ done
 fail=0
 for r in "${SELECTED[@]}"; do
   [ "${LOGIN[$r]}" = true ] || continue
-  who="$(PGUSER="$r" PGPASSWORD="${PW[$r]}" psql -X -q -t -A ${PG_ADMIN_DSN:+--dbname "$PG_ADMIN_DSN"} \
+  # Credentials embedded in a DSN override PGUSER/PGPASSWORD, so swap the admin
+  # userinfo for this role's before logging in (secrets travel via env, not argv).
+  role_dsn=""
+  if [ -n "${PG_ADMIN_DSN:-}" ]; then
+    role_dsn="$(VERIFY_DSN="$PG_ADMIN_DSN" VERIFY_ROLE="$r" VERIFY_PW="${PW[$r]}" python3 -c '
+import os, urllib.parse as u
+p = u.urlsplit(os.environ["VERIFY_DSN"])
+host = p.hostname or ""
+if ":" in host: host = "[" + host + "]"
+netloc = u.quote(os.environ["VERIFY_ROLE"], safe="") + ":" + u.quote(os.environ["VERIFY_PW"], safe="") + "@" + host + (":" + str(p.port) if p.port else "")
+print(u.urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment)))')"
+  fi
+  who="$(PGUSER="$r" PGPASSWORD="${PW[$r]}" psql -X -q -t -A ${role_dsn:+--dbname "$role_dsn"} \
         -c 'SELECT current_user' 2>/dev/null)" || who=""
   if [ "$who" = "$r" ]; then echo "    login OK: $r"; else echo "    LOGIN FAILED: $r" >&2; fail=1; fi
   # Catch the "blank password wrote a broken DSN" failure: the stored DSN must embed this password.

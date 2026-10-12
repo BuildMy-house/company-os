@@ -126,7 +126,7 @@ Prereqs: kubectl (kubeconfig for the new cluster), node 18+, jq.
 4. Install the Infisical Secrets Operator (once, if not present):
 
    ```sh
-   helm repo add infisical-helm-charts https://dl.cloudsmith.io/public/infisical/helm-charts/helm.chart.repo
+   helm repo add infisical-helm-charts https://dl.cloudsmith.io/public/infisical/helm-charts/helm/charts/
    helm install operator-namespaced infisical-helm-charts/secrets-operator \
      -n company-ops --create-namespace \
      --set scopedNamespaces="{company-ops,buildmyhouse-dev}" --set scopedRBAC=true

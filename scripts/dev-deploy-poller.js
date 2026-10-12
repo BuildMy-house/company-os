@@ -22,6 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { fetchAxiomBuildArgs } from "./dev-build-args.js";
 import { buildAndPush, k8sRequest, NAMESPACE as BUILDER_NAMESPACE } from "./builder-manager-mcp.js";
 
 const execFileAsync = promisify(execFile);
@@ -33,7 +34,7 @@ const REPO = "BuildMy-house/app";
 const BRANCH = "dev";
 
 const IMAGES = [
-  { repo: "buildmyhouse-app", dockerfile: "Dockerfile", deployment: "buildmyhouse-dev-app", container: "buildmyhouse-dev-app" },
+  { repo: "buildmyhouse-app", dockerfile: "Dockerfile", axiomBuildArgs: true, deployment: "buildmyhouse-dev-app", container: "buildmyhouse-dev-app" },
   { repo: "buildmyhouse-mcp", dockerfile: "mcp/Dockerfile", deployment: "buildmyhouse-dev-mcp", container: "buildmyhouse-dev-mcp" },
   { repo: "buildmyhouse-luxcore", dockerfile: "luxcore/Dockerfile", deployment: "buildmyhouse-dev-luxcore", container: "buildmyhouse-dev-luxcore" },
 ];
@@ -185,9 +186,15 @@ async function main() {
   const tag = `dev-${shortSha}`;
   const contextRef = `https://github.com/${REPO}.git#${latestSha}`;
 
+  // Only the app image bakes client telemetry (VITE_AXIOM_*). Fail closed: a
+  // missing/invalid Infisical value aborts the run before any build starts.
+  const axiomBuildArgs = await fetchAxiomBuildArgs();
+  log("BUILDING", `fetched ${Object.keys(axiomBuildArgs).join(", ")} from Infisical (values not logged)`);
+
   const built = [];
   for (const image of IMAGES) {
     const result = await buildAndPush({
+      ...(image.axiomBuildArgs ? { build_args: axiomBuildArgs } : {}),
       context_ref: contextRef,
       dockerfile_path: image.dockerfile,
       image_repo: image.repo,

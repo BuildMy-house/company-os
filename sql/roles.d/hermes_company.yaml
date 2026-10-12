@@ -1,4 +1,5 @@
-# Full CRUD on the company schema (current + future tables).
+# Full CRUD on the company schema (current + future tables). CREATE is needed
+# because hive-coordinator runs CREATE TABLE IF NOT EXISTS company.hive_* at boot.
 name: hermes_company
 login: true
 password_key: COMPANY_PASSWORD
@@ -6,4 +7,4 @@ dsn_key: COMPANY_DATABASE_URL
 grants:
   - schema: company
     tables: all
-    privileges: [SELECT, INSERT, UPDATE, DELETE]
+    privileges: [SELECT, INSERT, UPDATE, DELETE, CREATE]

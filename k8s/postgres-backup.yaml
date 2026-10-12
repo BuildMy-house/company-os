@@ -16,7 +16,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: backup
-              image: localhost:30500/company-os@sha256:527382b201dd815d5d25eccd8f9e7bb20c20eee12ebc4063d760bfa98c8dac78
+              image: localhost:30500/company-os@sha256:89b92c0be5cc05aa23d10043c89a5dcb3de6a925783f33321952985d8d761b4b
               imagePullPolicy: Always
               command: ["/opt/company-ops-venv/bin/python", "-m", "company_ops.backup"]
               envFrom:
