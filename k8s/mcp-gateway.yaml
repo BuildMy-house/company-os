@@ -1,0 +1,229 @@
+# Supervised Streamable-HTTP MCP gateway (docs/MCP-GATEWAY.md). One-time admin apply:
+#   kubectl apply -f k8s/mcp-gateway.yaml
+# Not part of kustomization.yaml on purpose: nothing applies this automatically.
+#
+# Exposure: NodePort 30430 on pop-os-1 only, restricted to the tailnet (100.64.0.0/10)
+# by NetworkPolicy AND scripts/mcp-gateway-host-firewall.sh (ufw INPUT does not
+# filter DNAT'd NodePort traffic, so the host script uses the FORWARD/PREROUTING path).
+# Every client needs its own bearer token (Secret mcp-gateway-tokens, synced from Infisical
+# /mcp-gateway by k8s/infisical-sync.yaml); a request without one gets 401.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-gateway
+  namespace: company-ops
+automountServiceAccountToken: true
+---
+# Cluster-wide read-only, per the decisions addendum: nodes, namespaces, pods, pods/log,
+# events, services (get/list) and apps deployments, verbs get/list/watch only. No secrets,
+# no configmaps, no write verbs, no exec. One ClusterRole instead of a namespaced Role so
+# there is a single RBAC definition to keep in sync.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-gateway-read
+rules:
+  - apiGroups: [""]
+    resources: [nodes, namespaces, pods, pods/log, events]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mcp-gateway-read
+subjects:
+  - kind: ServiceAccount
+    name: mcp-gateway
+    namespace: company-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mcp-gateway-read
+---
+# Default-deny: a tool is reachable only if listed under clients.<id>.servers.<name>.tools.
+# Hive identities get read tools + hive_submit only (no bid/complete/heartbeat/next_work,
+# per the review decisions). Three client identities — local-claude, local-opencode,
+# local-codex — one token and one agentId each. container-manager is deliberately NOT
+# exposed to any client yet (privileged identity follow-up, see docs/MCP-GATEWAY.md); its
+# server entry exists so it can be enabled by adding one client allowlist without a new image.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-gateway-policy
+  namespace: company-ops
+data:
+  policy.json: |
+    {
+      "maxConcurrentLongPolls": 4,
+      "servers": {
+        "hive": {
+          "command": ["node", "/opt/mcp-gateway/scripts/hive-member-mcp.js"],
+          "env": { "HIVE_REGISTER": "false" },
+          "longPollTools": ["hive_wait"],
+          "callTimeoutSeconds": 960
+        },
+        "kubernetes": {
+          "command": ["/opt/mcp-gateway/node_modules/.bin/kubernetes-mcp-server", "--disable-destructive", "--log-file", "stderr", "--cluster-provider", "in-cluster"],
+          "redactTools": ["pods_log", "resources_get", "events_list"],
+          "callTimeoutSeconds": 60
+        },
+        "container-manager": {
+          "command": ["node", "/opt/mcp-gateway/scripts/container-manager-mcp.js"],
+          "callTimeoutSeconds": 600
+        }
+      },
+      "clients": {
+        "local-claude": {
+          "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_CLAUDE_TOKEN",
+          "servers": {
+            "hive": {
+              "agentId": "local-claude",
+              "tools": ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"]
+            },
+            "kubernetes": {
+              "tools": ["namespaces_list", "pods_list", "pods_list_in_namespace", "pods_get", "pods_log", "events_list", "resources_list", "resources_get"]
+            }
+          }
+        },
+        "local-opencode": {
+          "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_OPENCODE_TOKEN",
+          "servers": {
+            "hive": {
+              "agentId": "local-opencode",
+              "tools": ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"]
+            },
+            "kubernetes": {
+              "tools": ["namespaces_list", "pods_list", "pods_list_in_namespace", "pods_get", "pods_log", "events_list", "resources_list", "resources_get"]
+            }
+          }
+        },
+        "local-codex": {
+          "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_CODEX_TOKEN",
+          "servers": {
+            "hive": {
+              "agentId": "local-codex",
+              "tools": ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"]
+            },
+            "kubernetes": {
+              "tools": ["namespaces_list", "pods_list", "pods_list_in_namespace", "pods_get", "pods_log", "events_list", "resources_list", "resources_get"]
+            }
+          }
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-gateway
+  namespace: company-ops
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mcp-gateway
+  template:
+    metadata:
+      labels:
+        app: mcp-gateway
+    spec:
+      serviceAccountName: mcp-gateway
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-gateway
+          # Pinned by digest after the BuildKit build (see docs/MCP-GATEWAY.md).
+          image: localhost:30500/company-os-mcp-gateway@sha256:85dff6e558a111cb87623d46782870dca1a159dea42f766993bcea8cce5158f2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MCP_GATEWAY_POLICY
+              value: /etc/mcp-gateway/policy/policy.json
+            - name: HIVE_URL
+              value: http://hive-coordinator:4100
+            - name: AXIOM_SERVICE_NAME
+              value: mcp-gateway
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: production
+            - name: AXIOM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: company-ops-secrets
+                  key: AXIOM_TOKEN
+                  optional: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: policy, mountPath: /etc/mcp-gateway/policy, readOnly: true }
+            - { name: tokens, mountPath: /etc/mcp-gateway/tokens, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: policy
+          configMap:
+            name: mcp-gateway-policy
+        - name: tokens
+          secret:
+            secretName: mcp-gateway-tokens
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-gateway
+  namespace: company-ops
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector:
+    app: mcp-gateway
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30430
+---
+# Ingress only from the tailnet (100.64.0.0/10); LAN sources removed per the review
+# decisions. Enforcement depends on the cluster's NetworkPolicy controller and is unproven
+# until the rollout check in docs/MCP-GATEWAY.md passes; the host firewall script is the
+# second layer.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-gateway-ingress
+  namespace: company-ops
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp-gateway
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock: { cidr: 100.64.0.0/10 }
+      ports:
+        - protocol: TCP
+          port: 8080

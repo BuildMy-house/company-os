@@ -49,7 +49,10 @@ async function registerWithHive() {
   }
 }
 
-void registerWithHive();
+// HIVE_REGISTER=false keeps this identity out of /agents/register entirely. The MCP gateway
+// sets it for local (workstation) identities, which may read and hive_submit but must never
+// appear as an allocatable worker (documents/plans/mcp-gateway-decisions item 3).
+if (process.env.HIVE_REGISTER !== "false") void registerWithHive();
 
 async function request(path, options = {}) {
   const response = await fetch(`${base}${path}`, {

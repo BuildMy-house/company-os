@@ -24,7 +24,7 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | POSTGRES_PASSWORD | company-ops-secrets | postgres.yaml, entrypoint.sh | yes | Build My house `/hermes` |
 | COMPANY_PASSWORD, OBSERVER_PASSWORD, ANALYTICS_PASSWORD, PM_AGENT_WRITER_PASSWORD (each role's `password_key` in `sql/roles.d/*.yaml`) | read by `scripts/provision-db-roles.sh` from env or Infisical | role provisioning (see below) | yes | `/hermes` (NOT `/infra`) |
 | COMPANY_DATABASE_URL, OBSERVER_DATABASE_URL, ANALYTICS_DATABASE_URL | company-ops-secrets | hermes-gateway, engineering pods | yes | `/hermes` |
-| PM_DATABASE_URL | company-ops-secrets (orphaned — no live sync source) | company_ops/pm_store.py, pm-agent/agent.py | **NO — gap** | `/hermes` |
+| PM_DATABASE_URL, PM_AGENT_LLM_API_KEY | `pm-agent-secrets` (own Secret, `k8s/pm-agent-infisical-sync.yaml`; pm-agent no longer reads company-ops-secrets) | pm-agent only (docs/PM-AGENT-HERMES.md) | **NO — gap** | `/pm-agent` (exactly these two keys) |
 | DISCORD_BOT_TOKEN | company-ops-secrets | hermes-gateway | yes | `/hermes` |
 | DISCORD_ALLOWED_CHANNELS, DISCORD_ALLOW_ALL_USERS, DISCORD_ANNOUNCE_CHANNEL, DISCORD_BLOG_CHANNEL, DISCORD_HIL_CHANNEL, DISCORD_FINANCE_CHANNEL, DISCORD_DM_USER | company-ops-secrets | hermes-gateway, company_ops/human_interface.py | yes | `/hermes` |
 | NOUS_API_KEY | company-ops-secrets | hermes model inference | yes | `/hermes` |
@@ -80,13 +80,15 @@ placeholder, so a blank secret can never clear a live role's password.
 
 ## Gap list — add these to Infisical (Nahar action, Infisical UI/CLI)
 
-Project **Build My house**, environment **dev**, folder **`/hermes`** — create this key:
+Project **Build My house**, environment **dev**, new folder **`/pm-agent`** — create exactly these two keys (nothing else; the sync copies every key in the folder into `pm-agent-secrets`):
 
-1. `PM_DATABASE_URL`
+1. `PM_DATABASE_URL` (DSN for the `pm_agent_writer` role)
+2. `PM_AGENT_LLM_API_KEY` (dedicated, spend-capped LLM key for pm-agent only)
 
 `AXIOM_DATASET` (`bmh-company`) and `AXIOM_ENDPOINT` (`https://api.axiom.co`) are
-already present in `/hermes`. `PM_DATABASE_URL` survives in the live Secret only
-as drift from an older sync.
+already present in `/hermes`. pm-agent uses neither. A stale `PM_DATABASE_URL`
+may survive in the live `company-ops-secrets` as drift from an older sync; it is
+no longer consumed by anything and can be removed.
 
 Optional additions if those features are used:
 `DISCORD_ALLOWED_USERS`, `DISCORD_HOME_CHANNEL` (forwarded by entrypoint.sh

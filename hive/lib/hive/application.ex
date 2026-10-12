@@ -6,6 +6,7 @@ defmodule Hive.Application do
     children = [
       Hive.Tasks,
       Hive.Work,
+      Hive.Reaper,
       {Plug.Cowboy,
        scheme: :http,
        plug: Hive.Router,

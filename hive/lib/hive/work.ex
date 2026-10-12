@@ -66,6 +66,19 @@ defmodule Hive.Work do
   def heartbeat(work_ref, agent_id, lease_seconds),
     do: heartbeat_after_expiry_recovery(work_ref, agent_id, lease_seconds)
 
+  @doc """
+  Recovers every claimed item whose lease expired without a heartbeat. Items under
+  the attempt limit return to `available` and wake work subscribers (redispatch);
+  items at the limit move to `escalated` and emit `work.escalated`. Returns the
+  affected task ids.
+  """
+  def reap, do: GenServer.call(__MODULE__, :reap)
+
+  def max_attempts do
+    Application.get_env(:hive, :max_attempts) ||
+      "HIVE_MAX_ATTEMPTS" |> System.get_env("3") |> String.to_integer()
+  end
+
   def get(id_or_slug),
     do: with_id(id_or_slug, fn id -> GenServer.call(__MODULE__, {:get, id}) end)
 
@@ -333,6 +346,19 @@ defmodule Hive.Work do
       end
 
     {:reply, if(resolved, do: {:ok, resolved}, else: {:error, :not_found}), state}
+  end
+
+  def handle_call(:reap, _from, %{memory: _memory} = state) do
+    before = length(state.memory.events)
+    {_items, state} = available_memory(state, 0, nil)
+    new_events = Enum.take(state.memory.events, length(state.memory.events) - before)
+    {:reply, {:ok, reap_summary(new_events)}, state}
+  end
+
+  def handle_call(:reap, _from, %{db: db} = state) do
+    events = transaction!(db, &recover_expired_db/1)
+    settle_recovery(events)
+    {:reply, {:ok, reap_summary(events)}, state}
   end
 
   def handle_call({:available, limit}, _from, %{memory: _memory} = state) do
@@ -1250,23 +1276,26 @@ defmodule Hive.Work do
 
     {work, failure_events} =
       Enum.reduce(expired, {memory.work, []}, fn {id, item}, {items, events} ->
+        attempt = item.attempt || 0
+        next_state = retry_state(attempt)
+
         failure = %{
           "agent_id" => item.claimed_by,
           "reason" => "lease_expired",
-          "retry_state" => "available",
+          "retry_state" => next_state,
           "slug" => item["slug"]
         }
 
         failed =
           Map.merge(item, %{
-            state: "available",
+            state: next_state,
             claimed_by: nil,
             lease_expires_at: nil,
             last_failure: failure
           })
 
-        event = event("engineering.failed", id, failure, item.attempt || 0)
-        {Map.put(items, id, failed), [event | events]}
+        new_events = recovery_events(id, failure, attempt)
+        {Map.put(items, id, failed), Enum.reverse(new_events) ++ events}
       end)
 
     bids =
@@ -1283,7 +1312,7 @@ defmodule Hive.Work do
       end)
       |> Enum.take(limit)
 
-    Enum.each(failure_events, &notify_event_subscribers/1)
+    settle_recovery(failure_events)
 
     next_memory = %{
       memory
@@ -1297,7 +1326,7 @@ defmodule Hive.Work do
 
   defp available_db(db, limit, agent_id) do
     failure_events = transaction!(db, &recover_expired_db/1)
-    Enum.each(failure_events, &notify_event_subscribers/1)
+    settle_recovery(failure_events)
 
     {query, params} =
       if is_nil(agent_id) do
@@ -1425,6 +1454,52 @@ defmodule Hive.Work do
     )
   end
 
+  # Redispatch below the attempt limit, escalate at it: a task that already burned
+  # `max_attempts` leases is not retried forever, a human or manager must requeue it.
+  defp retry_state(attempt), do: if(attempt >= max_attempts(), do: "escalated", else: "available")
+
+  defp recovery_events(id, %{"retry_state" => "escalated"} = failure, attempt) do
+    escalation =
+      Map.merge(failure, %{"reason" => "max_attempts_exceeded", "max_attempts" => max_attempts()})
+
+    [
+      event("engineering.failed", id, failure, attempt),
+      event("work.escalated", id, escalation, attempt)
+    ]
+  end
+
+  defp recovery_events(id, failure, attempt),
+    do: [event("engineering.failed", id, failure, attempt)]
+
+  defp settle_recovery(events) do
+    Enum.each(events, &notify_event_subscribers/1)
+
+    for %{
+          "topic" => "engineering.failed",
+          "task_id" => id,
+          "payload" => %{"retry_state" => "available"}
+        } <-
+          events,
+        do: notify_subscribers(id)
+
+    :ok
+  end
+
+  defp reap_summary(events) do
+    %{
+      redispatched:
+        for(
+          %{
+            "topic" => "engineering.failed",
+            "task_id" => id,
+            "payload" => %{"retry_state" => "available"}
+          } <- events,
+          do: id
+        ),
+      escalated: for(%{"topic" => "work.escalated", "task_id" => id} <- events, do: id)
+    }
+  end
+
   defp recover_expired_db(tx) do
     expired =
       Postgrex.query!(
@@ -1434,20 +1509,22 @@ defmodule Hive.Work do
       )
       |> rows()
 
-    Enum.map(expired, fn %{
-                           "id" => id,
-                           "claimed_by" => agent_id,
-                           "attempt" => attempt,
-                           "payload" => payload
-                         } ->
+    Enum.flat_map(expired, fn %{
+                                "id" => id,
+                                "claimed_by" => agent_id,
+                                "attempt" => attempt,
+                                "payload" => payload
+                              } ->
+      next_state = retry_state(attempt)
+
       failure = %{
         "agent_id" => agent_id,
         "reason" => "lease_expired",
-        "retry_state" => "available",
+        "retry_state" => next_state,
         "slug" => get_in(payload, ["slug"])
       }
 
-      failed_event = event("engineering.failed", id, failure, attempt)
+      events = recovery_events(id, failure, attempt)
 
       Postgrex.query!(
         tx,
@@ -1457,12 +1534,12 @@ defmodule Hive.Work do
 
       Postgrex.query!(
         tx,
-        "UPDATE company.hive_work_items SET state = 'available', claimed_by = NULL, lease_expires_at = NULL, last_failure = $2::jsonb, updated_at = now() WHERE id = $1 AND state = 'claimed' AND lease_expires_at < now()",
-        [id, Jason.encode!(failure)]
+        "UPDATE company.hive_work_items SET state = $3, claimed_by = NULL, lease_expires_at = NULL, last_failure = $2::jsonb, updated_at = now() WHERE id = $1 AND state = 'claimed' AND lease_expires_at < now()",
+        [id, Jason.encode!(failure), next_state]
       )
 
-      persist_event(tx, failed_event)
-      failed_event
+      Enum.each(events, &persist_event(tx, &1))
+      events
     end)
   end
 

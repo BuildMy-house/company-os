@@ -1,0 +1,8 @@
+{
+  "name": "mcp-gateway-deps",
+  "private": true,
+  "description": "Pinned third-party MCP child servers hosted by scripts/mcp-gateway.js",
+  "dependencies": {
+    "kubernetes-mcp-server": "0.0.67"
+  }
+}
