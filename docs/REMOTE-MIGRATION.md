@@ -108,7 +108,8 @@ kubectl exec -n company-ops deploy/postgres -- gzip -c /tmp/final-dump.sql > /tm
 # (or trigger the R2 pipeline: kubectl create job --from=cronjob/postgres-backup postgres-final-cutover -n company-ops)
 
 # hermes-data PVC tarball (node filesystem — local-path)
-D=$(ls -d /var/lib/rancher/k3s/storage/*_company-ops_hermes-data_* | head -1)
+D=$(sudo ls -d /var/lib/rancher/k3s/storage/*_company-ops_hermes-data | head -1)
+[ -n "$D" ] || { echo "hermes-data volume dir not found"; exit 1; }
 sudo tar -czf /tmp/hermes-data-final.tar.gz -C "$D" .
 sha256sum /tmp/hermes-data-final.tar.gz
 ```
@@ -181,7 +182,8 @@ scripts/restore-postgres.sh homely_company
 scripts/provision-db-roles.sh --dry-run && scripts/provision-db-roles.sh
 
 # 5d. Restore hermes-data
-D=$(ls -d /var/lib/rancher/k3s/storage/*_company-ops_hermes-data_* | head -1)
+D=$(sudo ls -d /var/lib/rancher/k3s/storage/*_company-ops_hermes-data | head -1)
+[ -n "$D" ] || { echo "hermes-data volume dir not found"; exit 1; }
 sudo tar -xzf /tmp/hermes-data-final.tar.gz -C "$D"
 ```
 
