@@ -1,0 +1,16 @@
+# Slim image for the supervised Streamable-HTTP MCP gateway (docs/MCP-GATEWAY.md).
+# Build from the repo root through builder_build_and_push (immutable commit SHA).
+FROM node:22-bookworm-slim
+
+WORKDIR /opt/mcp-gateway
+# Pinned third-party child (kubernetes-mcp-server) from the lockfile; no dev tooling,
+# no package-manager cache, no browser, no agent CLIs.
+COPY mcp-gateway/package.json mcp-gateway/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
+COPY scripts/mcp-gateway.js scripts/hive-member-mcp.js scripts/container-manager-mcp.js ./scripts/
+
+USER node
+ENV NODE_ENV=production PORT=8080
+EXPOSE 8080
+CMD ["node", "/opt/mcp-gateway/scripts/mcp-gateway.js"]

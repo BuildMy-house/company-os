@@ -298,3 +298,27 @@ test("hive_complete validates feedback client-side and forwards to Steward", asy
   assert.match(report.arguments.learned_for_agents, /lease expiry rule/);
   assert.equal(hive.completeHits, 2);
 });
+
+test("HIVE_REGISTER=false never calls /agents/register, default still registers", async (t) => {
+  async function registrations(env) {
+    const paths = [];
+    const server = createServer((request, response) => {
+      paths.push(request.url);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const child = spawn(process.execPath, [memberScript], {
+      env: { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "register-test", ...env },
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    child.kill();
+    server.closeAllConnections();
+    server.close();
+    return paths.filter((path) => path === "/agents/register").length;
+  }
+  assert.equal(await registrations({ HIVE_REGISTER: "false" }), 0);
+  assert.equal(await registrations({}), 1);
+});

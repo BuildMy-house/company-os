@@ -30,6 +30,7 @@ agent-driven builds; this script is the fresh-host/local-up path.
 | `company-os-hive` | `:events` (hive.yaml) | hive-coordinator | `hive/Dockerfile` | repo root | — | build-push-images.sh |
 | `company-os-pm-agent` | `:latest` (pm-agent.yaml — **not** in kustomization; apply separately if wanted) | pm-agent | `pm-agent/Dockerfile` | repo root | — | build-push-images.sh |
 | `company-os-browser-adversary` | `:latest` (browser-adversary.yaml) | browser-adversary | `Dockerfile.browser-adversary` | repo root | — | build-push-images.sh |
+| `company-os-mcp-gateway` | digest-pinned (mcp-gateway.yaml — **not** in kustomization; admin applies once) | mcp-gateway | `Dockerfile.mcp-gateway` | repo root | — | `builder_build_and_push` only (see docs/MCP-GATEWAY.md) |
 
 Upstream images, never built here: `postgres:16-alpine` (postgres.yaml),
 `registry:2` (registry.yaml).
