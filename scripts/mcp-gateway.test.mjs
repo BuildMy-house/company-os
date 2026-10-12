@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createGateway, redact } from "./mcp-gateway.js";
 
 const dir = mkdtempSync(join(tmpdir(), "gw-"));
@@ -84,4 +85,70 @@ test("child crash returns an error then the child is respawned", async () => {
     await new Promise((r) => setTimeout(r, 300));
   }
   assert.ok(ok.result, "child should recover");
+});
+
+// Manifest tests: parse the policy JSON out of the ConfigMap in k8s/mcp-gateway.yaml so the
+// deployed allowlist cannot silently drift from what the review decisions require.
+const manifest = readFileSync(fileURLToPath(new URL("../k8s/mcp-gateway.yaml", import.meta.url)), "utf8");
+
+function configMapPolicy(source, name) {
+  for (const doc of source.split(/^---\n/m)) {
+    if (!doc.includes("kind: ConfigMap") || !new RegExp(`^  name: ${name}$`, "m").test(doc)) continue;
+    const lines = doc.split("\n");
+    const start = lines.indexOf("  policy.json: |");
+    assert.ok(start !== -1, `policy.json block not found in ConfigMap ${name}`);
+    const block = [];
+    for (const line of lines.slice(start + 1)) {
+      if (line === "" || line.startsWith("    ")) block.push(line.slice(4));
+      else break;
+    }
+    return JSON.parse(block.join("\n"));
+  }
+  assert.fail(`ConfigMap ${name} not found in k8s/mcp-gateway.yaml`);
+}
+
+test("manifest policy: no client lists hive bid/complete/heartbeat/next_work/allocate tools", () => {
+  const policy = configMapPolicy(manifest, "mcp-gateway-policy");
+  const flat = JSON.stringify(policy);
+  for (const tool of ["hive_bid", "hive_complete", "hive_heartbeat", "hive_next_work", "hive_allocate", "allocate"]) {
+    assert.ok(!flat.includes(tool), `policy must not mention ${tool}`);
+  }
+  assert.ok(!policy.servers.hive.longPollTools.includes("hive_next_work"), "hive_next_work must not be a long poll tool");
+  assert.ok(policy.servers.hive.longPollTools.includes("hive_wait"), "hive_wait must stay a long poll tool");
+  const hiveAllowed = ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"];
+  for (const [id, client] of Object.entries(policy.clients)) {
+    assert.deepEqual(
+      [...(client.servers.hive?.tools ?? [])].sort(),
+      hiveAllowed,
+      `client ${id} hive allowlist must be exactly the read tools + hive_submit`,
+    );
+  }
+});
+
+test("manifest policy: three clients with distinct agentIds and tokenFiles", () => {
+  const policy = configMapPolicy(manifest, "mcp-gateway-policy");
+  const ids = Object.keys(policy.clients);
+  assert.equal(ids.length, 3);
+  assert.deepEqual([...ids].sort(), ["local-claude", "local-codex", "local-opencode"]);
+  const agentIds = new Set();
+  const tokenFiles = new Set();
+  for (const [id, client] of Object.entries(policy.clients)) {
+    assert.equal(client.servers.hive.agentId, id, `agentId must equal identity name ${id}`);
+    assert.equal(client.tokenFile, `/etc/mcp-gateway/tokens/${id.toUpperCase().replaceAll("-", "_")}_TOKEN`);
+    agentIds.add(client.servers.hive.agentId);
+    tokenFiles.add(client.tokenFile);
+  }
+  assert.equal(agentIds.size, 3, "agentIds must be distinct");
+  assert.equal(tokenFiles.size, 3, "tokenFiles must be distinct");
+  const reference = policy.clients["local-claude"].servers;
+  assert.deepEqual(Object.keys(reference).sort(), ["hive", "kubernetes"]);
+  for (const server of Object.keys(reference)) {
+    for (const [id, client] of Object.entries(policy.clients)) {
+      assert.deepEqual(
+        [...client.servers[server].tools].sort(),
+        [...reference[server].tools].sort(),
+        `client ${id} ${server} allowlist must mirror local-claude`,
+      );
+    }
+  }
 });

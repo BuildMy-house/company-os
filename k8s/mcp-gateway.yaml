@@ -2,11 +2,11 @@
 #   kubectl apply -f k8s/mcp-gateway.yaml
 # Not part of kustomization.yaml on purpose: nothing applies this automatically.
 #
-# Exposure: NodePort 30430 on pop-os-1 only, restricted to the tailnet/LAN source ranges
-# below by NetworkPolicy AND scripts/mcp-gateway-host-firewall.sh (ufw INPUT does not
+# Exposure: NodePort 30430 on pop-os-1 only, restricted to the tailnet (100.64.0.0/10)
+# by NetworkPolicy AND scripts/mcp-gateway-host-firewall.sh (ufw INPUT does not
 # filter DNAT'd NodePort traffic, so the host script uses the FORWARD/PREROUTING path).
 # Every client needs its own bearer token (Secret mcp-gateway-tokens, synced from Infisical
-# /infra/mcp-gateway by k8s/infisical-sync.yaml); a request without one gets 401.
+# /mcp-gateway by k8s/infisical-sync.yaml); a request without one gets 401.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -14,38 +14,44 @@ metadata:
   namespace: company-ops
 automountServiceAccountToken: true
 ---
-# Read-only, namespaced, no secrets, no nodes/proxy, no write verbs, no exec.
+# Cluster-wide read-only, per the decisions addendum: nodes, namespaces, pods, pods/log,
+# events, services (get/list) and apps deployments, verbs get/list/watch only. No secrets,
+# no configmaps, no write verbs, no exec. One ClusterRole instead of a namespaced Role so
+# there is a single RBAC definition to keep in sync.
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: mcp-gateway-read
-  namespace: company-ops
 rules:
   - apiGroups: [""]
-    resources: [pods, pods/log, events, services, configmaps]
+    resources: [nodes, namespaces, pods, pods/log, events]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [services]
     verbs: [get, list]
   - apiGroups: [apps]
     resources: [deployments]
-    verbs: [get, list]
+    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
   name: mcp-gateway-read
-  namespace: company-ops
 subjects:
   - kind: ServiceAccount
     name: mcp-gateway
     namespace: company-ops
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
   name: mcp-gateway-read
 ---
 # Default-deny: a tool is reachable only if listed under clients.<id>.servers.<name>.tools.
-# container-manager is deliberately NOT exposed to any client yet (privileged identity
-# follow-up, see docs/MCP-GATEWAY.md); its server entry exists so it can be enabled by
-# adding one client allowlist without a new image.
+# Hive identities get read tools + hive_submit only (no bid/complete/heartbeat/next_work,
+# per the review decisions). Three client identities — local-claude, local-opencode,
+# local-codex — one token and one agentId each. container-manager is deliberately NOT
+# exposed to any client yet (privileged identity follow-up, see docs/MCP-GATEWAY.md); its
+# server entry exists so it can be enabled by adding one client allowlist without a new image.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -59,7 +65,7 @@ data:
         "hive": {
           "command": ["node", "/opt/mcp-gateway/scripts/hive-member-mcp.js"],
           "env": { "HIVE_REGISTER": "false" },
-          "longPollTools": ["hive_next_work", "hive_wait"],
+          "longPollTools": ["hive_wait"],
           "callTimeoutSeconds": 960
         },
         "kubernetes": {
@@ -78,7 +84,31 @@ data:
           "servers": {
             "hive": {
               "agentId": "local-claude",
-              "tools": ["hive_agents", "hive_available_work", "hive_bid", "hive_complete", "hive_diagnostics", "hive_events", "hive_heartbeat", "hive_next_work", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"]
+              "tools": ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"]
+            },
+            "kubernetes": {
+              "tools": ["namespaces_list", "pods_list", "pods_list_in_namespace", "pods_get", "pods_log", "events_list", "resources_list", "resources_get"]
+            }
+          }
+        },
+        "local-opencode": {
+          "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_OPENCODE_TOKEN",
+          "servers": {
+            "hive": {
+              "agentId": "local-opencode",
+              "tools": ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"]
+            },
+            "kubernetes": {
+              "tools": ["namespaces_list", "pods_list", "pods_list_in_namespace", "pods_get", "pods_log", "events_list", "resources_list", "resources_get"]
+            }
+          }
+        },
+        "local-codex": {
+          "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_CODEX_TOKEN",
+          "servers": {
+            "hive": {
+              "agentId": "local-codex",
+              "tools": ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"]
             },
             "kubernetes": {
               "tools": ["namespaces_list", "pods_list", "pods_list_in_namespace", "pods_get", "pods_log", "events_list", "resources_list", "resources_get"]
@@ -177,8 +207,10 @@ spec:
       targetPort: 8080
       nodePort: 30430
 ---
-# Ingress only from the tailnet and the LAN. Enforcement depends on the cluster's
-# NetworkPolicy controller and is unverified; the host firewall script is the second layer.
+# Ingress only from the tailnet (100.64.0.0/10); LAN sources removed per the review
+# decisions. Enforcement depends on the cluster's NetworkPolicy controller and is unproven
+# until the rollout check in docs/MCP-GATEWAY.md passes; the host firewall script is the
+# second layer.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -192,7 +224,6 @@ spec:
   ingress:
     - from:
         - ipBlock: { cidr: 100.64.0.0/10 }
-        - ipBlock: { cidr: 192.168.0.0/16 }
       ports:
         - protocol: TCP
           port: 8080
