@@ -210,7 +210,19 @@ done
 fail=0
 for r in "${SELECTED[@]}"; do
   [ "${LOGIN[$r]}" = true ] || continue
-  who="$(PGUSER="$r" PGPASSWORD="${PW[$r]}" psql -X -q -t -A ${PG_ADMIN_DSN:+--dbname "$PG_ADMIN_DSN"} \
+  # Credentials embedded in a DSN override PGUSER/PGPASSWORD, so swap the admin
+  # userinfo for this role's before logging in (secrets travel via env, not argv).
+  role_dsn=""
+  if [ -n "${PG_ADMIN_DSN:-}" ]; then
+    role_dsn="$(VERIFY_DSN="$PG_ADMIN_DSN" VERIFY_ROLE="$r" VERIFY_PW="${PW[$r]}" python3 -c '
+import os, urllib.parse as u
+p = u.urlsplit(os.environ["VERIFY_DSN"])
+host = p.hostname or ""
+if ":" in host: host = "[" + host + "]"
+netloc = u.quote(os.environ["VERIFY_ROLE"], safe="") + ":" + u.quote(os.environ["VERIFY_PW"], safe="") + "@" + host + (":" + str(p.port) if p.port else "")
+print(u.urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment)))')"
+  fi
+  who="$(PGUSER="$r" PGPASSWORD="${PW[$r]}" psql -X -q -t -A ${role_dsn:+--dbname "$role_dsn"} \
         -c 'SELECT current_user' 2>/dev/null)" || who=""
   if [ "$who" = "$r" ]; then echo "    login OK: $r"; else echo "    LOGIN FAILED: $r" >&2; fail=1; fi
   # Catch the "blank password wrote a broken DSN" failure: the stored DSN must embed this password.
