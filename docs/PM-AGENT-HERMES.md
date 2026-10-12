@@ -138,9 +138,9 @@ The in-cluster engineering agent should, via the hive:
 1. Infisical (project Build My house, env dev): create folder `/pm-agent` with
    exactly `PM_DATABASE_URL` (the `pm_agent_writer` DSN, existing role) and
    `PM_AGENT_LLM_API_KEY` (a new key dedicated to pm-agent with a hard spend cap;
-   the manifest assumes the TokenRouter endpoint `https://api.tokenrouter.com/v1`
-   and model `z-ai/glm-5.3-flash`, so create the key there or edit
-   `hermes-config.yaml` and the NetworkPolicy together).
+   the manifest uses the Nous inference API `https://inference-api.nousresearch.com/v1`
+   and model `meituan/longcat-2.0:free`, matching the Hermes runtime default;
+   to change provider, edit `hermes-config.yaml` and the NetworkPolicy together).
 2. Ensure the Infisical machine identity behind `infisical-auth` can read
    `/pm-agent` and the operator is allowed to create Secrets in `company-ops`.
 3. Merge PR #15 (writer UPDATE grant) before rollout: `record_message` and
