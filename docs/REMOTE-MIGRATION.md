@@ -131,10 +131,10 @@ kubectl create namespace company-ops
 kubectl -n company-ops create secret generic infisical-bootstrap-credentials \
   --from-literal=clientId='<from Infisical>' --from-literal=clientSecret='<from Infisical>'
 # 3. Infisical secrets operator (helm — same flags as documented in k8s/infisical-sync.yaml)
-helm repo add infisical-helm-charts https://dl.cloudsmith.io/public/infisical/helm-charts/helm.charts/
+helm repo add infisical-helm-charts https://dl.cloudsmith.io/public/infisical/helm-charts/helm/charts/
 helm repo update
-helm install operator-namespaced infisical-helm-charts/secrets-operator \
-  -n company-ops --set scopedNamespaces=company-ops --set scopedRBAC=true
+helm install operator-namespaced infisical-helm-charts/secrets-operator --version 0.11.9 \
+  -n company-ops --set scopedNamespaces="company-ops\,buildmyhouse-dev" --set scopedRBAC=true
 # 4. Sync CRs → operator populates company-ops-secrets + company-ops-steward-*
 kubectl apply -f k8s/infisical-sync.yaml
 kubectl get secret company-ops-secrets -n company-ops -o json | jq -r '.data|keys[]' | wc -l   # expect 44
