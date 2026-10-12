@@ -35,7 +35,7 @@ POSTGRES_ADMIN_DSN='postgresql://postgres:<pw>@<new-host>:5432/postgres' \
 
 Restores into a throwaway `restore_verify` database and prints row counts
 for every table, failing if any expected table (parsed from `sql/*.sql`) is
-missing or `company.actions` / `observer.decisions` are empty. Takes about a
+missing or `company.hive_events` / `company.hive_work_items` are empty. Takes about a
 minute at current data sizes (dumps are ~1–2 MB compressed; budget minutes,
 not hours). Drop the scratch DB when satisfied:
 

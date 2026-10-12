@@ -147,7 +147,7 @@ with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute('SELECT COUNT(*) FROM "' + table.replace('.', '"."') + '"')
         count = cur.fetchone()[0]
         print(f"  {table}: {count} rows")
-        if table in ("company.actions", "observer.decisions") and count == 0:
+        if table in ("company.hive_events", "company.hive_work_items") and count == 0:
             empty_key.append(table)
 
     if empty_key and not allow_empty:
