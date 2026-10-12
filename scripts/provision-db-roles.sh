@@ -98,7 +98,7 @@ for f in "${files[@]}"; do
     else
       [[ "$b" =~ ^[a-z_][a-z0-9_]*$ ]] || die "$f: invalid schema '$b'"
       [[ "$c" = '*' || "$c" =~ ^[a-z_][a-z0-9_]*(,[a-z_][a-z0-9_]*)*$ ]] || die "$f: invalid tables '$c'"
-      [[ "$d" =~ ^(SELECT|INSERT|UPDATE|DELETE|TRUNCATE)(,(SELECT|INSERT|UPDATE|DELETE|TRUNCATE))*$ ]] \
+      [[ "$d" =~ ^(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|CREATE)(,(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|CREATE))*$ ]] \
         || die "$f: invalid privileges '$d'"
       GRANTS+=("$a"$'\t'"$b"$'\t'"$c"$'\t'"$d")
     fi
@@ -169,6 +169,13 @@ emit_sql() { # $1 = role, $2 = password literal (real or <redacted>)
     IFS=$'\t' read -r gr schema tables privs <<< "$line"
     [ "$gr" = "$r" ] || continue
     echo "GRANT USAGE ON SCHEMA \"$schema\" TO \"$r\";"
+    # CREATE is a schema-level privilege (e.g. hive runs CREATE TABLE IF NOT EXISTS at boot).
+    if [[ ",$privs," == *",CREATE,"* ]]; then
+      echo "GRANT CREATE ON SCHEMA \"$schema\" TO \"$r\";"
+    else
+      echo "REVOKE CREATE ON SCHEMA \"$schema\" FROM \"$r\";"
+    fi
+    privs="$(printf '%s' ",$privs," | sed 's/,CREATE,/,/; s/^,//; s/,$//')"
     denied=""
     for p in INSERT UPDATE DELETE TRUNCATE; do
       [[ ",$privs," == *",$p,"* ]] || denied="${denied:+$denied, }$p"

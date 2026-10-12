@@ -13,7 +13,7 @@ dsn_key: MY_AGENT_DATABASE_URL           # Infisical/Secret key holding the DSN
 grants:
   - schema: company
     tables: [t1, t2]             # explicit tables, or `all` (+ default privileges)
-    privileges: [SELECT, INSERT] # SELECT INSERT UPDATE DELETE TRUNCATE
+    privileges: [SELECT, INSERT] # SELECT INSERT UPDATE DELETE TRUNCATE, or CREATE (schema-level)
 ```
 
 Write privileges (INSERT/UPDATE/DELETE/TRUNCATE) not listed for a grant target
