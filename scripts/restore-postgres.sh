@@ -100,10 +100,15 @@ else
   TARGET_DSN="$DSN"
 fi
 
+# The backup job's pg_dump (17+) emits "SET transaction_timeout", which a
+# PG 16 server rejects. Drop only that line so ON_ERROR_STOP still catches
+# every real error.
+strip_unsupported_sets() { grep -v '^SET transaction_timeout = '; }
+
 if [[ "$DUMPFILE" == *.gz ]]; then
-  gunzip -c "$DUMPFILE" | psql --dbname="$TARGET_DSN" -v ON_ERROR_STOP=1 --quiet
+  gunzip -c "$DUMPFILE" | strip_unsupported_sets | psql --dbname="$TARGET_DSN" -v ON_ERROR_STOP=1 --quiet
 else
-  psql --dbname="$TARGET_DSN" -v ON_ERROR_STOP=1 --quiet --file="$DUMPFILE"
+  strip_unsupported_sets < "$DUMPFILE" | psql --dbname="$TARGET_DSN" -v ON_ERROR_STOP=1 --quiet
 fi
 
 if [[ $TARGET == live ]]; then
