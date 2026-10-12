@@ -37,6 +37,20 @@ lookups. The opaque `id` remains the durable event/foreign-key value.
 An expired lease emits `engineering.failed` with `reason: lease_expired`, the
 attempt number, previous owner, and retry state before the item becomes
 available again. The task status retains its attempt count and last failure.
+A reaper (`Hive.Reaper`, started after `Hive.Work`) sweeps for abandoned work
+every `HIVE_REAPER_INTERVAL_MS` (default 30000; `0` disables the timer) so a
+lease that expired without a heartbeat is recovered even when no worker is
+calling `available`, `claim`, `heartbeat` or `complete`. Policy, set by
+`HIVE_MAX_ATTEMPTS` (default 3; `attempt` counts leases handed out):
+
+- below the limit: the item returns to `available`, the previous holder's bid is
+  purged, and subscribed workers are woken (redispatch);
+- at the limit: the item moves to `escalated`, which no worker feed lists, and
+  Hive emits `work.escalated` (`reason: max_attempts_exceeded`) after the usual
+  `engineering.failed`. A manager or human decides whether to requeue it, for
+  example `UPDATE company.hive_work_items SET state = 'available', attempt = 0
+  WHERE slug...` via an authorized DB path, or to resubmit it.
+
 Worker completion is a report for manager review: code work is not marked done
 until the verified commit is pushed and that exact remote commit is confirmed.
 
