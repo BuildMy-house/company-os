@@ -513,8 +513,13 @@ Not yet verified or open:
   immediately), `axiom` (`AXIOM_QUERY_TOKEN` unset in the profile), and
   "Nous Portal not configured". Compare with the old gateway's logs before
   treating any as a migration regression.
-- CronJobs not applied: `dns-healthcheck`, `postgres-backup`,
-  `hermes-data-backup`. Keep `buildmyhouse-dev-deployer` suspended.
+- CronJobs `dns-healthcheck`, `postgres-backup`, `hermes-data-backup` are
+  applied; a one-off `postgres-backup` run uploaded a dump to R2 on the new
+  host. Keep `buildmyhouse-dev-deployer` suspended.
+- `k8s/pm-agent-gateway.yaml`: nginx container (NodePort 30420) that enforces
+  `PM_AGENT_AUTH_TOKEN` in front of pm-agent, which has no auth of its own.
+  Needs `PM_AGENT_AUTH_TOKEN` in `company-ops-secrets` (Infisical `/hermes`)
+  or the pod stays in CreateContainerConfigError (intentional fail-closed).
 - Expose `pm-agent` to the site over Tailscale (NodePort or
   `tailscale serve`; set `PM_AGENT_URL` and `PM_AGENT_AUTH_TOKEN` in the app's
   Infisical project), repoint operator kubeconfig/`.mcp.json`, merge PR #11 and
