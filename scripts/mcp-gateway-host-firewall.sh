@@ -8,11 +8,11 @@ set -euo pipefail
 # Run as root by an administrator. Idempotent. --remove undoes it.
 #
 # Usage: sudo scripts/mcp-gateway-host-firewall.sh [--remove] [--dry-run]
-# Env:   ALLOWED_CIDRS  space-separated sources (default tailnet + LAN)
+# Env:   ALLOWED_CIDRS  space-separated sources (default tailnet only)
 #        NODEPORT       default 30430
 
 NODEPORT="${NODEPORT:-30430}"
-ALLOWED_CIDRS="${ALLOWED_CIDRS:-100.64.0.0/10 192.168.0.0/16}"
+ALLOWED_CIDRS="${ALLOWED_CIDRS:-100.64.0.0/10}"
 CHAIN=MCP-GATEWAY-GUARD
 remove=false; dry=false
 for arg in "$@"; do
