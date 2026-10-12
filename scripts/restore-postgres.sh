@@ -100,10 +100,15 @@ else
   TARGET_DSN="$DSN"
 fi
 
+# The backup job's pg_dump (17+) emits "SET transaction_timeout", which a
+# PG 16 server rejects. Drop only that line so ON_ERROR_STOP still catches
+# every real error.
+strip_unsupported_sets() { grep -v '^SET transaction_timeout = '; }
+
 if [[ "$DUMPFILE" == *.gz ]]; then
-  gunzip -c "$DUMPFILE" | psql --dbname="$TARGET_DSN" -v ON_ERROR_STOP=1 --quiet
+  gunzip -c "$DUMPFILE" | strip_unsupported_sets | psql --dbname="$TARGET_DSN" -v ON_ERROR_STOP=1 --quiet
 else
-  psql --dbname="$TARGET_DSN" -v ON_ERROR_STOP=1 --quiet --file="$DUMPFILE"
+  strip_unsupported_sets < "$DUMPFILE" | psql --dbname="$TARGET_DSN" -v ON_ERROR_STOP=1 --quiet
 fi
 
 if [[ $TARGET == live ]]; then
@@ -142,7 +147,7 @@ with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute('SELECT COUNT(*) FROM "' + table.replace('.', '"."') + '"')
         count = cur.fetchone()[0]
         print(f"  {table}: {count} rows")
-        if table in ("company.actions", "observer.decisions") and count == 0:
+        if table in ("company.hive_events", "company.hive_work_items") and count == 0:
             empty_key.append(table)
 
     if empty_key and not allow_empty:
