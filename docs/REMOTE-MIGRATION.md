@@ -496,15 +496,27 @@ recorded here.
 
 ### Status at time of writing
 
-Running on `pop-os-1`: operator, registry, postgres, hive-coordinator.
-`hermes-gateway` applied, image pulling. **Not yet started:** pm-agent,
-browser-adversary, engineering-agent/opencode/opencode-direct, build
-dispatchers (live count was 0), CronJobs (`dns-healthcheck`,
-`postgres-backup`, `hermes-data-backup`). Keep
-`buildmyhouse-dev-deployer` suspended.
+All services running on `pop-os-1` (applied individually, RBAC first):
+operator, registry, postgres, hive-coordinator, hermes-gateway, pm-agent,
+browser-adversary, engineering-agent, engineering-opencode,
+engineering-opencode-direct. Build dispatchers applied but scaled to 0 (as on
+the old cluster). Engineering pods run at the manifest's 1 replica (old live
+count was 3). Smoke checks passed: pm-agent `/healthz` 200, hive agent card
+200, hermes API `/health` 200.
 
-Still open: expose `pm-agent` to the site over Tailscale (NodePort or
-`tailscale serve`; set `PM_AGENT_URL` and `PM_AGENT_AUTH_TOKEN` in the app's
-Infisical project), repoint operator kubeconfig/`.mcp.json`, merge PR #11 and
-promote to `prod`, rotate the secrets exposed during the migration, then stop
-k3s on the old workstation (user runs `sudo`; keep its data for rollback).
+Not yet verified or open:
+
+- **Discord**: no connect line in the gateway log; confirm with a real message
+  that the bot answers exactly once (old gateway is scaled to 0).
+- Gateway MCP warnings seen after restart: `hermes_build_dispatcher`
+  (expected, dispatcher at 0), `k8s_deployment` (npx server closes
+  immediately), `axiom` (`AXIOM_QUERY_TOKEN` unset in the profile), and
+  "Nous Portal not configured". Compare with the old gateway's logs before
+  treating any as a migration regression.
+- CronJobs not applied: `dns-healthcheck`, `postgres-backup`,
+  `hermes-data-backup`. Keep `buildmyhouse-dev-deployer` suspended.
+- Expose `pm-agent` to the site over Tailscale (NodePort or
+  `tailscale serve`; set `PM_AGENT_URL` and `PM_AGENT_AUTH_TOKEN` in the app's
+  Infisical project), repoint operator kubeconfig/`.mcp.json`, merge PR #11 and
+  promote to `prod`, rotate the secrets exposed during the migration, then stop
+  k3s on the old workstation (user runs `sudo`; keep its data for rollback).
