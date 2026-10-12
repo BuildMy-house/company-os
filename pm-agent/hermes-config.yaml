@@ -24,14 +24,20 @@ agent:
     - todo
 
 model:
-  default: z-ai/glm-5.3-flash
+  default: meituan/longcat-2.0:free
   provider: custom:pm_llm
 
 custom_providers:
-  # One dedicated, spend-capped key: PM_AGENT_LLM_API_KEY from pm-agent-secrets.
+  # Nous inference API, same provider as the Hermes runtime default. One
+  # key only: PM_AGENT_LLM_API_KEY from pm-agent-secrets (not NOUS_API_KEY
+  # from company-ops-secrets). Nous rejects requests without tags (HTTP 400).
   - name: pm_llm
-    base_url: https://api.tokenrouter.com/v1
+    base_url: https://inference-api.nousresearch.com/v1
     key_env: PM_AGENT_LLM_API_KEY
+    extra_body:
+      tags:
+        - product=hermes-agent
+        - user=pm-agent
 
 # No auxiliary models, no plugins (the axiom_usage plugin is NOT enabled:
 # telemetry is structured stdout logs only), no memory across users.

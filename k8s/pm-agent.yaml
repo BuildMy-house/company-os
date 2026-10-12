@@ -173,7 +173,7 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # LLM endpoint (api.tokenrouter.com:443). Pod policies cannot match a
+    # LLM endpoint (inference-api.nousresearch.com:443). Pod policies cannot match a
     # hostname, so this is public HTTPS only, with every private/in-cluster
     # range excluded. Tighten cidr to the provider's published ranges once
     # known (residual risk documented in docs/PM-AGENT-HERMES.md).
