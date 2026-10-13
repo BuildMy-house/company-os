@@ -48,7 +48,15 @@ _CONFIG_PATH = "/opt/data/config.yaml"
 # User-Agent; every request must carry a real one.
 _USER_AGENT = "model_retirement_watch/0.1.0"
 
-_AXIOM_INGEST_URL = "https://eu-central-1.aws.edge.axiom.co/v1/ingest/bmh-company"
+# Axiom ingest endpoint (COMP-6): both env-overridable, defaults equal today's
+# literals so unset env is behaviour-identical. AXIOM_URL, when set, is the
+# COMPLETE ingest endpoint and wins over the dataset-derived default below
+# (same naming as the axiom_usage plugin / hive telemetry).
+_DATASET = os.environ.get("AXIOM_DATASET", "bmh-company")
+_AXIOM_INGEST_URL = (
+    os.environ.get("AXIOM_URL")
+    or f"https://eu-central-1.aws.edge.axiom.co/v1/ingest/{_DATASET}"
+)
 
 _MCP_PROTOCOL_VERSION = "2024-11-05"
 

@@ -13,6 +13,9 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# GitHub org for the fallback clone/fetch URLs (default = today's literal).
+GITHUB_ORG="${GITHUB_ORG:-BuildMy-house}"
+
 name="${1:?Usage: sync-repo.sh <app|website|company-os|hermees|hermees-memory|observer-website>}"
 
 case "$name" in
@@ -48,11 +51,11 @@ mask_tokens() {
 
 # ── URL resolution ──────────────────────────────────────────────────────
 if [[ -n "$GITHUB_TOKEN" ]]; then
-  url="https://x-access-token:${GITHUB_TOKEN}@github.com/BuildMy-house/${name}.git"
+  url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_ORG}/${name}.git"
 elif [[ -n "$raw_url" && "$raw_url" != git@* ]]; then
   url="$raw_url"
 else
-  url="https://github.com/BuildMy-house/${name}.git"
+  url="https://github.com/${GITHUB_ORG}/${name}.git"
 fi
 masked_url=$(echo "$url" | mask_tokens)
 

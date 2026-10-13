@@ -121,18 +121,27 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const K8S_HOST = process.env.KUBERNETES_SERVICE_HOST || "kubernetes.default.svc";
 const K8S_PORT = process.env.KUBERNETES_SERVICE_PORT || "443";
 const NAMESPACE = "company-ops";
-// NOT overridable via process.env.REGISTRY_HOST/REGISTRY_PORT — verified
+// REGISTRY_HOST is env-overridable (COMP-6), mirroring registry-manager-mcp.js:11,
+// defaulting to today's cluster DNS name so unset env behaves exactly as before.
+// REGISTRY_PORT deliberately stays a fixed literal, NOT env-driven: verified
 // live 2026-09-29 that Kubernetes auto-injects Docker-links-style discovery
 // env vars for any Service named "registry" in this namespace (k8s/base/registry/registry.yaml),
 // including one literally named `REGISTRY_PORT` set to `tcp://<clusterIP>:5000`.
 // Reading that as an override silently replaced the intended "5000" default,
 // producing a malformed `registry.company-ops.svc.cluster.local:tcp://10.43.x.x:5000/...`
 // push destination and failing every build at the final push step with
-// "invalid reference format". These two are fixed cluster topology, not
-// meant to vary per invocation, so there is no legitimate override case to
-// preserve.
-const REGISTRY_HOST = "registry.company-ops.svc.cluster.local";
+// "invalid reference format". The host half has no such poisoned name in that
+// incident; only PORT keeps the no-override guard.
+const REGISTRY_HOST = process.env.REGISTRY_HOST || "registry.company-ops.svc.cluster.local";
 const REGISTRY_PORT = "5000";
+// Host prefix for the image reference this script RETURNS to callers:
+// BuildKit pushes through the in-cluster DNS name, but kubelet pulls via the
+// node's localhost NodePort (cluster DNS is not resolvable by containerd).
+// Env override for other topologies; default is today's literal.
+const REGISTRY_PUSH_HOST = process.env.REGISTRY_PUSH_HOST || "localhost:30500";
+// Primary git context for the `company-os` scope tool (build_company_os_image),
+// SHA appended by `call()` below. Default = today's literal.
+const BUILDER_CONTEXT_REPO = process.env.BUILDER_CONTEXT_REPO || "https://github.com/BuildMy-house/company-os.git";
 // Pinned by digest (not the floating `master-rootless` tag) for the build
 // tool's own reproducibility — resolved from and verified against
 // `moby/buildkit:master-rootless` live in this cluster on 2026-09-29.
@@ -276,7 +285,11 @@ function validateBuildArgs(buildArgs) {
 // this script mints itself; anything else (a public repo, or a caller that
 // points at some other host) is passed through unmodified — bare, with no
 // credentials, since validateContextRef already forbids embedding any.
-const GITHUB_APP_REPO_RE = /^https:\/\/github\.com\/BuildMy-house\/[a-zA-Z0-9._-]+\.git#[0-9a-f]{40}$/;
+// The org comes from GITHUB_ORG (default = today's literal), regex-escaped so
+// any org name is matched literally.
+const GITHUB_ORG = process.env.GITHUB_ORG || "BuildMy-house";
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const GITHUB_APP_REPO_RE = new RegExp(`^https://github\\.com/${escapeRegExp(GITHUB_ORG)}/[a-zA-Z0-9._-]+\\.git#[0-9a-f]{40}$`);
 function needsGithubAppToken(ref) {
   return GITHUB_APP_REPO_RE.test(ref);
 }
@@ -614,9 +627,10 @@ async function buildAndPush(args) {
     const digest = await registryManifestDigest(imageRepo, imageTag);
     if (!digest) throw new Error(`builder Job ${jobName} pushed ${destination} but its immutable manifest digest could not be verified`);
 
-    // BuildKit pushes through the in-cluster DNS name, but kubelet pulls via
-    // the node's localhost NodePort; cluster DNS is not resolvable by containerd.
-    return { job: jobName, image: `localhost:30500/${destination}@${digest}`, digest, pushed: true };
+    // BuildKit pushes through the in-cluster DNS name; the returned host
+    // prefix (REGISTRY_PUSH_HOST, default localhost:30500) is what kubelet
+    // pulls from on the node. See the REGISTRY_PUSH_HOST constant above.
+    return { job: jobName, image: `${REGISTRY_PUSH_HOST}/${destination}@${digest}`, digest, pushed: true };
   } finally {
     // Unconditional: runs on every exit path, including a k8sRequest
     // rejection from waitForJob/mintGithubAppToken/registryHasTag, not just
@@ -639,7 +653,7 @@ async function call(name, args) {
     }
     const timeoutSeconds = args.timeout_seconds === undefined ? 900 : validateTimeoutSeconds(args.timeout_seconds);
     return buildAndPush({
-      context_ref: `https://github.com/BuildMy-house/company-os.git#${args.source_sha}`,
+      context_ref: `${BUILDER_CONTEXT_REPO}#${args.source_sha}`,
       dockerfile_path: "Dockerfile",
       image_repo: "company-os",
       image_tag: `hermes-${args.source_sha.slice(0, 12)}`,
