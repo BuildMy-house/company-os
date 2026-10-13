@@ -1,6 +1,7 @@
-# pm-agent: Hermes-runtime product-feedback agent (see pm-agent/SOUL.md and
-# docs/PM-AGENT-HERMES.md). Built from the repository root, via the isolated
-# BuildKit builder at an immutable source SHA (never from a dirty checkout):
+# pm-agent: Hermes-runtime product-feedback agent (see
+# pm-agent/content/buildmy-house/SOUL.md and docs/PM-AGENT-HERMES.md). Built
+# from the repository root, via the isolated BuildKit builder at an immutable
+# source SHA (never from a dirty checkout):
 #   docker buildx build -f pm-agent/Dockerfile -t localhost:30500/company-os-pm-agent:<sha> .
 FROM nousresearch/hermes-agent:latest
 

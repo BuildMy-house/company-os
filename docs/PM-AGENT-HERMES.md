@@ -2,7 +2,7 @@
 
 pm-agent is the end-user chat front door for buildmy.house product feedback.
 It replaced a non-LLM script with canned replies. The persona is
-`pm-agent/SOUL.md`; the model runs in the Hermes runtime
+`pm-agent/content/buildmy-house/SOUL.md` (override dir via `PM_AGENT_CONTENT_DIR`); the model runs in the Hermes runtime
 (`nousresearch/hermes-agent` image) and registers with the Hive as
 `HIVE_AGENT_ID=pm-agent`.
 
@@ -37,7 +37,7 @@ front door serves only `/chat` and `/healthz`.
 
 | # | Criterion | Enforcement | Evidence |
 |---|---|---|---|
-| 1 | Own secret, two keys only, no `company-ops-secrets` | `k8s/base/pm-agent/pm-agent.yaml` env from `pm-agent-secrets` keys `PM_DATABASE_URL`, `PM_AGENT_LLM_API_KEY`; `envFrom` removed; `k8s/pm-agent-infisical-sync.yaml` syncs Infisical `/pm-agent` into it | `ManifestSecurityTest.test_own_secret_only_no_envfrom_company_ops`, `test_infisical_sync_targets_only_pm_agent_secret` |
+| 1 | Own secret, two keys only, no `company-ops-secrets` | `k8s/base/pm-agent/pm-agent.yaml` env from `pm-agent-secrets` keys `PM_DATABASE_URL`, `PM_AGENT_LLM_API_KEY`; `envFrom` removed; `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml` syncs Infisical `/pm-agent` into it | `ManifestSecurityTest.test_own_secret_only_no_envfrom_company_ops`, `test_infisical_sync_targets_only_pm_agent_secret` |
 | 2 | No Axiom | No Axiom env, plugin, or code; Hermes `plugins.enabled: []`; structured JSON logs to stdout | `test_no_axiom_credentials_or_env`, `test_no_axiom_anywhere_in_pm_agent_code` |
 | 3 | No SA token, dedicated SA, no RBAC | `ServiceAccount pm-agent`, `automountServiceAccountToken: false` on SA and pod, no Role/Binding | `test_dedicated_service_account_no_token_no_rbac` |
 | 4 | NetworkPolicy | Egress: hive-coordinator:4100, postgres:5432, kube-dns:53, public HTTPS:443 (LLM). Ingress: pm-agent-gateway:4200 only | `test_network_policy_*` (see enforcement finding below) |
@@ -118,8 +118,8 @@ The in-cluster engineering agent should, via the hive:
 1. Build the image at the merged SHA and push it to the in-cluster registry.
    The build fails fast if `hermes` is not on PATH in the base image.
 2. Confirm the Infisical `/pm-agent` folder holds exactly the two secrets (user
-   action below), then apply `k8s/pm-agent-infisical-sync.yaml` (it is not in
-   `k8s/overlays/buildmy-prod`, like `k8s/infisical-sync.yaml`, because it needs
+   action below), then apply `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml` (it is not in
+   `k8s/overlays/buildmy-prod`, like `k8s/base/infisical-sync/infisical-sync.yaml`, because it needs
    the operator CRDs) and confirm `pm-agent-secrets` exists with two keys.
 3. Set the image tag in `k8s/base/pm-agent/pm-agent.yaml` to the built tag/digest and apply it
    (replacing `:latest`), then verify: pod Ready, `/healthz` 200, hive agent list

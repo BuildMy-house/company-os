@@ -13,7 +13,8 @@ process owns everything that must NOT be left to the model:
   - /healthz for probes.
 
 The model itself runs in the Hermes runtime (hermes gateway, api_server on
-127.0.0.1) with persona pm-agent/SOUL.md and exactly one MCP server,
+127.0.0.1) with the per-project persona from PM_AGENT_CONTENT_DIR (default
+pm-agent/content/buildmy-house/SOUL.md) and exactly one MCP server,
 pm_tools_mcp.py (tools.py): dedupe lookup and gated Hive filing. See
 docs/PM-AGENT-HERMES.md.
 """

@@ -67,7 +67,7 @@ mcp_servers:
     args: ["/opt/company-ops/pm-agent/pm_tools_mcp.py"]
     env:
       PM_DATABASE_URL: "${PM_DATABASE_URL}"
-      HIVE_URL: "http://hive-coordinator:4100"
+      HIVE_URL: "${HIVE_URL}"
       PM_CONTEXT_PATH: "/run/pm-agent/context.json"
       PYTHONPATH: "/opt/company-ops:/opt/company-ops/pm-agent"
     tools:
