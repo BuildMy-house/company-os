@@ -93,9 +93,23 @@ kubelet probes come from the node and are not subject to pod policies.
    layer.
 3. **Rate limits are in memory.** They reset on restart and assume one replica
    (`replicas: 1`, `Recreate`). A restart loop could briefly widen the budget.
-4. **One exchange at a time.** The request-context design serialises chats in
-   a pod; throughput is bounded by LLM latency (50 s timeout, under the app proxy's 60 s). Fine for v1
-   volumes; revisit before scaling out.
+4. **One exchange at a time, others queue.** The request-context design
+   serialises chats in a pod, so `chat_queue.py` puts an in-memory FIFO queue
+   in front of a single worker thread (the only writer of the context file).
+   Idle: `POST /chat` answers inline as before (`{reply}`, 55 s inline budget,
+   under the app proxy's 60 s). Busy: it returns at once `200
+   {status:"queued", ticket, position, reply}` and the client polls `GET
+   /chat/status?ticket=&app_user_id=` -> `{status:"queued",position}` |
+   `{status:"processing"}` | `{status:"done",reply}` | `{status:"expired"}`.
+   Limits: one live ticket per user (a second message returns the existing
+   place, or `status:"processing"` if the earlier one is running), max 5
+   waiting (beyond that `200 {status:"busy",reply}`), queued tickets expire
+   after 5 min or after 90 s without polling, results are kept 120 s. Ticket
+   ids are random tokens and status checks verify `app_user_id`; foreign or
+   unknown tickets look like `expired`. The queue is in memory: a restart
+   drops it (clients see `expired`). Queue length and wait/run times are
+   logged as JSON `chat_queue` events (no message content). Throughput is
+   still bounded by LLM latency; revisit before scaling out.
 5. **No chat history is passed to the model.** Each turn is stateless, which
    limits cross-turn injection and cross-user leakage, at the cost of
    conversational continuity. Full history is persisted in `pm_conversations`.
