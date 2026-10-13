@@ -1,0 +1,12 @@
+# mcp_gateway_keys: least privilege for the gateway's key lookups -- it may
+# insert new hashed keys, read rows to verify presented keys, and UPDATE only
+# the mutable columns (expires_at, last_used_at, revoked_at). No DELETE and no
+# TRUNCATE: rows are never deleted, and no access to any other schema or table.
+name: mcp_gateway_keys
+login: true
+password_key: MCP_GATEWAY_KEYS_PASSWORD
+dsn_key: MCP_GATEWAY_DATABASE_URL
+grants:
+  - schema: mcp_gateway
+    tables: [api_keys]
+    privileges: [SELECT, INSERT, UPDATE]
