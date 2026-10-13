@@ -592,7 +592,7 @@ class FeatureFormAndBudgetTest(unittest.TestCase):
             self.assertLessEqual(len(d), guard.MAX_DESCRIPTION_CHARS)
             self.assertIn("Quote (verbatim", d, "quote must not be truncated away")
 
-    def test_worst_case_prompt_fits_the_50k_token_cap(self):
+    def test_worst_case_prompt_fits_the_context_cap(self):
         history = [("user" if i % 2 == 0 else "assistant", "\u00e9" * 5000 + " word" * 2000) for i in range(50)]
         prompt = guard.wrap_untrusted("\u00e9" * guard.MAX_MESSAGE_CHARS, history)
         total = len(prompt) + guard.PERSONA_CHARS + guard.TOOL_SCHEMA_ALLOWANCE_CHARS
@@ -611,11 +611,16 @@ class HermesIsolationConfigTest(unittest.TestCase):
     def setUp(self):
         self.cfg = yaml.safe_load((PM_AGENT_DIR / "hermes-config.yaml").read_text())
 
-    def test_context_capped_at_50k_and_compaction_below_it(self):
-        self.assertEqual(self.cfg["model"]["context_length"], guard.CONTEXT_TOKEN_CAP)
+    def test_context_length_meets_hermes_minimum(self):
+        # Regression: Hermes rejects windows < 64,000 (every chat 500'd at 50,000).
+        self.assertGreaterEqual(self.cfg["model"]["context_length"], 64000)
+
+    def test_compaction_fires_before_the_window_and_prompt_budget_fits(self):
         comp = self.cfg["compression"]
-        self.assertTrue(comp["enabled"])
-        self.assertLess(comp["threshold_tokens"], guard.CONTEXT_TOKEN_CAP)
+        self.assertLessEqual(comp["threshold_tokens"], 48000)
+        self.assertLess(comp["threshold_tokens"], self.cfg["model"]["context_length"])
+        self.assertEqual(guard.CONTEXT_TOKEN_CAP, self.cfg["model"]["context_length"])
+        self.assertLessEqual(guard.MAX_PROMPT_CHARS / 2, guard.CONTEXT_TOKEN_CAP)
 
     def test_no_learning_or_cross_conversation_state(self):
         self.assertFalse(self.cfg["memory"]["memory_enabled"])

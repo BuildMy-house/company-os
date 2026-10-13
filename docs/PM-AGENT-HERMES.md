@@ -136,13 +136,17 @@ topic+summary are unchanged. SOUL.md tells the model to ask one short question
 at a time (max 3 follow-ups), file as soon as there is enough, accept "I don't
 know", and never ask for personal data, links or files.
 
-**50k-token cap.** `pm-agent/hermes-config.yaml` sets `model.context_length:
-50000` and `compression.threshold_tokens: 30000` (compaction fires at the
-lower of this and the ratio threshold). The front door additionally enforces
-`guard.MAX_PROMPT_CHARS` (150,000 chars, about 50k tokens at 3 chars/token)
-for persona + tool allowance + prompt by dropping the oldest history first.
-The resolver floor (`MIN_CONTEXT = 100_000`) is unchanged: the cap is always
-below every eligible model's window, so it always applies.
+**64k-token context cap.** Hermes enforces a 64k minimum window
+(`MINIMUM_CONTEXT_LENGTH`; a smaller `model.context_length` makes agent init
+raise and every chat return 500), so `pm-agent/hermes-config.yaml` sets
+`model.context_length: 64000` as the cap. `compression.threshold_tokens:
+48000` makes compaction fire before the window fills (Hermes clamps its
+trigger down to this). The front door also enforces
+`guard.MAX_PROMPT_CHARS` (100,000 chars, at most 50,000 tokens at a
+conservative 2 chars/token) for persona + tool allowance + prompt, dropping
+the oldest history first. The resolver floor (`MIN_CONTEXT = 100_000`) is
+unchanged and above 64k, so the configured window never exceeds a picked
+model's real one.
 
 **Fresh context per conversation.** `PmStore.get_or_create_conversation` opens
 a NEW conversation row (new id) when the user's last one ended: 30 minutes
@@ -165,7 +169,7 @@ but are never read back into any prompt.
 **Live eval (not run in CI).** `tests/pm_agent_live_eval.py` drives scripted
 conversations (greeting, thanks/goodbye, vague bug, complete bug, feature,
 off-topic, injection) through the real front door and Hermes and prints
-PASS/FAIL, per-turn latency and prompt size against the 50 s / 50k-token
+PASS/FAIL, per-turn latency and prompt size against the 50 s / 64k-token
 budgets. Run it where the front door is reachable, e.g. in the pod:
 `PM_AGENT_URL=http://127.0.0.1:4200 python3 tests/pm_agent_live_eval.py`
 (optionally `PM_DATABASE_URL` to verify filings from `pm_conversations`, and
