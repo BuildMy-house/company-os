@@ -9,6 +9,10 @@ import {
   retryDelayMs,
   errorTelemetry,
   completeWithRetry,
+  completeHiveTask,
+  buildCompletionResult,
+  rejectAfter,
+  hiveCallTimeoutMs,
   collectPromptOutcomes,
   runHiveWork,
   handleBidPrompt,
@@ -126,6 +130,59 @@ check("completeWithRetry stops retrying permanent lease and validation errors", 
     throw Object.assign(new Error("lease lost"), { status: 409 });
   }, { task_id: "work-1", state: "completed" }, { wait: async () => assert.fail("must not retry") }));
   assert.equal(calls, 1);
+});
+
+const feedbackNumbers = ["estimated_cost", "actual_cost", "estimated_benefit", "actual_benefit"];
+
+check("buildCompletionResult attaches feedback valid for hive-member-mcp", () => {
+  for (const finished of [
+    { state: "completed", startedAt: Date.now() - 90_000, result: { status: "completed", agentOutput: { message: "done" } } },
+    { state: "failed", error: "execution deadline exceeded", startedAt: Date.now() - 1000 },
+  ]) {
+    const { feedback } = buildCompletionResult(finished, { estimated_cost: 3, expected_benefit: 5 });
+    assert.ok(feedbackNumbers.every((key) => typeof feedback.calibration[key] === "number" && !Number.isNaN(feedback.calibration[key])));
+    assert.equal(typeof feedback.friction, "string");
+    assert.equal(feedback.calibration.estimated_cost, 3);
+  }
+  assert.equal(buildCompletionResult({ state: "completed", startedAt: Date.now(), result: {} }).feedback.friction, "");
+  assert.match(buildCompletionResult({ state: "failed", error: "boom", startedAt: Date.now() }).feedback.friction, /boom/);
+  assert.equal(buildCompletionResult({ state: "completed", startedAt: Date.now(), result: { agentOutput: { message: "done" } } }).output, "done");
+});
+
+check("buildCompletionResult trims verbose payloads", () => {
+  const tools = Array.from({ length: 500 }, (_, i) => ({ tool: "bash", input: { cmd: "x".repeat(1000) }, output: `out${i}` }));
+  const result = buildCompletionResult({ state: "completed", startedAt: Date.now(), result: { status: "completed", agentOutput: { message: "y".repeat(50_000), tools } } });
+  assert.ok(JSON.stringify(result).length < 12_000);
+  assert.equal(result.tool_call_count, 500);
+  assert.equal(result.agentOutput, undefined);
+  assert.match(result.output, /truncated/);
+});
+
+check("rejectAfter rejects a hung call instead of hanging", async () => {
+  let cleaned = false;
+  await assert.rejects(rejectAfter(new Promise(() => {}), 20, "hung", () => { cleaned = true; }), (error) => error.code === "HIVE_CALL_TIMEOUT" && /hung/.test(error.message));
+  assert.equal(cleaned, true);
+  assert.equal(await rejectAfter(Promise.resolve(7), 1000, "x"), 7);
+  assert.equal(hiveCallTimeoutMs("hive_bid", {}), 30_000);
+  assert.equal(hiveCallTimeoutMs("hive_wait", { timeout_seconds: 900 }), 930_000);
+});
+
+check("completeHiveTask sends feedback and emits telemetry per failed attempt and final failure", async () => {
+  const events = [];
+  const sent = [];
+  const finished = { state: "completed", startedAt: Date.now(), result: { agentOutput: { message: "ok" } } };
+  let n = 0;
+  await completeHiveTask(async (name, args) => { sent.push(args); if (++n < 3) throw Object.assign(new Error("temporary"), { status: 503 }); return {}; }, "t1", finished, {}, { emit: (e) => events.push(e), wait: async () => {}, random: () => 0.5 });
+  assert.equal(sent.length, 3);
+  assert.ok(sent.every((args) => args.result.feedback.calibration && typeof args.result.feedback.friction === "string"));
+  assert.deepEqual(events.map((e) => [e.event, e.state, e.attempt]), [["hive_completion", "retrying", 1], ["hive_completion", "retrying", 2]]);
+
+  events.length = 0;
+  await assert.rejects(completeHiveTask(async () => { throw Object.assign(new Error("lease lost"), { status: 409 }); }, "t2", finished, {}, { emit: (e) => events.push(e), wait: async () => {} }));
+  assert.deepEqual(events.map((e) => e.state), ["retrying", "failed"]);
+  assert.equal(events[1].event, "hive_completion");
+  assert.equal(events[1].stage, "complete");
+  assert.equal(events[1].attempts, 1);
 });
 
 check("outputText reads the real ai-cli result shapes", () => {
