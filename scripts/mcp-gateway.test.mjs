@@ -121,6 +121,10 @@ test("manifest policy: no client lists hive bid/complete/heartbeat/next_work/all
   assert.ok(policy.servers.hive.longPollTools.includes("hive_wait"), "hive_wait must stay a long poll tool");
   const hiveAllowed = ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"];
   for (const [id, client] of Object.entries(policy.clients)) {
+    if (id === "gateway-admin") {
+      assert.deepEqual(client.servers ?? {}, {}, "gateway-admin must have no child servers");
+      continue;
+    }
     if (id === "local-claude-deploy") {
       assert.equal(client.servers.hive, undefined, "local-claude-deploy must not reach hive at all");
       continue;
@@ -137,8 +141,8 @@ test("manifest policy: three clients with distinct agentIds and tokenFiles", () 
   const policy = configMapPolicy(manifest, "mcp-gateway-policy");
   const trio = ["local-claude", "local-codex", "local-opencode"];
   const ids = Object.keys(policy.clients);
-  assert.equal(ids.length, 4);
-  assert.deepEqual([...ids].sort(), ["local-claude", "local-claude-deploy", "local-codex", "local-opencode"]);
+  assert.equal(ids.length, 5);
+  assert.deepEqual([...ids].sort(), ["gateway-admin", "local-claude", "local-claude-deploy", "local-codex", "local-opencode"]);
   const agentIds = new Set();
   const tokenFiles = new Set();
   for (const id of trio) {
@@ -166,6 +170,7 @@ test("manifest policy: three clients with distinct agentIds and tokenFiles", () 
   const deploy = policy.clients["local-claude-deploy"];
   assert.equal(deploy.tokenFile, undefined, "local-claude-deploy must have no tokenFile");
   assert.equal(deploy.keyTtlDays, 30);
+  for (const id of trio) assert.equal(policy.clients[id].keyTtlDays, 90, `${id} key TTL is 90 days`);
   assert.deepEqual(Object.keys(deploy.servers).sort(), ["builder", "container-manager"]);
 });
 

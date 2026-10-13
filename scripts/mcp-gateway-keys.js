@@ -178,6 +178,7 @@ export function createKeyService({ store, identities, ttlDaysFor, now = () => ne
     if (!validLabel(label)) throw new Error(`label must be 1-${MAX_LABEL_CHARS} characters with no control characters`);
     const def = defaultTtlDays(identity);
     const days = ttlDays === undefined ? def : ttlDays;
+    if (!Number.isInteger(days) || days < 1) throw new Error("ttlDays must be a positive integer");
     if (days > def) throw new Error("ttlDays may shorten but never extend the identity's default TTL");
     const plaintext = generateKey();
     const t = now();
@@ -256,7 +257,9 @@ export function createKeyService({ store, identities, ttlDaysFor, now = () => ne
   }
 
   async function verifyDetailed(presentedToken) {
-    const fp = typeof presentedToken === "string" ? fingerprint(presentedToken) : null;
+    // Hash directly: fingerprint() treats a 64-hex input as an existing hash, and a presented
+    // token that happens to be 64 hex chars must never have its own characters logged.
+    const fp = typeof presentedToken === "string" ? hashKey(presentedToken).slice(0, 8) : null;
     if (typeof presentedToken !== "string" || !presentedToken.startsWith(KEY_PREFIX)) {
       return { ok: false, reason: "malformed", fingerprint: fp };
     }

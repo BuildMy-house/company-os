@@ -115,7 +115,7 @@ type: kubernetes.io/service-account-token
 #   - no other client lists either server (their allowlists have no container-manager,
 #     no builder — adding one later is a policy edit, not a re-image),
 #   - local-claude-deploy has NO tokenFile: it authenticates only with issued DB keys
-#     (TTL keyTtlDays below; issuance handled by a separate ticket) — a file token on
+#     (30-day TTL via keyTtlDays below; issued only by the gateway-admin identity) — a file token on
 #     disk would bypass that revocable path,
 #   - argLimits default-deny the dangerous shapes: only pinned-digest in-cluster images,
 #     never the gateway's or hermes's own deployment, BuildMy-house 40-hex git refs only,
@@ -160,12 +160,14 @@ data:
             "BUILDER_MANAGER_CA_PATH": "/var/run/secrets/builder-manager/ca.crt"
           },
           "callTimeoutSeconds": 3660,
+          "redactTools": ["builder_build_and_push"],
           "longPollTools": ["builder_build_and_push"]
         }
       },
       "clients": {
         "local-claude": {
           "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_CLAUDE_TOKEN",
+          "keyTtlDays": 90,
           "servers": {
             "hive": {
               "agentId": "local-claude",
@@ -178,6 +180,7 @@ data:
         },
         "local-opencode": {
           "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_OPENCODE_TOKEN",
+          "keyTtlDays": 90,
           "servers": {
             "hive": {
               "agentId": "local-opencode",
@@ -190,6 +193,7 @@ data:
         },
         "local-codex": {
           "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_CODEX_TOKEN",
+          "keyTtlDays": 90,
           "servers": {
             "hive": {
               "agentId": "local-codex",
@@ -199,6 +203,10 @@ data:
               "tools": ["namespaces_list", "pods_list", "pods_list_in_namespace", "pods_get", "pods_log", "events_list", "resources_list", "resources_get"]
             }
           }
+        },
+        "gateway-admin": {
+          "admin": true,
+          "tokenFile": "/etc/mcp-gateway/tokens/GATEWAY_ADMIN_TOKEN"
         },
         "local-claude-deploy": {
           "keyTtlDays": 30,
@@ -342,6 +350,15 @@ spec:
                 secretKeyRef:
                   name: company-ops-secrets
                   key: AXIOM_TOKEN
+                  optional: true
+            # Key store DSN (role mcp_gateway_keys, sql/roles.d/mcp_gateway_keys.yaml). Optional so the
+            # gateway still boots in file-token-only mode before the role/schema are provisioned;
+            # without it, issued keys and the gateway-admin tools are unavailable.
+            - name: MCP_GATEWAY_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway-tokens
+                  key: MCP_GATEWAY_DATABASE_URL
                   optional: true
             # Mint per-build GitHub App tokens for the builder child (mirrors
             # engineering-build-dispatcher.yaml). Known blast-radius tradeoff: env
