@@ -151,13 +151,13 @@ The in-cluster engineering agent should, via the hive:
 
 Nous retires `:free` models without notice and its `/v1/models` listing keeps
 showing retired ones (`meituan/longcat-2.0:free` answered 404 while listed as
-free), so `pm-agent/resolve_model.py` probes instead of trusting the list.
+free), so `company_ops/model_resolver.py` (via `pm-agent/resolve_model.py`) probes instead of trusting the list.
 
 - At boot `entrypoint.sh` runs the resolver: fetch `/v1/models`, keep models
   that are free (prompt and completion price 0), advertise `tools`, have
   context >= 100k, are not within 3 days of `expiration_date`, and are not
   domain-specialised (`-fin`, `-sante`) or `stealth/*`. Order by
-  `pm-agent/model-preferences.json` (preferred ids first, then context length),
+  `company_ops/model-preferences.json` (preferred ids first, then context length),
   send a 1-token chat completion to each, take the first HTTP 200, and render it
   into `$HERMES_HOME/config.yaml` (the baked `hermes-config.yaml` is only the
   default). The last working model is kept in `/run/pm-agent/resolved-model.json`
@@ -170,4 +170,4 @@ free), so `pm-agent/resolve_model.py` probes instead of trusting the list.
   one, the process exits (code 75), `entrypoint.sh` stops Hermes, and k8s
   restarts the pod, which re-resolves. Restart-on-change was chosen over
   hot-reloading Hermes as the simpler, more robust option.
-- To prefer a different model edit `model-preferences.json`; stale ids are skipped.
+- To prefer a different model edit `company_ops/model-preferences.json`; stale ids are skipped.
