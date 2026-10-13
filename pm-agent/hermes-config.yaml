@@ -33,11 +33,13 @@ model:
   # this line at boot (pm-agent/resolve_model.py).
   default: inclusionai/ling-3.1-flash
   provider: custom:pm_llm
-  # Hard 50k-token cap on the model context (Hermes model.context_length, "caps
-  # the detected value"; cli-config.yaml.example). The front door also
-  # enforces a prompt-size budget (guard.MAX_PROMPT_CHARS). resolve_model.py
-  # still only picks models with a window >= 100k, so the cap always applies.
-  context_length: 50000
+  # Hermes REJECTS any window below its 64,000-token minimum
+  # (MINIMUM_CONTEXT_LENGTH; agent_init raises ValueError -> every chat 500s),
+  # so this must stay >= 64000 and must not exceed the model's real window.
+  # 64000 is the context cap; compression.threshold_tokens below makes
+  # compaction fire before it fills, and the front door enforces a prompt
+  # budget (guard.MAX_PROMPT_CHARS).
+  context_length: 64000
 
 custom_providers:
   # Nous inference API, same provider as the Hermes runtime default. One
@@ -75,12 +77,13 @@ auxiliary:
   background_review:
     enabled: false
 
-# Compact well before the 50k cap: threshold_tokens fires at the LOWER of the
-# ratio threshold (floored at 0.75 x 50k for small windows) and this absolute
-# count.
+# Compact before the 64k window fills. Hermes computes the trigger as
+# (window * ratio, floored/raised for small windows ~ 48k at 64k) and then
+# clamps it DOWN to threshold_tokens (agent/context_compressor.py
+# _apply_threshold_tokens_cap), so 48000 is what actually fires.
 compression:
   enabled: true
-  threshold_tokens: 30000
+  threshold_tokens: 48000
 
 # Hermes keeps a session store (state.db) of ended sessions; prune aggressively.
 # agent.py's idle wiper additionally clears sessions/memories dirs

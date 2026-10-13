@@ -41,13 +41,13 @@ MAX_TITLE_CHARS = 120
 # that the final Quote line is never truncated away, short enough to stay a
 # readable work item.
 MAX_DESCRIPTION_CHARS = 5000
-# Hard prompt budget enforced by the front door: the model context is capped
-# at 50,000 tokens (hermes-config.yaml model.context_length). At a conservative
-# 3 chars/token that is 150,000 chars for the WHOLE prompt (persona + tool
-# schemas + history + message); the front door's own prompt must fit what is
-# left after the persona and a fixed allowance for tool schemas.
-CONTEXT_TOKEN_CAP = 50_000
-MAX_PROMPT_CHARS = 150_000
+# Hard prompt budget enforced by the front door. The model context is capped
+# at 64,000 tokens (hermes-config.yaml model.context_length, Hermes' minimum
+# window). At a conservative 2 chars/token, 100,000 chars is at most
+# 50,000 tokens, well under the window, for the WHOLE prompt (persona + tool schemas
+# + history + message).
+CONTEXT_TOKEN_CAP = 64_000
+MAX_PROMPT_CHARS = 100_000
 TOOL_SCHEMA_ALLOWANCE_CHARS = 8_000
 MAX_QUOTE_CHARS = 500
 # Conversation continuity: the current user's own recent turns, bounded.
@@ -176,7 +176,7 @@ def wrap_untrusted(text: str, history: list[tuple[str, str]] | None = None) -> s
     body = normalize_user_text(text)
     prior = build_history_block(history)
     # Hard prompt budget: drop history (oldest first) until persona + tool
-    # allowance + prompt fit the 50k-token cap. The message itself is already
+    # allowance + prompt fit the prompt budget. The message itself is already
     # capped at MAX_MESSAGE_CHARS, so it always fits.
     turns = list(history or [])
     while prior and (
