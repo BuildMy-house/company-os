@@ -156,7 +156,10 @@ memory:
   # worth saving with the `memory` tool (0 disables). Was 10; the live
   # MEMORY.md/USER.md stayed ~180 bytes (of 2200/1375 chars), i.e. unused.
   nudge_interval: 5
-  provider: ""
+  # Hindsight (hermes/hindsight/config.json, k8s/base/hindsight): explicit,
+  # tools-only long-term memory ALONGSIDE the built-in MEMORY.md/USER.md, which
+  # stay enabled above. See README "Hindsight memory".
+  provider: hindsight
 
 mcp_servers:
   steward:
