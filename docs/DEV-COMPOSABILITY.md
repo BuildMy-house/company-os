@@ -23,20 +23,23 @@ Targets (repo root `Makefile`):
 - `make test` — `python3 -m pytest -q tests --ignore=tests/test_backup.py`.
 - `make check` — `build-all` + `diff-prod` + `gate-example` + `test`.
 
-## Local kind/k3d overlay and in-memory hive (design note, not implemented)
+## Local kind/k3d overlay (`k8s/overlays/local`)
 
-Not built as code on purpose:
+Hive + pm-agent + a throwaway Postgres (emptyDir, trust auth) in namespace
+`local-dev`, with neutral names, gated by `make gate-local`.
 
-- Hive is a durable-event coordinator backed by Postgres (leases, work bids,
-  event replay). An in-memory fallback would be a code change in `hive/` with a
-  different consistency story, not a manifest change, so it needs its own
-  design and tests before anyone relies on it.
-- `k8s/base/postgres` carries BuildMy secret/DB names (audit item 14), so a
-  local overlay that adds it needs its own patches first.
+```bash
+kind create cluster                                  # or: k3d cluster create
+docker build -f hive/Dockerfile -t localhost:5001/local-hive:dev .
+docker build -f pm-agent/Dockerfile -t localhost:5001/local-pm-agent:dev .
+kind load docker-image localhost:5001/local-hive:dev localhost:5001/local-pm-agent:dev
+kubectl create namespace local-dev
+kubectl -n local-dev create secret generic local-secrets --from-literal=PLACEHOLDER=1  # add the keys your build needs
+make KUSTOMIZE=kustomize local-up                    # refuses non-kind-*/k3d-* contexts
+make local-down
+```
 
-Recommended path when this is picked up: a `k8s/overlays/local` that copies
-`example-standalone`, adds a throwaway Postgres (own Deployment, `emptyDir`,
-dev password Secret created by the developer), points images at the kind
-registry (`localhost:5001`), and is gated by `make gate-example`-style
-`FORBID_LITERALS`. Until then, `make render OVERLAY=k8s/overlays/example-standalone`
-plus `kind load docker-image` is enough to smoke-test the manifests.
+Not done, future ticket: an in-memory hive fallback. Hive is a durable-event
+coordinator backed by Postgres, so that is a code change in `hive/` with its own
+consistency story and tests, not a manifest change. The overlay above avoids it
+by giving hive a disposable real database.

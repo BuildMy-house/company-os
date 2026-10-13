@@ -34,7 +34,7 @@ sharing a file must be sequenced.
 | COMP-8 | Namespace/secret-name/registry-host parameterisation: introduce `k8s/overlays/example-standalone` (hive + pm-agent only, namespace `acme-ops`, own registry host, own secret names) using `namespace:` transformer + patches. Replace hardcoded cross-service URLs where they cross namespaces with short names | COMP-2, COMP-4, COMP-5 | k8s/overlays/example-standalone/**, small base edits | done (e958ff9) | `verify-kustomize-render.sh` on buildmy-prod identical; example-standalone render passes `FORBID_LITERALS="buildmyhouse company-ops localhost:30500 homely"` (exit 0) |
 | COMP-9 | Engineering worker pool as a standalone component: Dockerfile.engineering `shared` context overridable via build-arg (no hard BuildMy-house URL), repo list from overlay ConfigMap, flavour build-args documented | COMP-6, COMP-8 | Dockerfile.engineering, k8s/base/engineering/**, docs | done (6b74b1c; build-arg already existed, overlay + docs added, Dockerfile comment-only) | `docker buildx build --check`; example overlay with engineering component renders clean |
 | COMP-10 | Doc + script: `docs/STANDALONE-HIVE-PM.md` ("stand up hive+pm-agent for another project"), `scripts/new-project-overlay.sh <name> <namespace>` scaffold, CI job running verify script on every PR (buildmy-prod identical to baseline file, example-standalone literal-free) | COMP-8 | docs/, scripts/new-project-overlay.sh, .github/workflows/ci.yml | done | following the doc on a scratch overlay renders and passes the gates |
-| COMP-11 | Dev comfort: `make`/script targets `render`, `diff-prod`, `components` (list), kind/k3d local overlay with in-memory hive fallback | COMP-8 | scripts/, Makefile (new) | partial: Makefile + docs done; kind/k3d overlay with in-memory hive fallback not done | `scripts/…` works without kubectl (kustomize binary only) |
+| COMP-11 | Dev comfort: `make`/script targets `render`, `diff-prod`, `components` (list), kind/k3d local overlay with in-memory hive fallback | COMP-8 | scripts/, Makefile (new) | done (k8s/overlays/local + Makefile local-up/down/gate-local; in-memory hive fallback is a future hive/ code ticket) | `scripts/…` works without kubectl (kustomize binary only) |
 
 ## Ordering and parallelism
 
@@ -56,3 +56,8 @@ identical or change only code defaults that equal today's literals.
   human confirmation already required for main->prod.
 - Persona content (SOUL.md, AGENTS docs) must be re-authored per project; the
   plan only makes the file selectable, not generic.
+
+## Open decisions
+
+- Repo-vs-live image drift (see docs/IMAGES.md, 2026-10-13 inventory): engineering-opencode-direct (live `engineering-6b7dcfe5244d@sha256:4762d2c2...` vs repo `hive-complete-1e5f382@sha256:26f13cb2...`) and hermes-gateway (live `company-os:hermes-6b7dcfe5244d@sha256:e9c3462c...` vs repo `company-os@sha256:89b92c0b...`). Owner decides which side is right.
+- Future ticket: in-memory hive fallback (hive/ code change).
