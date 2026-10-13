@@ -94,7 +94,7 @@ kubelet probes come from the node and are not subject to pod policies.
 3. **Rate limits are in memory.** They reset on restart and assume one replica
    (`replicas: 1`, `Recreate`). A restart loop could briefly widen the budget.
 4. **One exchange at a time.** The request-context design serialises chats in
-   a pod; throughput is bounded by LLM latency (90 s timeout). Fine for v1
+   a pod; throughput is bounded by LLM latency (50 s timeout, under the app proxy's 60 s). Fine for v1
    volumes; revisit before scaling out.
 5. **No chat history is passed to the model.** Each turn is stateless, which
    limits cross-turn injection and cross-user leakage, at the cost of
