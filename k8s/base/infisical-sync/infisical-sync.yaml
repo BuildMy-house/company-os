@@ -132,7 +132,7 @@ spec:
       kind: Secret
       creationPolicy: Owner
 ---
-# Per-client bearer tokens for the MCP gateway (k8s/mcp-gateway.yaml); one key per client
+# Per-client bearer tokens for the MCP gateway (k8s/base/mcp-gateway/mcp-gateway.yaml); one key per client
 # identity: LOCAL_CLAUDE_TOKEN, LOCAL_OPENCODE_TOKEN, LOCAL_CODEX_TOKEN, stored at the
 # top-level Infisical path /mcp-gateway (decisions addendum: documents/plans/mcp-gateway-decisions).
 apiVersion: secrets.infisical.com/v1beta1

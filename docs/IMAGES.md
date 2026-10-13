@@ -52,7 +52,7 @@ Do not introduce `docker.io/library/…` references for repo-owned images.
 
 ## Not reproducible from this repo
 
-- `localhost:30500/buildmyhouse-app|mcp|luxcore:dev-…` (k8s/buildmyhouse-dev-*.yaml):
+- `localhost:30500/buildmyhouse-app|mcp|luxcore:dev-…` (k8s/projects/buildmyhouse-dev/*.yaml):
   built from the separate BuildMy-house/app repo by the dev deployer
   (scripts/dev-deploy-poller.js via the in-cluster BuildKit job); not built
   from this repo.

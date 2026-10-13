@@ -4,7 +4,7 @@
 #
 # Security posture (each item has a test in tests/test_pm_agent.py):
 #   - own Secret pm-agent-secrets (PM_DATABASE_URL + PM_AGENT_LLM_API_KEY only),
-#     never company-ops-secrets (k8s/pm-agent-infisical-sync.yaml)
+#     never company-ops-secrets (k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml)
 #   - dedicated ServiceAccount, no token mounted, no RBAC
 #   - NetworkPolicy: egress hive/postgres/dns/LLM only, ingress gateway only
 #   - no Axiom credentials; telemetry is structured stdout logs

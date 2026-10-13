@@ -7,7 +7,7 @@
 # folder contents are a manual invariant):
 #   PM_DATABASE_URL        DSN for the pm_agent_writer role (sql/roles.d/pm_agent_writer.yaml)
 #   PM_AGENT_LLM_API_KEY   dedicated, spend-capped LLM key for pm-agent only
-# Uses the existing infisical-auth in company-ops (k8s/infisical-sync.yaml).
+# Uses the existing infisical-auth in company-ops (k8s/base/infisical-sync/infisical-sync.yaml).
 # Neither value is committed here, and this change did not write them.
 apiVersion: secrets.infisical.com/v1beta1
 kind: InfisicalStaticSecret

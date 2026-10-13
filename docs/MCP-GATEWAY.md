@@ -12,7 +12,7 @@ kubernetes-mcp-server) as supervised children and exposes each as stateless Stre
   `LOCAL_CODEX_TOKEN`, synced from Infisical `/mcp-gateway`) — read from
   `/etc/mcp-gateway/tokens/<KEY>` per request, so Infisical rotation needs no restart.
   Failures are audited with an 8-char hash fingerprint only.
-- **Policy** (`k8s/mcp-gateway.yaml` ConfigMap): default-deny. A tool is reachable only when
+- **Policy** (`k8s/base/mcp-gateway/mcp-gateway.yaml` ConfigMap): default-deny. A tool is reachable only when
   listed in `clients.<id>.servers.<name>.tools`; enforced on `tools/list` *and* `tools/call`.
   Hive identities get read tools (`hive_agents`, `hive_available_work`, `hive_diagnostics`,
   `hive_events`, `hive_status`, `hive_wait`, `hive_work_bids`) plus `hive_submit` only — no
@@ -29,7 +29,7 @@ kubernetes-mcp-server) as supervised children and exposes each as stateless Stre
 ## Build (never from a mutable ref)
 `builder_build_and_push(context_ref: https://github.com/BuildMy-house/company-os.git#<40-hex-sha>,
 dockerfile_path: Dockerfile.mcp-gateway, image_repo: company-os-mcp-gateway, image_tag: <short-sha>)`,
-then pin the returned `@sha256:` digest in `k8s/mcp-gateway.yaml`.
+then pin the returned `@sha256:` digest in `k8s/base/mcp-gateway/mcp-gateway.yaml`.
 
 ## Admin rollout steps
 Run in this order (service `mcp-gateway` in namespace `company-ops`, container/service port
@@ -39,7 +39,7 @@ Run in this order (service `mcp-gateway` in namespace `company-ops`, container/s
    `8806c2b0-73d2-4bea-8537-5b874c5ff592`, environment `dev`.
 2. `sudo scripts/mcp-gateway-host-firewall.sh` on pop-os-1 (tailnet-only allowlist by
    default; `--remove` to undo).
-3. `kubectl apply -f k8s/infisical-sync.yaml` then `kubectl apply -f k8s/mcp-gateway.yaml`
+3. `kubectl apply -k k8s/base/infisical-sync` then `kubectl apply -k k8s/base/mcp-gateway`
    (secret before the deployment that mounts it).
 4. Verify NetworkPolicy enforcement from a non-allowed pod — this must time out:
    `kubectl run -n company-ops --rm -it nptest --image=curlimages/curl --restart=Never -- curl -m 5 http://mcp-gateway:8080/`

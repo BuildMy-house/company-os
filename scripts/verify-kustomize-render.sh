@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # verify-kustomize-render.sh [overlay_dir=k8s/overlays/buildmy-prod] [baseline_ref=origin/main]
-# Renders the overlay from the working tree and the k8s/ tree from <baseline_ref>,
-# then diffs the two outputs. Exit 0 = identical, 1 = diff, 2 = FORBID_LITERALS hit.
+# Renders the overlay from the working tree and the baseline tree from <baseline_ref>
+# (its overlay if present, else its k8s/ root), then diffs the two outputs.
+# Exit 0 = identical, 1 = diff, 2 = FORBID_LITERALS hit.
 set -euo pipefail
 
 overlay_dir="${1:-k8s/overlays/buildmy-prod}"
@@ -27,7 +28,14 @@ render() { "${RENDER_CMD[@]}" "$1"; }
 
 baseline_out="$tmpdir/baseline.yaml"
 overlay_out="$tmpdir/overlay.yaml"
-render "$tmpdir/k8s" >"$baseline_out"
+# Pre-COMP-2 baselines render from the flat k8s/ root (k8s/kustomization.yaml);
+# from COMP-2 on there is no root kustomization, so render the baseline's own
+# overlay entry point instead. Both compare against the same working-tree render.
+if [[ -f "$tmpdir/k8s/overlays/buildmy-prod/kustomization.yaml" ]]; then
+  render "$tmpdir/k8s/overlays/buildmy-prod" >"$baseline_out"
+else
+  render "$tmpdir/k8s" >"$baseline_out"
+fi
 render "$overlay_dir" >"$overlay_out"
 
 if [[ -n "${FORBID_LITERALS:-}" ]]; then

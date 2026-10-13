@@ -54,7 +54,7 @@ roleRef:
 ---
 # Read-only visibility into buildmyhouse-dev for the same company-ops SA —
 # deliberately narrower than buildmyhouse-dev-deployer-rollout
-# (k8s/buildmyhouse-dev-deployer-rbac.yaml): get/list/watch only, no patch,
+# (k8s/projects/buildmyhouse-dev/buildmyhouse-dev-deployer-rbac.yaml): get/list/watch only, no patch,
 # no Secrets, and the configmap grant is restricted by resourceNames to the
 # one state configmap the gate flow's runbook reads.
 apiVersion: rbac.authorization.k8s.io/v1

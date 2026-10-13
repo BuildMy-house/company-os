@@ -1,12 +1,12 @@
 # Supervised Streamable-HTTP MCP gateway (docs/MCP-GATEWAY.md). One-time admin apply:
-#   kubectl apply -f k8s/mcp-gateway.yaml
-# Not part of kustomization.yaml on purpose: nothing applies this automatically.
+#   kubectl apply -f k8s/base/mcp-gateway/mcp-gateway.yaml
+# Not part of k8s/overlays/buildmy-prod on purpose: nothing applies this automatically.
 #
 # Exposure: NodePort 30430 on pop-os-1 only, restricted to the tailnet (100.64.0.0/10)
 # by NetworkPolicy AND scripts/mcp-gateway-host-firewall.sh (ufw INPUT does not
 # filter DNAT'd NodePort traffic, so the host script uses the FORWARD/PREROUTING path).
 # Every client needs its own bearer token (Secret mcp-gateway-tokens, synced from Infisical
-# /mcp-gateway by k8s/infisical-sync.yaml); a request without one gets 401.
+# /mcp-gateway by k8s/base/infisical-sync/infisical-sync.yaml); a request without one gets 401.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

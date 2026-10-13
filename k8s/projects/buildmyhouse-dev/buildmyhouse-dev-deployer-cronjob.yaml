@@ -1,6 +1,6 @@
 # CO-DEV3: polls BuildMy-house/app's `dev` branch and auto-deploys new
 # commits into buildmyhouse-dev. See scripts/dev-deploy-poller.js for the
-# full logic (NOOP/PASS/FAIL verdicts) and k8s/buildmyhouse-dev-deployer-rbac.yaml
+# full logic (NOOP/PASS/FAIL verdicts) and k8s/projects/buildmyhouse-dev/buildmyhouse-dev-deployer-rbac.yaml
 # for its ServiceAccount/RBAC. Pattern-matched on k8s/base/dns-healthcheck/dns-healthcheck.yaml's
 # CronJob structure.
 #

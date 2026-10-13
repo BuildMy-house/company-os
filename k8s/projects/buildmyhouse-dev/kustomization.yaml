@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Dev-cluster stack for the buildmyhouse-dev namespace (CO-DEV1..4). Not part
+# of k8s/overlays/buildmy-prod: apply this directory directly, on demand.
+resources:
+  - buildmyhouse-dev-namespace.yaml
+  - buildmyhouse-dev-infisical-sync.yaml
+  - buildmyhouse-dev-app.yaml
+  - buildmyhouse-dev-deployer-rbac.yaml
+  - buildmyhouse-dev-deployer-cronjob.yaml

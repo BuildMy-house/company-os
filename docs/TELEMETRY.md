@@ -37,8 +37,8 @@ The CronJob is committed with `suspend: true` and is currently suspended.
 To resume (deliberate, manual step):
 
 1. Regenerate the scripts ConfigMap (now includes `dev-build-args.js`); see the
-   command at the top of `k8s/buildmyhouse-dev-deployer-cronjob.yaml`.
-2. `kubectl apply -f k8s/buildmyhouse-dev-deployer-cronjob.yaml` (keeps it suspended).
+   command at the top of `k8s/projects/buildmyhouse-dev/buildmyhouse-dev-deployer-cronjob.yaml`.
+2. `kubectl apply -f k8s/projects/buildmyhouse-dev/buildmyhouse-dev-deployer-cronjob.yaml` (keeps it suspended).
 3. Smoke-test with a one-off Job: `kubectl create job -n company-ops
    buildmyhouse-dev-deploy-manual-$(date +%s) --from=cronjob/buildmyhouse-dev-deployer`
    (works while suspended).

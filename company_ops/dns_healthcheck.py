@@ -444,7 +444,7 @@ def create_steward_task(
 
     URL resolution: explicit arg > env STEWARD_MCP_URL > env STEWARD_URL
     (the name Infisical actually syncs into company-ops-secrets for this, see
-    k8s/infisical-sync.yaml's /infra listing) > the production default.
+    k8s/base/infisical-sync/infisical-sync.yaml's /infra listing) > the production default.
     STEWARD_TOKEN is required (ValueError naming it if missing).
     """
     token = _require(steward_token, "STEWARD_TOKEN")

@@ -87,9 +87,13 @@ test("child crash returns an error then the child is respawned", async () => {
   assert.ok(ok.result, "child should recover");
 });
 
-// Manifest tests: parse the policy JSON out of the ConfigMap in k8s/mcp-gateway.yaml so the
+// Manifest tests: parse the policy JSON out of the ConfigMap in
+// k8s/base/mcp-gateway/mcp-gateway.yaml so the
 // deployed allowlist cannot silently drift from what the review decisions require.
-const manifest = readFileSync(fileURLToPath(new URL("../k8s/mcp-gateway.yaml", import.meta.url)), "utf8");
+const manifest = readFileSync(
+  fileURLToPath(new URL("../k8s/base/mcp-gateway/mcp-gateway.yaml", import.meta.url)),
+  "utf8",
+);
 
 function configMapPolicy(source, name) {
   for (const doc of source.split(/^---\n/m)) {
@@ -104,7 +108,7 @@ function configMapPolicy(source, name) {
     }
     return JSON.parse(block.join("\n"));
   }
-  assert.fail(`ConfigMap ${name} not found in k8s/mcp-gateway.yaml`);
+  assert.fail(`ConfigMap ${name} not found in k8s/base/mcp-gateway/mcp-gateway.yaml`);
 }
 
 test("manifest policy: no client lists hive bid/complete/heartbeat/next_work/allocate tools", () => {
