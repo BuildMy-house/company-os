@@ -32,7 +32,7 @@
 #     remediation mandate. See `company_ops/dns_healthcheck.py`'s
 #     `attempt_remediation` for the patch logic and its cooldown guard.
 #   * Its own ServiceAccount (`dns-healthcheck`, company-ops) rather than the
-#     existing `company-ops` one from k8s/rbac.yaml — that Role is scoped to
+#     existing `company-ops` one from k8s/base/core/rbac.yaml — that Role is scoped to
 #     the company-ops namespace only, and this job reads/patches kube-system
 #     resources.
 apiVersion: v1

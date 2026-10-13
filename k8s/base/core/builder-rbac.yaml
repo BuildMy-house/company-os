@@ -1,6 +1,6 @@
 # Dedicated, narrowly-scoped ServiceAccount + RBAC for the rootless-BuildKit-
 # based ephemeral builder Job (scripts/builder-manager-mcp.js). Deliberately
-# separate from the "company-ops" ServiceAccount in k8s/rbac.yaml (which
+# separate from the "company-ops" ServiceAccount in k8s/base/core/rbac.yaml (which
 # hermes-gateway/engineering-agent use for container_manager/k8s_deployment,
 # and which can patch/delete Deployments) — this SA can only
 # create/get/list/watch/delete Jobs, read their pods' logs, and

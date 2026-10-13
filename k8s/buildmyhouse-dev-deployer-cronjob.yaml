@@ -1,7 +1,7 @@
 # CO-DEV3: polls BuildMy-house/app's `dev` branch and auto-deploys new
 # commits into buildmyhouse-dev. See scripts/dev-deploy-poller.js for the
 # full logic (NOOP/PASS/FAIL verdicts) and k8s/buildmyhouse-dev-deployer-rbac.yaml
-# for its ServiceAccount/RBAC. Pattern-matched on k8s/dns-healthcheck.yaml's
+# for its ServiceAccount/RBAC. Pattern-matched on k8s/base/dns-healthcheck/dns-healthcheck.yaml's
 # CronJob structure.
 #
 # This cluster has no inbound webhook reachability, so GitHub polling
@@ -105,7 +105,7 @@ spec:
 #
 # This was chosen over adding a new MCP tool because every agent in this
 # workspace already has kubectl/hive access to company-ops (see
-# k8s/hive.yaml, k8s/engineering-opencode.yaml), while extending a second
+# k8s/base/hive/hive.yaml, k8s/base/engineering/engineering-opencode.yaml), while extending a second
 # MCP server's surface (companyos-engineering-builder) for a single,
 # rarely-used manual trigger would be more code for no real benefit over
 # the one-liner above, and the CronJob is already the single source of

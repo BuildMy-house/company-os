@@ -1,7 +1,7 @@
 # Hermes receives only the fixed company-os image build tool. This workload
 # has no engineering workspace, no company-ops ServiceAccount token, and no
 # deployment permissions; the mounted builder token has BuildKit Job/ephemeral
-# Secret permissions only (k8s/builder-rbac.yaml).
+# Secret permissions only (k8s/base/core/builder-rbac.yaml).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
