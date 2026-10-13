@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hindsight-data-backup
+  namespace: company-ops
+spec:
+  # 03:45 UTC: after postgres (03:00) and hermes-data (03:30) backups.
+  schedule: "45 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          # Hindsight's postgres data dir is 0700 owned by uid 1000.
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          containers:
+            - name: backup
+              # Same image as the other backup jobs (python + boto3).
+              image: localhost:30500/company-os@sha256:89b92c0be5cc05aa23d10043c89a5dcb3de6a925783f33321952985d8d761b4b
+              imagePullPolicy: Always
+              # The PVC is mounted at the Deployment's /home/hindsight/.pg0
+              # (embedded postgres). The ~9GB model cache is not on this PVC;
+              # the pg0 server binaries (installation/) are skipped as
+              # re-downloadable, so only instances/ (the data dir) is archived.
+              command:
+                - /opt/company-ops-venv/bin/python
+                - -m
+                - company_ops.backup
+                - --hindsight-data
+                - /mnt/hindsight-data
+              envFrom:
+                - secretRef:
+                    name: company-ops-secrets
+              volumeMounts:
+                - name: hindsight-data
+                  mountPath: /mnt/hindsight-data
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          volumes:
+            - name: hindsight-data
+              persistentVolumeClaim:
+                claimName: hindsight-data
+                readOnly: true
+          # hindsight-data is RWO: the backup pod must schedule on the same
+          # node as the hindsight pod (podAffinity, same as hermes-data-backup).
+          # Fine on the current single-node k3s; revisit before multi-node.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: app
+                        operator: In
+                        values:
+                          - hindsight
+                  topologyKey: kubernetes.io/hostname
