@@ -90,7 +90,7 @@ defmodule Hive.RouterTest do
     assert by_slug["slug"] == "test"
   end
 
-  test "stores a known worker tier on the work payload and ignores unknown tiers" do
+  test "stores a known worker tier on the work payload; unknown or missing tiers default to cheap" do
     submit = fn slug, tier ->
       body =
         Jason.encode!(%{
@@ -109,7 +109,9 @@ defmodule Hive.RouterTest do
     end
 
     submit.("tier-cheap-item", "cheap")
+    submit.("tier-power-item", "power")
     submit.("tier-bogus-item", "gpu")
+    submit.("tier-missing-item", nil)
 
     {:ok, work} = Hive.Work.available(100)
     by_slug =
@@ -119,7 +121,9 @@ defmodule Hive.RouterTest do
       end)
 
     assert by_slug["tier-cheap-item"]["tier"] == "cheap"
-    refute Map.has_key?(by_slug["tier-bogus-item"], "tier")
+    assert by_slug["tier-power-item"]["tier"] == "power"
+    assert by_slug["tier-bogus-item"]["tier"] == "cheap"
+    assert by_slug["tier-missing-item"]["tier"] == "cheap"
   end
 
   test "rejects duplicate and invalid human-readable slugs" do
@@ -540,23 +544,23 @@ defmodule Hive.RouterTest do
     :ok = Hive.Work.unsubscribe(self())
   end
 
-  test "prefers the most recent bid when scores tie" do
+  test "prefers the earliest bid when cost and score tie" do
     task_id = create_task!("tie-break")
 
     submit_bid!(task_id, "first", 0.8, 1, 1)
     submit_bid!(task_id, "second", 0.8, 1, 1)
 
-    assert allocate!(task_id, 900)["claimed_by"] == "second"
+    assert allocate!(task_id, 900)["claimed_by"] == "first"
   end
 
-  test "a resubmitted bid wins ties with its refreshed timestamp" do
+  test "a resubmitted bid loses ties because its timestamp is refreshed" do
     task_id = create_task!("upsert-recency")
 
     submit_bid!(task_id, "early", 0.8, 1, 1)
     submit_bid!(task_id, "later", 0.8, 1, 1)
     submit_bid!(task_id, "early", 0.8, 1, 1)
 
-    assert allocate!(task_id, 900)["claimed_by"] == "early"
+    assert allocate!(task_id, 900)["claimed_by"] == "later"
   end
 
   test "purges the expired assignee bid and reassigns the work" do
