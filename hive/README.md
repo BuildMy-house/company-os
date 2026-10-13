@@ -106,3 +106,24 @@ mix deps.get
 mix test
 mix run --no-halt
 ```
+
+### Running tests
+
+Tests must never touch the production Postgres. On 2026-10-12 a test run with the
+production `COMPANY_DATABASE_URL` in its environment wrote 112 junk work items, 348
+events and ghost agents into the live `company` schema. `config/test.exs` now runs
+`Hive.TestDbGuard` (`config/test_db_guard.exs`) before the app starts and aborts
+with a clear error unless `COMPANY_DATABASE_URL` is either unset (in-memory store,
+the default) or points at a dedicated test database: name `test`, `*_test` or
+`test_*`, not the production host (`postgres` in `company-ops`), and no
+`schema`/`search_path` of `company`. The SQL is qualified with `company.`, so the
+isolation comes from a separate test *database* that holds its own `company`
+schema, never from sharing the production one.
+
+```sh
+mix test                                   # in-memory, no database
+COMPANY_DATABASE_URL=postgresql://user:pass@localhost:5432/hive_test mix test
+```
+
+CI should run Hive tests against a throwaway `hive_test` Postgres service container
+with `COMPANY_DATABASE_URL` set to it; the guard fails the job otherwise.
