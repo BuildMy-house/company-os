@@ -22,11 +22,12 @@ _spec.loader.exec_module(shared)
 
 
 # Reasoning effort the Hermes runtime sends (hermes-config.yaml
-# custom_providers[pm_llm].extra_body.reasoning). The probe sends the same field
-# so a model that rejects it is skipped. tests/test_pm_agent_resolve_model.py
-# fails if the two drift apart. `low` is the lowest level every reasoning-mandatory
-# Nous model accepts (their supported_efforts are high/medium/low).
-REASONING_EXTRA_BODY = {"reasoning": {"effort": "low"}}
+# agent.reasoning_effort -> top-level `reasoning_effort` on the request). The probe
+# sends exactly that field and NEVER a nested `reasoning` object: Nous 400s when
+# both forms are present with conflicting values. tests/test_pm_agent_resolve_model.py
+# fails if the two drift apart.
+REASONING_EFFORT = "low"
+REASONING_EXTRA_BODY = {"reasoning_effort": REASONING_EFFORT}
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -150,12 +150,12 @@ class ReasoningProbeTests(unittest.TestCase):
 
     def test_probe_sends_extra_body(self):
         body = self._probe_body(extra_body=resolve_model.REASONING_EXTRA_BODY)
-        self.assertEqual(body["reasoning"], {"effort": "low"})
+        self.assertEqual(body["reasoning_effort"], "low")
         self.assertEqual(body["max_tokens"], 1)
         self.assertIn("tags", body)
 
     def test_probe_without_extra_body_is_unchanged(self):
-        self.assertNotIn("reasoning", self._probe_body())
+        self.assertNotIn("reasoning_effort", self._probe_body())
 
     def test_rejected_reasoning_effort_skips_model(self):
         # probe False (HTTP 400 on the effort) => next candidate wins.
@@ -177,13 +177,24 @@ class ReasoningProbeTests(unittest.TestCase):
             self.assertEqual(resolve_model.main([]), 0)
         self.assertEqual(captured["extra"], resolve_model.REASONING_EXTRA_BODY)
 
-    def test_hermes_config_extra_body_matches_probe(self):
+    def test_hermes_config_reasoning_effort_matches_probe(self):
         import yaml
 
         cfg = yaml.safe_load((PM_AGENT_DIR / "hermes-config.yaml").read_text())
-        extra = cfg["custom_providers"][0]["extra_body"]
-        self.assertEqual({"reasoning": extra["reasoning"]}, resolve_model.REASONING_EXTRA_BODY)
-        self.assertIn("tags", extra)  # Nous 400s without tags
+        self.assertEqual({"reasoning_effort": cfg["agent"]["reasoning_effort"]}, resolve_model.REASONING_EXTRA_BODY)
+        self.assertIn("tags", cfg["custom_providers"][0]["extra_body"])  # Nous 400s without tags
+
+    def test_no_conflicting_reasoning_forms(self):
+        # Regression: Nous 400s ("reasoningeffort" and "reasoning.effort" both
+        # provided) when the runtime's top-level reasoning_effort meets a nested
+        # extra_body.reasoning.
+        import yaml
+
+        cfg = yaml.safe_load((PM_AGENT_DIR / "hermes-config.yaml").read_text())
+        self.assertNotIn("reasoning", cfg["custom_providers"][0]["extra_body"])
+        body = self._probe_body(extra_body=resolve_model.REASONING_EXTRA_BODY)
+        self.assertFalse("reasoning" in body and "reasoning_effort" in body)
+        self.assertNotIn("reasoning", body)
 
     def test_timeout_budget_is_nested(self):
         import yaml

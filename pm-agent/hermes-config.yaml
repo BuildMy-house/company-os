@@ -3,6 +3,11 @@
 # nothing here is inherited from Hermes (the CEO agent), and every capability
 # is opt-in. Review docs/PM-AGENT-HERMES.md before widening anything.
 agent:
+  # The pm-agent only classifies feedback and calls two tools: low reasoning
+  # (replies took 15-30s). Hermes sends this as top-level reasoning_effort; do NOT
+  # also set extra_body.reasoning (Nous 400s on the conflict). resolve_model.py
+  # probes with the same value (REASONING_EXTRA_BODY).
+  reasoning_effort: low
   # Belt and braces: the api_server platform below also lists exactly one
   # toolset, so none of these can be reached anyway.
   disabled_toolsets:
@@ -40,12 +45,6 @@ custom_providers:
       tags:
         - product=hermes-agent
         - user=pm-agent
-      # The pm-agent only classifies feedback and calls two tools: keep model
-      # reasoning at the lowest level every candidate accepts (reasoning-
-      # mandatory models list high/medium/low). Replies were taking 15-30s.
-      # resolve_model.py probes with this same field (REASONING_EXTRA_BODY).
-      reasoning:
-        effort: low
 
 # No auxiliary models, no plugins (the axiom_usage plugin is NOT enabled:
 # telemetry is structured stdout logs only), no memory across users.
