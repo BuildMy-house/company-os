@@ -7,10 +7,13 @@ defmodule Hive.Router do
   plug(:dispatch)
 
   get "/.well-known/agent-card.json" do
+    card = Application.get_env(:hive, :agent_card, %{})
+
     json(conn, %{
-      "name" => "buildmy.house Hive",
-      "description" => "Coordinates work between buildmy.house agents",
-      "url" => "http://hive-coordinator:4100",
+      "name" => Map.get(card, :name, "buildmy.house Hive"),
+      "description" =>
+        Map.get(card, :description, "Coordinates work between buildmy.house agents"),
+      "url" => Map.get(card, :url, "http://hive-coordinator:4100"),
       "version" => "0.1.0",
       "capabilities" => %{"streaming" => false, "pushNotifications" => false},
       "skills" => [%{"id" => "coordinate-work", "name" => "Coordinate work"}]

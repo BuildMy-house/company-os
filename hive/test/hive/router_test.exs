@@ -23,8 +23,32 @@ defmodule Hive.RouterTest do
 
   test "publishes an agent card" do
     conn = conn(:get, "/.well-known/agent-card.json") |> Hive.Router.call(@opts)
+    card = Jason.decode!(conn.resp_body)
     assert conn.status == 200
-    assert Jason.decode!(conn.resp_body)["name"] == "buildmy.house Hive"
+    assert card["name"] == "buildmy.house Hive"
+    assert card["description"] == "Coordinates work between buildmy.house agents"
+    assert card["url"] == "http://hive-coordinator:4100"
+  end
+
+  test "agent card honors :agent_card app env overrides" do
+    Application.put_env(:hive, :agent_card, %{
+      name: "Custom Hive",
+      description: "Custom description",
+      url: "http://custom-hive:9999"
+    })
+
+    on_exit(fn -> Application.delete_env(:hive, :agent_card) end)
+
+    card =
+      conn(:get, "/.well-known/agent-card.json")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+
+    assert card["name"] == "Custom Hive"
+    assert card["description"] == "Custom description"
+    assert card["url"] == "http://custom-hive:9999"
+    assert card["version"] == "0.1.0"
   end
 
   test "creates and retrieves an A2A task" do

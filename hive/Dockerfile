@@ -10,6 +10,7 @@ RUN apt-get update \
 COPY hive/mix.exs hive/mix.lock ./
 RUN mix deps.get --only prod
 COPY hive/lib ./lib
+COPY hive/config ./config
 RUN mix compile
 
 EXPOSE 4100
