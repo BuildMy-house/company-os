@@ -113,14 +113,36 @@ if (hiveMember) {
   });
 }
 
+const HIVE_CALL_TIMEOUT_MS = Number(process.env.HIVE_CALL_TIMEOUT_MS) || 30_000;
+
+// Long-poll tools (hive_next_work / hive_wait) legitimately block for
+// timeout_seconds, so their deadline is that plus a grace margin.
+export function hiveCallTimeoutMs(name, arguments_ = {}, defaultMs = HIVE_CALL_TIMEOUT_MS) {
+  const longPollSeconds = Number(arguments_?.timeout_seconds);
+  return Number.isFinite(longPollSeconds) && longPollSeconds > 0 ? Math.max(defaultMs, longPollSeconds * 1000 + 30_000) : defaultMs;
+}
+
+export function rejectAfter(promise, ms, message, onTimeout = () => {}) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      onTimeout();
+      reject(Object.assign(new Error(message), { code: "HIVE_CALL_TIMEOUT" }));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function hiveCall(name, arguments_ = {}) {
   if (!hiveMember) throw new Error("Hive MCP is not configured");
-  await hiveReady;
+  const timeoutMs = hiveCallTimeoutMs(name, arguments_);
+  await rejectAfter(hiveReady, timeoutMs, `Hive MCP not ready after ${timeoutMs}ms (${name})`);
   const id = hiveNextId++;
-  return new Promise((resolve, reject) => {
+  const call = new Promise((resolve, reject) => {
     hivePending.set(id, { resolve, reject });
     hiveMember.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: arguments_ } })}\n`);
-  }).then(toolPayload);
+  });
+  return rejectAfter(call, timeoutMs, `Hive call ${name} timed out after ${timeoutMs}ms`, () => hivePending.delete(id)).then(toolPayload);
 }
 
 const pending = new Map();
@@ -136,7 +158,11 @@ function emitTelemetry(event) {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.AXIOM_TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify([{ _time: new Date().toISOString(), service: process.env.AXIOM_SERVICE_NAME || "engineering-manager", environment: process.env.DEPLOYMENT_ENVIRONMENT || "local", role: "manager", ...event }]),
-  }).catch(() => {});
+  }).then((response) => {
+    // fetch resolves on 4xx/5xx; without this a rejected ingest (bad token,
+    // oversized payload) silently drops the event.
+    if (!response.ok) console.error(`telemetry ingest rejected: HTTP ${response.status} (event=${event?.event} state=${event?.state})`);
+  }).catch((error) => console.error(`telemetry ingest failed: ${error?.message} (event=${event?.event} state=${event?.state})`));
 }
 
 function toolPayload(message) {
@@ -448,6 +474,64 @@ export async function completeWithRetry(hiveCallDep, args, { maxAttempts = 8, wa
   }
 }
 
+const RESULT_TEXT_CAP = 8_000;
+const RESULT_ERROR_CAP = 2_000;
+const capText = (value, cap) => {
+  const text = typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
+  return text.length > cap ? `${text.slice(0, cap)}...[truncated ${text.length - cap} chars]` : text;
+};
+
+// Default hive_complete payload for automatic completion. hive-member-mcp
+// fail-fast rejects any result without a valid result.feedback
+// (HIVE-GUIDANCE-FEEDBACK.md section 3), so this must always be attached.
+// The raw verbose get_result payload (full agentOutput.tools array) is never
+// forwarded; only the final output, state, error and duration are kept.
+export function buildCompletionResult(finished, bidContext = {}) {
+  const durationMs = Math.max(0, Date.now() - (finished?.startedAt ?? Date.now()));
+  const failed = finished?.state !== "completed";
+  const num = (value, fallback) => (Number.isFinite(value) && value >= 0 ? value : fallback);
+  const estimatedCost = num(bidContext.estimated_cost, 1);
+  const estimatedBenefit = num(bidContext.expected_benefit, 1);
+  const error = failed ? capText(finished?.error || finished?.result?.error || `agent process ${finished?.result?.status || "failed"}`, RESULT_ERROR_CAP) : "";
+  const payload = finished?.result || {};
+  return {
+    state: finished?.state || "failed",
+    duration_ms: durationMs,
+    ...(error ? { error } : {}),
+    output: capText(outputText(payload), RESULT_TEXT_CAP),
+    tool_call_count: Array.isArray(payload.agentOutput?.tools) ? payload.agentOutput.tools.length : 0,
+    feedback: {
+      calibration: {
+        estimated_cost: estimatedCost,
+        // Cost unit is minutes of worker wall-clock (automatic estimate).
+        actual_cost: Math.round(durationMs / 600) / 100,
+        estimated_benefit: estimatedBenefit,
+        actual_benefit: failed ? 0 : estimatedBenefit,
+      },
+      friction: failed ? `automatic completion: task ended ${finished?.state || "failed"}: ${error}`.slice(0, RESULT_ERROR_CAP) : "",
+    },
+  };
+}
+
+// Reports a finished task to Hive with retry and visible telemetry: one
+// hive_completion event per failed attempt and one final failure event.
+export async function completeHiveTask(hiveCallDep, taskId, finished, bidContext, { emit = emitTelemetry, ...retryOptions } = {}) {
+  const result = buildCompletionResult(finished, bidContext);
+  let attempts = 0;
+  try {
+    return await completeWithRetry(hiveCallDep, { task_id: taskId, state: finished.state, result }, {
+      ...retryOptions,
+      onFailure: (failure) => {
+        attempts = failure.attempt;
+        emit({ event: "hive_completion", task_id: taskId, state: "retrying", ...failure });
+      },
+    });
+  } catch (error) {
+    emit({ event: "hive_completion", task_id: taskId, state: "failed", stage: "complete", attempts, ...errorTelemetry(error) });
+    throw error;
+  }
+}
+
 export function buildFitPrompt({ prompt, capabilities, health, load, tier }) {
   // Nonce-delimited fence: the candidate prompt is untrusted task content and
   // must never be able to close the fence itself.
@@ -581,8 +665,13 @@ async function promptHiveWorkers({ work_slug, timeout_seconds = 30 }) {
 // A stuck assessment run must never hang the Hive subscription forever.
 const FIT_ASSESSMENT_TIMEOUT_MS = 90_000;
 
+// Bound each upstream (ai-cli-mcp) call: a runner that never replies would
+// otherwise leave the assessment, and the single Hive slot, hung forever with
+// no bid and no telemetry.
+const boundedUpstream = (name, arguments_, context) => rejectAfter(upstreamCall(name, arguments_, context), 30_000, `upstream ${name} did not reply within 30s`);
+
 async function runPromptToCompletion(prompt, context) {
-  const reply = await upstreamCall("run", { workFolder: "/workspace", prompt, agent: MANAGER.agent, model: MANAGER.model }, context);
+  const reply = await boundedUpstream("run", { workFolder: "/workspace", prompt, agent: MANAGER.agent, model: MANAGER.model }, context);
   const started = toolPayload(reply);
   if (reply.error || started?.status !== "started" || !Number.isInteger(started.pid)) {
     throw new Error(reply.error?.message || "engineering runner did not return a process id");
@@ -590,7 +679,7 @@ async function runPromptToCompletion(prompt, context) {
   const deadline = Date.now() + FIT_ASSESSMENT_TIMEOUT_MS;
   for (;;) {
     await delay(2000);
-    const payload = toolPayload(await upstreamCall("get_result", { pid: started.pid, verbose: true }, context));
+    const payload = toolPayload(await boundedUpstream("get_result", { pid: started.pid, verbose: true }, context));
     if (payload?.status === "failed" || payload?.status === "killed") throw new Error(`assessment run ${payload.status}`);
     if (payload?.status === "completed") return outputText(payload);
     if (Date.now() >= deadline) {
@@ -771,18 +860,16 @@ export async function runHiveWork(candidate, deps = {}) {
       task.pid = started.pid;
       trackProcess(task, started.pid, async (finished) => {
         try {
-          await completeWithRetry(hiveCallDep, { task_id: candidate.id, state: finished.state, result: finished.result || { error: finished.error } }, {
-            onFailure: (failure) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "retrying", ...failure }),
-          });
+          await completeHiveTask(hiveCallDep, candidate.id, finished, bidContext);
           emitTelemetry({ event: "hive_work", task_id: candidate.id, state: finished.state, agent_id: process.env.HIVE_AGENT_ID || "engineering-agent" });
         } catch (error) {
-          emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", stage: "complete", ...errorTelemetry(error) });
+          // completeHiveTask already emitted the per-attempt and final failure events.
         } finally {
           freeHiveSlot();
         }
       }, deps.trackOptions);
     }).catch((error) => {
-      completeWithRetry(hiveCallDep, { task_id: candidate.id, state: "failed", result: { error: error.message } })
+      completeHiveTask(hiveCallDep, candidate.id, { state: "failed", error: error.message, startedAt: task.startedAt }, bidContext)
         .catch((completionError) => emitTelemetry({ event: "hive_completion", task_id: candidate.id, state: "failed", stage: "runner_start", ...errorTelemetry(completionError) }))
         .finally(freeHiveSlot);
     });
