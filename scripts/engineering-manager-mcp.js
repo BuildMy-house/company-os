@@ -43,6 +43,9 @@ export const normalizeTier = (value, fallback = "standard") => {
 const positiveNumber = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
 const POOL_TIER = normalizeTier(process.env.AGENT_TIER, process.env.AGENT_FLAVOR === "opencode" ? "cheap" : "power");
 const POOL_COST_FACTOR = positiveNumber(process.env.AGENT_COST_FACTOR, process.env.AGENT_FLAVOR === "opencode" ? 0.1 : 1);
+// Hive holds allocation open (deferred) while connected pool workers have not bid; each
+// retry waits at most 10s, so this bounds the wait at roughly 2-4 minutes.
+const ALLOCATE_MAX_ATTEMPTS = 24;
 // A non-matching pool waits this long before assessing so the matching pool can
 // claim first; if the item is still available afterwards it bids as usual.
 const TIER_GRACE_MS = Number.isFinite(Number(process.env.HIVE_TIER_GRACE_MS)) && process.env.HIVE_TIER_GRACE_MS !== "" && process.env.HIVE_TIER_GRACE_MS !== undefined ? Math.max(0, Number(process.env.HIVE_TIER_GRACE_MS)) : 30_000;
@@ -821,16 +824,34 @@ export async function runHiveWork(candidate, deps = {}) {
       return;
     }
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_submitted", agent_id: agentId });
-    // hive_allocate leases the item to the top-ranked bidder, not the caller. If a
-    // better-ranked bid (e.g. the tier-preferred pool) exists, leave it to that
-    // bidder instead of parking the lease on a worker that never runs it.
-    const ranked = await hiveCallDep("hive_work_bids", { work_id: candidate.id, limit: 1 }).catch(() => null);
-    const topBidder = ranked?.bids?.find((bid) => bid.interested !== false)?.agent_id;
-    if (topBidder && topBidder !== agentId) {
-      emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_outranked", agent_id: agentId, top_bidder: topBidder, task_tier: taskTier, pool_tier: poolTier });
-      return;
+    // hive_allocate leases the item to the selected bidder (the cheapest one that can
+    // deliver), not the caller. If another bid is selected (e.g. a cheaper pool), leave it
+    // to that bidder instead of parking the lease on a worker that never runs it.
+    const outranked = async () => {
+      const ranked = await hiveCallDep("hive_work_bids", { work_id: candidate.id, limit: 1 }).catch(() => null);
+      const topBidder = ranked?.bids?.find((bid) => bid.interested !== false)?.agent_id;
+      if (topBidder && topBidder !== agentId) {
+        emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_outranked", agent_id: agentId, top_bidder: topBidder, task_tier: taskTier, pool_tier: poolTier });
+        return true;
+      }
+      return false;
+    };
+    if (await outranked()) return;
+    // Hive defers allocation (deferred: true) while a connected pool worker has not bid
+    // yet, so being first to bid never wins by speed. Wait out the bid window, re-checking
+    // that this worker is still the selected bidder before each retry.
+    let allocated;
+    const maxAllocateAttempts = deps.allocateMaxAttempts ?? ALLOCATE_MAX_ATTEMPTS;
+    for (let attempt = 1; ; attempt += 1) {
+      allocated = await hiveCallDep("hive_allocate", { work_id: candidate.id, lease_seconds: 900 });
+      if (!allocated?.deferred) break;
+      if (attempt >= maxAllocateAttempts) {
+        emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "allocation_deferred_timeout", agent_id: agentId });
+        return;
+      }
+      await (deps.wait ?? delay)(Math.min(10_000, Math.max(1, Number(allocated.retry_after_seconds) || 1) * 1000));
+      if (await outranked()) return;
     }
-    const allocated = await hiveCallDep("hive_allocate", { work_id: candidate.id, lease_seconds: 900 });
     if (allocated.claimed_by !== agentId) {
       emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "allocation_lost", agent_id: agentId, claimed_by: allocated.claimed_by });
       return;

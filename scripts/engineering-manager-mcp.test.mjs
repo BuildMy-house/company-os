@@ -718,6 +718,70 @@ check("tier: fit prompt tells the assessor tiering is preference only", () => {
   assert.match(prompt, /never a reason to claim fit you lack/);
 });
 
+check("runHiveWork waits out a deferred allocation (bid window) and then allocates", async () => {
+  const calls = [];
+  let allocateCalls = 0;
+  const hiveCall = async (name, args) => {
+    calls.push({ name, args });
+    if (name === "hive_work_bids") return { bids: [{ agent_id: "me", interested: true }] };
+    if (name === "hive_allocate") {
+      allocateCalls += 1;
+      return allocateCalls < 3 ? { deferred: true, reason: "bid_window_open", retry_after_seconds: 2 } : { claimed_by: "other-agent" };
+    }
+    return { ok: true };
+  };
+  const waits = [];
+  await runHiveWork(candidate, {
+    ...healthyDeps,
+    agentId: "me",
+    hiveCall,
+    wait: async (ms) => { waits.push(ms); },
+    assessTaskFit: async () => validAssessment,
+  });
+  assert.equal(allocateCalls, 3);
+  assert.deepEqual(waits, [2000, 2000]);
+});
+
+check("runHiveWork stops waiting once a cheaper bidder is selected during the bid window", async () => {
+  const calls = [];
+  let bidReads = 0;
+  const hiveCall = async (name, args) => {
+    calls.push({ name, args });
+    if (name === "hive_work_bids") {
+      bidReads += 1;
+      return { bids: [{ agent_id: bidReads === 1 ? "me" : "cheaper-pool", interested: true }] };
+    }
+    if (name === "hive_allocate") return { deferred: true, retry_after_seconds: 1 };
+    return { ok: true };
+  };
+  await runHiveWork(candidate, {
+    ...healthyDeps,
+    agentId: "me",
+    hiveCall,
+    wait: async () => {},
+    assessTaskFit: async () => validAssessment,
+  });
+  assert.equal(calls.filter((call) => call.name === "hive_allocate").length, 1);
+});
+
+check("runHiveWork gives up on a bid window that never closes instead of looping forever", async () => {
+  let allocateCalls = 0;
+  const hiveCall = async (name) => {
+    if (name === "hive_work_bids") return { bids: [{ agent_id: "me", interested: true }] };
+    if (name === "hive_allocate") { allocateCalls += 1; return { deferred: true, retry_after_seconds: 1 }; }
+    return { ok: true };
+  };
+  await runHiveWork(candidate, {
+    ...healthyDeps,
+    agentId: "me",
+    hiveCall,
+    allocateMaxAttempts: 4,
+    wait: async () => {},
+    assessTaskFit: async () => validAssessment,
+  });
+  assert.equal(allocateCalls, 4);
+});
+
 const failures = [];
 for (const [name, fn] of checks) {
   try {
