@@ -24,11 +24,32 @@ with `container_test`, then use the container-manager MCP's
 `container_upgrade` for the specific deployment. Verify readiness and health
 after rollout, and use `container_rollback` if it fails. Keep the previous
 known-good digest available. Do not use mutable tags or raw Kubernetes
-deployment mutations as the routine update path. Workers without the deploy
-MCP hand the manager the source SHA, image digest, and test evidence.
+deployment mutations as the routine update path. The local Claude session is
+now an eligible caller of these tools through the MCP gateway (see "Rollouts
+from the local Claude session via the MCP gateway" below); OpenCode and Codex
+workers are not, and keep handing the manager the source SHA, image digest,
+and test evidence.
 
 This rule applies to the Hive coordinator and every other company-os runtime
 deployment, not just the engineering image described below.
+
+## Rollouts from the local Claude session via the MCP gateway
+
+The local Claude session may call `builder_build_and_push` and
+`container_upgrade`/`container_rollback`/`container_status`/`container_health`/
+`container_logs` through the MCP gateway, via the workspace `.mcp.json` MCP
+entries `container-manager-gw` and `builder-gw`, authenticated with the issued
+key in env `LOCAL_CLAUDE_DEPLOY_TOKEN`. Scope: NON-gateway images only
+(`mcp-gateway` and `hermes-gateway` are excluded by the gateway's `argLimits`)
+built from an already-merged immutable SHA — the source must be a merged
+commit, and `container_upgrade` requires a digest-pinned image. Verify health
+after every upgrade and roll back on failure.
+
+Explicit user approval is still required for: any prod-branch merge or prod
+deploy, anything touching secrets, upgrades of `hermes-gateway` or
+`mcp-gateway` (which go through the independent hive/engineering path), and
+issuing or rotating gateway keys — only Nahar's `gateway-admin` identity can
+do that, never the local session.
 
 ## Production deployment
 
@@ -515,6 +536,13 @@ engineering-manager or builder tools.
 
 ### When/how to call `container_upgrade`
 
+- **Eligible caller**: the local Claude session, through the gateway's
+  `container-manager-gw` MCP entry, for non-gateway deployments only — the
+  deploy identity's `argLimits` exclude `mcp-gateway` and `hermes-gateway`,
+  and require a merged source SHA and a digest-pinned image. Prod-branch
+  merges/deploys, secret changes, gateway upgrades, and gateway key
+  issue/rotation still need explicit user approval (see "Rollouts from the
+  local Claude session via the MCP gateway" above).
 - **Only after** a `builder_build_and_push` call
   has already independently confirmed the target tag exists in the
   registry — never point a Deployment at a tag you haven't confirmed was
