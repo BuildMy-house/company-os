@@ -112,6 +112,30 @@ class ChatService:
         # exchange may be in flight at a time.
         self._lock = threading.Lock()
 
+    def _history(self, conversation_id: str, app_user_id: str) -> list[tuple[str, str]]:
+        """This user's own recent turns (oldest first), refusals/errors skipped.
+
+        Read through the user-scoped store call, so another user's messages
+        can never be returned. Failure degrades to no history, never an error.
+        """
+        try:
+            rows = self.store.recent_messages(
+                conversation_id, app_user_id, guard.HISTORY_MAX_MESSAGES * 4
+            )
+        except Exception:  # noqa: BLE001 - history is best-effort context
+            log.exception("failed to load conversation history")
+            return []
+        turns: list[tuple[str, str]] = []
+        for role, content in rows:
+            if role not in ("user", "assistant") or not isinstance(content, str):
+                continue
+            if role == "assistant" and (
+                content == "[runtime error]" or content == guard.REFUSAL
+            ):
+                continue
+            turns.append((role, content))
+        return turns[-guard.HISTORY_MAX_MESSAGES :]
+
     def handle(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         app_user_id = payload.get("app_user_id")
         message = payload.get("message")
@@ -137,12 +161,13 @@ class ChatService:
             return 503, {"error": "busy", "reply": guard.UNAVAILABLE_REPLY}
         try:
             conversation_id = self.store.get_or_create_conversation(app_user_id)
+            history = self._history(conversation_id, app_user_id)
             self.store.record_message(conversation_id, app_user_id, "user", clean)
             pm_tools.write_context(
                 self.context_path, app_user_id, conversation_id, clean
             )
             try:
-                raw = self.llm(guard.wrap_untrusted(clean))
+                raw = self.llm(guard.wrap_untrusted(clean, history))
             except (OSError, ValueError, KeyError, IndexError, urllib.error.URLError):
                 log.exception("hermes runtime call failed")
                 if looks_like_model_unavailable(sys.exc_info()[1] or Exception()):

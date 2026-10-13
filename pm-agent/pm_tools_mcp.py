@@ -49,7 +49,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["topic", "summary"],
+            "required": ["topic", "summary"],  # all other fields optional
             "properties": {
                 "topic": {"type": "string", "maxLength": 200},
                 "summary": {
@@ -57,6 +57,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "maxLength": 600,
                     "description": "One or two neutral sentences describing the feedback.",
                 },
+                "kind": {"type": "string", "enum": ["bug", "feature"]},
+                "what_happened": {"type": "string", "maxLength": 400, "description": "Bug: what actually happened, in the user's words."},
+                "expected": {"type": "string", "maxLength": 300, "description": "Bug: what they expected instead."},
+                "steps": {"type": "string", "maxLength": 500, "description": "Bug: short numbered steps in plain words. Feature: who/when it matters."},
+                "area": {"type": "string", "maxLength": 80, "description": "Where in the app, e.g. 2D plan, 3D view, furniture catalog, export, saving."},
+                "frequency": {"type": "string", "maxLength": 60, "description": "always, sometimes, or once."},
+                "severity": {"type": "string", "maxLength": 100, "description": "Impact in user words: blocked, annoying, cosmetic."},
+                "environment": {"type": "string", "maxLength": 150, "description": "Device/browser, only if the user volunteered it."},
+                "workaround": {"type": "string", "maxLength": 300, "description": "Workaround the user found, if any."},
             },
             "additionalProperties": False,
         },

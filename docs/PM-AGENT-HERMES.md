@@ -96,9 +96,15 @@ kubelet probes come from the node and are not subject to pod policies.
 4. **One exchange at a time.** The request-context design serialises chats in
    a pod; throughput is bounded by LLM latency (50 s timeout, under the app proxy's 60 s). Fine for v1
    volumes; revisit before scaling out.
-5. **No chat history is passed to the model.** Each turn is stateless, which
-   limits cross-turn injection and cross-user leakage, at the cost of
-   conversational continuity. Full history is persisted in `pm_conversations`.
+5. **Bounded own-user history only.** The model sees at most the last 6
+   messages (300 chars each, 1500 total) of the CURRENT user's own
+   conversation, inside a separate nonce-delimited `PRIOR_CONVERSATION
+   (untrusted data)` block, so it can ask one follow-up question at a time.
+   The store query is scoped by conversation id AND app_user_id (never another
+   user's messages); tool rows, `[runtime error]` and refusal turns are
+   skipped; a history read failure degrades to no history. History is as
+   untrusted as the current message (the SOUL says so). Full history is
+   persisted in `pm_conversations`.
 6. **Unverified against a live Hermes image.** The toolset names in
    `disabled_toolsets`, `platform_toolsets: {api_server: [pm_tools]}`, and
    `tools.include` follow the Hermes docs and the existing `hermes/config.yaml`

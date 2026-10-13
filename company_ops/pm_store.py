@@ -67,6 +67,28 @@ class PmStore:
             )
         return conversation_id
 
+    def recent_messages(
+        self, conversation_id: str, app_user_id: str, limit: int
+    ) -> list[tuple[str, str]]:
+        """Last `limit` (role, content) messages of this user's conversation.
+
+        Scoped by BOTH conversation id and app_user_id, so it can only ever
+        return the requesting user's own conversation. Oldest first.
+        """
+        cur = self.conn.execute(
+            "SELECT messages FROM company.pm_conversations "
+            "WHERE id = %s AND app_user_id = %s",
+            (conversation_id, app_user_id),
+        )
+        row = cur.fetchone()
+        messages = (row or {}).get("messages") or []
+        out = [
+            (str(m.get("role")), str(m.get("content")))
+            for m in messages
+            if isinstance(m, dict)
+        ]
+        return out[-limit:] if limit > 0 else []
+
     def find_similar_signal(self, normalized_topic: str) -> dict[str, object] | None:
         cur = self.conn.execute(
             "SELECT * FROM company.feedback_signals "
