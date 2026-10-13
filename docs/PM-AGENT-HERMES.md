@@ -111,6 +111,53 @@ kubelet probes come from the node and are not subject to pod policies.
    but were not run here. The build-time `command -v hermes` check and the
    hand-off checks below cover this.
 
+## Conversation quality, forms, and isolation
+
+**Forms.** `file_feedback_work` takes optional structured fields, all capped in
+`guard.py` and rendered by `guard.untrusted_description` into a fixed,
+still-untrusted Hive template. `kind=bug`: what_happened, expected, steps,
+area, frequency, severity, environment, workaround. `kind=feature`: goal,
+problem, who_when, workaround, importance, example, area. Callers passing only
+topic+summary are unchanged. SOUL.md tells the model to ask one short question
+at a time (max 3 follow-ups), file as soon as there is enough, accept "I don't
+know", and never ask for personal data, links or files.
+
+**50k-token cap.** `pm-agent/hermes-config.yaml` sets `model.context_length:
+50000` and `compression.threshold_tokens: 30000` (compaction fires at the
+lower of this and the ratio threshold). The front door additionally enforces
+`guard.MAX_PROMPT_CHARS` (150,000 chars, about 50k tokens at 3 chars/token)
+for persona + tool allowance + prompt by dropping the oldest history first.
+The resolver floor (`MIN_CONTEXT = 100_000`) is unchanged: the cap is always
+below every eligible model's window, so it always applies.
+
+**Fresh context per conversation.** `PmStore.get_or_create_conversation` opens
+a NEW conversation row (new id) when the user's last one ended: 30 minutes
+idle, or a filing outcome (filed_new, already_known, escalated,
+recorded_unfiled) was returned and 2+ minutes have passed. History passed to
+the model is read per conversation id and user, so it never spans
+conversations or users. On the Hermes side nothing persists between requests:
+the api_server `/v1/chat/completions` path is stateless (we never send
+`X-Hermes-Session-Id`, so each request is its own session), memory, user
+profile, memory/skill nudges, the background review fork, the skills curator
+and the session_search/skills toolsets are disabled, and
+`sessions.retention_days: 1` prunes the session store (state.db). While the
+front door is idle (no request for 5 minutes, no active context file),
+`pm-agent/state_wipe.py` also deletes `sessions/ memories/ skills/ cron/
+checkpoints/` under `$HERMES_HOME` (entrypoint.sh sets it to
+`/home/pmagent/.hermes`); config.yaml, SOUL.md and the open state.db are not
+touched. Residual: state.db rows of recent sessions exist for up to a day
+but are never read back into any prompt.
+
+**Live eval (not run in CI).** `tests/pm_agent_live_eval.py` drives scripted
+conversations (greeting, thanks/goodbye, vague bug, complete bug, feature,
+off-topic, injection) through the real front door and Hermes and prints
+PASS/FAIL, per-turn latency and prompt size against the 50 s / 50k-token
+budgets. Run it where the front door is reachable, e.g. in the pod:
+`PM_AGENT_URL=http://127.0.0.1:4200 python3 tests/pm_agent_live_eval.py`
+(optionally `PM_DATABASE_URL` to verify filings from `pm_conversations`, and
+`PM_AGENT_EVAL_ONLY=greeting,feature`). It files real (untrusted-marked) Hive
+items for the filing scenarios.
+
 ## Build and rollout hand-off (not done from this session)
 
 Source: branch `feat/pm-agent-hermes-runtime` of `BuildMy-house/company-os`

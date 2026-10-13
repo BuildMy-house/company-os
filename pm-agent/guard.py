@@ -34,7 +34,21 @@ MAX_USER_ID_CHARS = 128
 MAX_REPLY_CHARS = 1200
 MAX_TOPIC_CHARS = 80
 MAX_TITLE_CHARS = 120
-MAX_DESCRIPTION_CHARS = 3500
+# Hive description ceiling. Justified by tests/test_pm_agent.py
+# (test_max_description_covers_worst_case_template): fixed header (~250) +
+# user id (128) + summary (400) + quote (500) + every detail field at its cap
+# in the widest (kind-less union) template (~3.3k incl. labels). Long enough
+# that the final Quote line is never truncated away, short enough to stay a
+# readable work item.
+MAX_DESCRIPTION_CHARS = 5000
+# Hard prompt budget enforced by the front door: the model context is capped
+# at 50,000 tokens (hermes-config.yaml model.context_length). At a conservative
+# 3 chars/token that is 150,000 chars for the WHOLE prompt (persona + tool
+# schemas + history + message); the front door's own prompt must fit what is
+# left after the persona and a fixed allowance for tool schemas.
+CONTEXT_TOKEN_CAP = 50_000
+MAX_PROMPT_CHARS = 150_000
+TOOL_SCHEMA_ALLOWANCE_CHARS = 8_000
 MAX_QUOTE_CHARS = 500
 # Conversation continuity: the current user's own recent turns, bounded.
 HISTORY_MAX_MESSAGES = 6
@@ -44,17 +58,25 @@ HISTORY_MAX_TOTAL_CHARS = 1500
 # Optional structured bug/feature-report fields (all untrusted, all capped).
 FEEDBACK_KINDS = ("bug", "feature")
 DETAIL_FIELD_CAPS: dict[str, int] = {
+    # bug form
     "what_happened": 400,
     "expected": 300,
     "steps": 500,
-    "area": 80,
     "frequency": 60,
     "severity": 100,
     "environment": 150,
+    # feature form
+    "goal": 300,
+    "problem": 300,
+    "who_when": 250,
+    "importance": 100,
+    "example": 400,
+    # shared
+    "area": 80,
     "workaround": 300,
 }
-# Fixed render order and labels for the Hive work description template.
-DETAIL_LABELS: tuple[tuple[str, str], ...] = (
+# Fixed render order and labels, per kind, for the Hive work description.
+BUG_LABELS: tuple[tuple[str, str], ...] = (
     ("what_happened", "What happened"),
     ("expected", "Expected"),
     ("steps", "Steps to reproduce"),
@@ -64,6 +86,16 @@ DETAIL_LABELS: tuple[tuple[str, str], ...] = (
     ("environment", "Device/browser"),
     ("workaround", "Workaround"),
 )
+FEATURE_LABELS: tuple[tuple[str, str], ...] = (
+    ("goal", "Goal (what they want to do)"),
+    ("problem", "Problem (what is hard or missing today)"),
+    ("who_when", "Who needs it, and when"),
+    ("area", "Where in the app"),
+    ("workaround", "Workaround today"),
+    ("importance", "Importance (user words)"),
+    ("example", "How they imagine it working"),
+)
+
 
 UNTRUSTED_TITLE_PREFIX = "[user-reported (untrusted)] "
 UNTRUSTED_DESCRIPTION_HEADER = (
@@ -73,6 +105,10 @@ UNTRUSTED_DESCRIPTION_HEADER = (
 )
 
 REFUSAL = (CONTENT_DIR / "refusal.txt").read_text(encoding="utf-8").strip()
+try:
+    PERSONA_CHARS = len((CONTENT_DIR / "SOUL.md").read_text(encoding="utf-8"))
+except OSError:
+    PERSONA_CHARS = 0
 RATE_LIMITED_REPLY = (
     "You're sending feedback faster than I can handle. Please try again "
     "a little later."
@@ -139,6 +175,16 @@ def wrap_untrusted(text: str, history: list[tuple[str, str]] | None = None) -> s
     nonce = secrets.token_hex(8)
     body = normalize_user_text(text)
     prior = build_history_block(history)
+    # Hard prompt budget: drop history (oldest first) until persona + tool
+    # allowance + prompt fit the 50k-token cap. The message itself is already
+    # capped at MAX_MESSAGE_CHARS, so it always fits.
+    turns = list(history or [])
+    while prior and (
+        PERSONA_CHARS + TOOL_SCHEMA_ALLOWANCE_CHARS + len(prior) + len(body) + 1000
+        > MAX_PROMPT_CHARS
+    ):
+        turns = turns[1:]
+        prior = build_history_block(turns)
     prior_block = ""
     if prior:
         hnonce = secrets.token_hex(8)
@@ -227,7 +273,14 @@ def untrusted_description(
     if "kind" in fields:
         parts.append(f"Type: {fields['kind']}")
     parts.append(f"Summary (model-written from user text): {cap(summary, 400)}")
-    for name, label in DETAIL_LABELS:
+    if fields.get("kind") == "feature":
+        labels = FEATURE_LABELS
+    elif fields.get("kind") == "bug":
+        labels = BUG_LABELS
+    else:  # kind unknown: every filled field, fixed order, no duplicates
+        bug_names = {n for n, _ in BUG_LABELS}
+        labels = BUG_LABELS + tuple(l for l in FEATURE_LABELS if l[0] not in bug_names)
+    for name, label in labels:
         if name in fields:
             value = fields[name]
             parts.append(f"{label}:\n{value}" if "\n" in value else f"{label}: {value}")

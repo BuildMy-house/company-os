@@ -35,6 +35,7 @@ from typing import Any
 
 import guard
 import hive_presence
+import state_wipe
 import tools as pm_tools
 from company_ops.pm_store import PmStore
 
@@ -153,6 +154,7 @@ class ChatService:
         if not self.chat_limiter.allow(app_user_id):
             return 429, {"error": "rate limited", "reply": guard.RATE_LIMITED_REPLY}
 
+        state_wipe.touch_activity()
         clean = guard.normalize_user_text(message)
         if not clean:
             return 400, {"error": "message is required"}
@@ -305,6 +307,12 @@ def main() -> None:
         secrets_to_hide=secrets_to_hide,
     )
     stop = hive_presence.start(hive_url)
+    threading.Thread(
+        target=state_wipe.run_when_idle,
+        args=(os.environ.get("HERMES_HOME", "/home/pmagent/.hermes"), service.context_path, stop),
+        name="state-wipe",
+        daemon=True,
+    ).start()
     if os.environ.get("PM_AGENT_LLM_API_KEY"):
         threading.Thread(target=model_watchdog, name="model-watchdog", daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", port), make_handler(service))
