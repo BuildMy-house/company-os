@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: hive-coordinator
-          image: localhost:30500/company-os-hive:events
+          image: localhost:30500/company-os-hive:reaper-4de8a08@sha256:d710938876233aceda4a05af08f08b5b5bc5efe3e0b09b4a0706ba3fbe52b052
           imagePullPolicy: Always
           ports:
             - containerPort: 4100
