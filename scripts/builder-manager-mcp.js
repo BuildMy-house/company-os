@@ -44,7 +44,7 @@
 //      remains a separate end-to-end verification item.
 //
 // Authenticates to the Kubernetes API as the dedicated "builder-manager"
-// ServiceAccount (k8s/builder-rbac.yaml) via a bound token mounted at
+// ServiceAccount (k8s/base/core/builder-rbac.yaml) via a bound token mounted at
 // /var/run/secrets/builder-manager/token — NOT the pod's default
 // /var/run/secrets/kubernetes.io/serviceaccount/token, which belongs to
 // the shared "company-ops" SA used by container-manager/k8s_deployment and
@@ -123,7 +123,7 @@ const K8S_PORT = process.env.KUBERNETES_SERVICE_PORT || "443";
 const NAMESPACE = "company-ops";
 // NOT overridable via process.env.REGISTRY_HOST/REGISTRY_PORT — verified
 // live 2026-09-29 that Kubernetes auto-injects Docker-links-style discovery
-// env vars for any Service named "registry" in this namespace (k8s/registry.yaml),
+// env vars for any Service named "registry" in this namespace (k8s/base/registry/registry.yaml),
 // including one literally named `REGISTRY_PORT` set to `tcp://<clusterIP>:5000`.
 // Reading that as an override silently replaced the intended "5000" default,
 // producing a malformed `registry.company-ops.svc.cluster.local:tcp://10.43.x.x:5000/...`
@@ -524,7 +524,7 @@ async function deleteJob(jobName) {
 
 // Called AFTER the Job is created (needs the Job's own UID), so the Secret
 // can carry an ownerReference to it — this Role has no `patch` on Secrets
-// (see k8s/builder-rbac.yaml), so the ownerReference must be set at create
+// (see k8s/base/core/builder-rbac.yaml), so the ownerReference must be set at create
 // time, not added later. Kubernetes' garbage collector will then delete
 // this Secret on its own if this script's own process dies before its
 // `finally` block runs `deleteSecret` — the Job's own
@@ -656,7 +656,7 @@ async function call(name, args) {
 // buildAndPush functions (e.g. scripts/dev-deploy-poller.js) without
 // starting the stdio MCP server loop below, which would otherwise hang
 // forever waiting on stdin in a non-MCP caller. The live production
-// stdio-MCP behavior (run via k8s/hermes-build-dispatcher.yaml) is
+// stdio-MCP behavior (run via k8s/base/hermes/hermes-build-dispatcher.yaml) is
 // unchanged: this file is still its own entrypoint when executed directly.
 if (import.meta.url === `file://${process.argv[1]}`) {
   const input = readline.createInterface({ input: process.stdin });

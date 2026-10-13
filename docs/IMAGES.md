@@ -1,6 +1,6 @@
 # Container images
 
-All repo-owned images live in the in-cluster registry (`k8s/registry.yaml`,
+All repo-owned images live in the in-cluster registry (`k8s/base/registry/registry.yaml`,
 NodePort `localhost:30500`) under `localhost:30500/<repo>`. Build and push
 every one of them from any checkout:
 
@@ -41,8 +41,8 @@ If you change a mutable tag in a manifest, update the matching entry in
 ## Digest pins that must move together
 
 `localhost:30500/company-os@sha256:<digest>` is referenced by three manifests:
-`k8s/company-ops.yaml`, `k8s/postgres-backup.yaml` and
-`k8s/hermes-data-backup.yaml`. The backup CronJobs run `company_ops.backup`
+`k8s/base/hermes/company-ops.yaml`, `k8s/base/backups/postgres-backup.yaml` and
+`k8s/base/backups/hermes-data-backup.yaml`. The backup CronJobs run `company_ops.backup`
 from the same image, so after any rebuild that changes `company_ops/` (the
 `--hermes-data` mode exists only in images built from this branch or later)
 get the new digest from `scripts/build-push-images.sh --only company-os

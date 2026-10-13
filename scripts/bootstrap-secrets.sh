@@ -67,7 +67,7 @@ if [ "$DRY_RUN" = "1" ]; then
   echo "  ANALYTICS_ADMIN_TOKEN AXIOM_DATASET AXIOM_ENDPOINT AXIOM_TOKEN BUILDMYHOUSE_MCP_TOKEN CLOUDFLARE_API_TOKEN JWT_SECRET LUXCORE_WORKER_TOKEN NEON_API_KEY R2_ACCESS_KEY_ID R2_ACCOUNT_ID R2_BUCKET_NAME R2_PUBLIC_URL R2_S3_ENDPOINT R2_SECRET_ACCESS_KEY RESEND_API_KEY RESEND_FROM_EMAIL VITE_AXIOM_DATASET VITE_AXIOM_ENDPOINT VITE_AXIOM_TOKEN"
   echo
   echo "builder-manager-token (${OPS_NS}), buildmyhouse-dev-deployer-token (${OPS_NS})"
-  echo "  cluster-issued SA tokens — recreated by kubectl apply of k8s/builder-rbac.yaml + k8s/buildmyhouse-dev-deployer-rbac.yaml"
+  echo "  cluster-issued SA tokens — recreated by kubectl apply of k8s/base/core/builder-rbac.yaml + k8s/buildmyhouse-dev-deployer-rbac.yaml"
   exit 0
 fi
 
@@ -108,7 +108,7 @@ apply_secret() { # apply_secret <name> <namespace> <file...>
 }
 
 echo "[1/6] Ensuring namespaces..."
-kubectl apply -f "$REPO_ROOT/k8s/namespace.yaml" >/dev/null
+kubectl apply -f "$REPO_ROOT/k8s/base/core/namespace.yaml" >/dev/null
 kubectl apply -f "$REPO_ROOT/k8s/buildmyhouse-dev-namespace.yaml" >/dev/null
 
 echo "[2/6] Seeding infisical-bootstrap-credentials (the only manually provisioned secret)..."
@@ -144,7 +144,7 @@ fetch "$APP_PROJECT_ID" / "$TMP/app.json"
 apply_secret buildmyhouse-dev-secrets "$APP_NS" "$TMP/app.json"
 
 echo "[6/6] Recreating cluster-issued SA-token Secrets + live-sync manifests..."
-kubectl apply -f "$REPO_ROOT/k8s/builder-rbac.yaml" >/dev/null
+kubectl apply -f "$REPO_ROOT/k8s/base/core/builder-rbac.yaml" >/dev/null
 kubectl apply -f "$REPO_ROOT/k8s/buildmyhouse-dev-deployer-rbac.yaml" >/dev/null
 if kubectl get crd infisicalstaticsecrets.secrets.infisical.com >/dev/null 2>&1; then
   kubectl apply -f "$REPO_ROOT/k8s/infisical-sync.yaml" >/dev/null

@@ -3,7 +3,7 @@
 // Thin bridge from Claude/agent-manager to Hermes's own gateway, over
 // Hermes's built-in OpenAI-compatible api_server platform (gateway/
 // platforms/api_server.py, hermes/config.yaml's platforms.api_server
-// block) — reached via the hermes-gateway K8s Service (k8s/company-ops.yaml)
+// block) — reached via the hermes-gateway K8s Service (k8s/base/hermes/company-ops.yaml)
 // on port 8642, never exposed outside the cluster.
 //
 // A Discord-based bridge was considered first and rejected: Hermes's own

@@ -174,10 +174,10 @@ mcp_servers:
   # reachable — always failed to connect to localhost:8001 — and reimplemented
   # deploy/status/rollback/list_generations/get_logs, every one of which maps
   # directly onto a native K8s primitive). In-cluster auth via the pod's own
-  # ServiceAccount token (RBAC: company-ops/k8s/rbac.yaml — read-only on
+  # ServiceAccount token (RBAC: company-ops/k8s/base/core/rbac.yaml — read-only on
   # pods/events, patch-only on deployments/replicasets, no delete, no
   # secrets). --disable-destructive is defense in depth on top of that RBAC.
-  # RBAC was extended 2026-10 (k8s/rbac.yaml) with batch/jobs+cronjobs in
+  # RBAC was extended 2026-10 (k8s/base/core/rbac.yaml) with batch/jobs+cronjobs in
   # company-ops and read-only access to buildmyhouse-dev, specifically so
   # this tool can drive docs/DEV-CLUSTER-GATE.md's runbook (poller
   # status/logs, manual rebuild trigger, buildmyhouse-dev pod/configmap
@@ -221,7 +221,7 @@ mcp_servers:
 # ignores messages authored by its own bot identity (self-message filter),
 # so a same-token round trip would never surface a reply. host must be
 # 0.0.0.0 (not the library default 127.0.0.1) for the new hermes-gateway
-# Service (k8s/company-ops.yaml) to reach it from other pods in-namespace;
+# Service (k8s/base/hermes/company-ops.yaml) to reach it from other pods in-namespace;
 # it is still not exposed outside the cluster (ClusterIP only, no Ingress).
 # API_SERVER_KEY is a new secret — add it to company-ops-secrets before
 # applying this config (see .env.example).

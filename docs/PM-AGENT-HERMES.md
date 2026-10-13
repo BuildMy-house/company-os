@@ -37,7 +37,7 @@ front door serves only `/chat` and `/healthz`.
 
 | # | Criterion | Enforcement | Evidence |
 |---|---|---|---|
-| 1 | Own secret, two keys only, no `company-ops-secrets` | `k8s/pm-agent.yaml` env from `pm-agent-secrets` keys `PM_DATABASE_URL`, `PM_AGENT_LLM_API_KEY`; `envFrom` removed; `k8s/pm-agent-infisical-sync.yaml` syncs Infisical `/pm-agent` into it | `ManifestSecurityTest.test_own_secret_only_no_envfrom_company_ops`, `test_infisical_sync_targets_only_pm_agent_secret` |
+| 1 | Own secret, two keys only, no `company-ops-secrets` | `k8s/base/pm-agent/pm-agent.yaml` env from `pm-agent-secrets` keys `PM_DATABASE_URL`, `PM_AGENT_LLM_API_KEY`; `envFrom` removed; `k8s/pm-agent-infisical-sync.yaml` syncs Infisical `/pm-agent` into it | `ManifestSecurityTest.test_own_secret_only_no_envfrom_company_ops`, `test_infisical_sync_targets_only_pm_agent_secret` |
 | 2 | No Axiom | No Axiom env, plugin, or code; Hermes `plugins.enabled: []`; structured JSON logs to stdout | `test_no_axiom_credentials_or_env`, `test_no_axiom_anywhere_in_pm_agent_code` |
 | 3 | No SA token, dedicated SA, no RBAC | `ServiceAccount pm-agent`, `automountServiceAccountToken: false` on SA and pod, no Role/Binding | `test_dedicated_service_account_no_token_no_rbac` |
 | 4 | NetworkPolicy | Egress: hive-coordinator:4100, postgres:5432, kube-dns:53, public HTTPS:443 (LLM). Ingress: pm-agent-gateway:4200 only | `test_network_policy_*` (see enforcement finding below) |
@@ -119,9 +119,9 @@ The in-cluster engineering agent should, via the hive:
    The build fails fast if `hermes` is not on PATH in the base image.
 2. Confirm the Infisical `/pm-agent` folder holds exactly the two secrets (user
    action below), then apply `k8s/pm-agent-infisical-sync.yaml` (it is not in
-   `k8s/kustomization.yaml`, like `k8s/infisical-sync.yaml`, because it needs
+   `k8s/overlays/buildmy-prod`, like `k8s/infisical-sync.yaml`, because it needs
    the operator CRDs) and confirm `pm-agent-secrets` exists with two keys.
-3. Set the image tag in `k8s/pm-agent.yaml` to the built tag/digest and apply it
+3. Set the image tag in `k8s/base/pm-agent/pm-agent.yaml` to the built tag/digest and apply it
    (replacing `:latest`), then verify: pod Ready, `/healthz` 200, hive agent list
    shows `pm-agent`, a test `/chat` through the gateway returns a plain-text
    reply and writes `pm_conversations` rows (roles `user`, `tool`, `assistant`).

@@ -1,4 +1,4 @@
-"""Tests for the Hermes-runtime pm-agent (pm-agent/*.py, k8s/pm-agent*.yaml).
+"""Tests for the Hermes-runtime pm-agent (pm-agent/*.py, k8s/base/pm-agent/*.yaml).
 
 Mocked Postgres (FakeStore duck-typing PmStore) + stubbed Hive (patched
 tools.file_feedback_work) + stubbed LLM callable. Covers the front door, the
@@ -686,7 +686,7 @@ def _docs(path):
 
 class ManifestSecurityTest(unittest.TestCase):
     def setUp(self):
-        self.docs = _docs("k8s/pm-agent.yaml")
+        self.docs = _docs("k8s/base/pm-agent/pm-agent.yaml")
         self.by_kind = {d["kind"]: d for d in self.docs}
         self.pod = self.by_kind["Deployment"]["spec"]["template"]["spec"]
         self.container = self.pod["containers"][0]
@@ -707,7 +707,7 @@ class ManifestSecurityTest(unittest.TestCase):
         self.assertEqual(keys, {"PM_DATABASE_URL", "PM_AGENT_LLM_API_KEY"})
         manifest_code = "\n".join(
             line
-            for line in (REPO / "k8s/pm-agent.yaml").read_text().splitlines()
+            for line in (REPO / "k8s/base/pm-agent/pm-agent.yaml").read_text().splitlines()
             if not line.lstrip().startswith("#")
         )
         self.assertNotIn("company-ops-secrets", manifest_code)
@@ -730,7 +730,7 @@ class ManifestSecurityTest(unittest.TestCase):
         self.assertTrue(shared)
 
     def test_no_axiom_credentials_or_env(self):
-        text = (REPO / "k8s/pm-agent.yaml").read_text()
+        text = (REPO / "k8s/base/pm-agent/pm-agent.yaml").read_text()
         env_names = [e["name"] for e in self.container["env"]]
         self.assertFalse([n for n in env_names if "AXIOM" in n.upper()])
         self.assertNotIn("AXIOM_TOKEN", text)
@@ -743,8 +743,8 @@ class ManifestSecurityTest(unittest.TestCase):
         self.assertEqual(self.pod["serviceAccountName"], "pm-agent")
         self.assertIs(self.pod["automountServiceAccountToken"], False)
         self.assertNotEqual(self.pod["serviceAccountName"], "company-ops")
-        for path in (REPO / "k8s").glob("*.yaml"):
-            for doc in _docs(f"k8s/{path.name}"):
+        for path in (REPO / "k8s").rglob("*.yaml"):
+            for doc in _docs(str(path.relative_to(REPO))):
                 if doc.get("kind") in {"RoleBinding", "ClusterRoleBinding"}:
                     for subject in doc.get("subjects", []):
                         self.assertNotEqual(
@@ -814,17 +814,23 @@ class ManifestSecurityTest(unittest.TestCase):
         self.assertEqual(len(flat), 4)  # nothing else
 
     def test_gateway_unchanged_and_still_fronts_pm_agent(self):
-        text = (REPO / "k8s/pm-agent-gateway.yaml").read_text()
+        text = (REPO / "k8s/base/pm-agent/pm-agent-gateway.yaml").read_text()
         self.assertIn("proxy_pass http://pm-agent:4200;", text)
         self.assertIn("nodePort: 30420", text)
-        gw = [d for d in _docs("k8s/pm-agent-gateway.yaml") if d["kind"] == "Deployment"][0]
+        gw = [d for d in _docs("k8s/base/pm-agent/pm-agent-gateway.yaml") if d["kind"] == "Deployment"][0]
         labels = gw["spec"]["template"]["metadata"]["labels"]
         self.assertEqual(labels, {"app": "pm-agent-gateway"})
 
     def test_kustomization_includes_pm_agent(self):
-        kust = yaml.safe_load((REPO / "k8s/kustomization.yaml").read_text())
+        kust = yaml.safe_load(
+            (REPO / "k8s/base/pm-agent/kustomization.yaml").read_text()
+        )
         self.assertIn("pm-agent.yaml", kust["resources"])
         self.assertIn("pm-agent-gateway.yaml", kust["resources"])
+        overlay = yaml.safe_load(
+            (REPO / "k8s/overlays/buildmy-prod/kustomization.yaml").read_text()
+        )
+        self.assertIn("../../base/pm-agent", overlay["resources"])
 
 
 class HermesConfigAllowlistTest(unittest.TestCase):

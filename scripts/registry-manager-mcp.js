@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // In-cluster registry inventory/cleanup. Talks to the registry:2 HTTP API
-// (k8s/registry.yaml) over its in-cluster Service DNS name — no host access,
+// (k8s/base/registry/registry.yaml) over its in-cluster Service DNS name — no host access,
 // no docker socket, no k3s ctr/sudo. Building and pushing new images stays
 // outside the pod (same boundary container-manager-mcp.js already draws for
 // container images) — this only lists/removes what is already pushed.

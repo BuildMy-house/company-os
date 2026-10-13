@@ -16,7 +16,7 @@ Agents working this runbook: use the `kubernetes` MCP tool (Hermes's
 `k8s_deployment` entry, or the engineering-agent's own `kubernetes` MCP
 entry — see `hermes/config.yaml` and `scripts/generate-agent-mcp-config.js`)
 instead of shelling out to a `kubectl` binary, which does not exist in the
-engineering-agent container image. Its RBAC (`k8s/rbac.yaml`) covers
+engineering-agent container image. Its RBAC (`k8s/base/core/rbac.yaml`) covers
 exactly what this runbook needs: company-ops pods/events/deployments/
 replicasets/jobs/cronjobs, and read-only access to buildmyhouse-dev's
 pods/services/deployments and the `buildmyhouse-dev-deploy-state`
@@ -124,7 +124,7 @@ HTTP_STATUS:200
 `browser-adversary` (a separate, source-blind MCP service running in
 `company-ops`, see `docs/DEPLOY-BROWSER-ADVERSARY.md`) is already allow-
 listed to test the dev app's in-cluster address. Its
-`ADVERSARY_ALLOWED_ORIGINS` env var (`k8s/browser-adversary.yaml`) includes
+`ADVERSARY_ALLOWED_ORIGINS` env var (`k8s/base/browser-adversary/browser-adversary.yaml`) includes
 both the prod origin and:
 
 ```

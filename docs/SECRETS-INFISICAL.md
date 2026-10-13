@@ -49,7 +49,7 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | VITE_AXIOM_TOKEN | company-ops-secrets | app telemetry ingest | yes | `/infra` |
 | INFISICAL_HOST_URL, INFISICAL_PROJECT_ID, INFISICAL_ENV, INFISICAL_SECRET_PATH | local .env (non-secret config; ids also committed in sync manifests) | fetch-infisical-secrets.js, entrypoints | n/a — config, not secrets | hard-coded defaults in scripts |
 | INFISICAL_UNIVERSAL_AUTH_CLIENT_ID, INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET | the one manual bootstrap credential | Infisical operator (via `infisical-bootstrap-credentials` Secret), fetch script | no — it authenticates TO Infisical | provisioned by hand, then seeded as k8s Secret `infisical-bootstrap-credentials` (keys: `clientId`, `clientSecret`) in `company-ops` + `buildmyhouse-dev` |
-| builder-manager-token (ca.crt, namespace, token) | k8s token controller | builder-manager-mcp.js in engineering/dispatcher pods | no — cluster-issued SA token, not portable | recreated by `kubectl apply` of k8s/builder-rbac.yaml |
+| builder-manager-token (ca.crt, namespace, token) | k8s token controller | builder-manager-mcp.js in engineering/dispatcher pods | no — cluster-issued SA token, not portable | recreated by `kubectl apply` of k8s/base/core/builder-rbac.yaml |
 | buildmyhouse-dev-deployer-token (ca.crt, namespace, token) | k8s token controller | buildmyhouse-dev-deployer CronJob | no — cluster-issued SA token | recreated by `kubectl apply` of k8s/buildmyhouse-dev-deployer-rbac.yaml |
 | buildmyhouse-dev-secrets (JWT_SECRET, ANALYTICS_ADMIN_TOKEN, BUILDMYHOUSE_MCP_TOKEN, LUXCORE_WORKER_TOKEN, R2_ACCOUNT_ID/R2_BUCKET_NAME/R2_PUBLIC_URL/R2_S3_ENDPOINT, VITE_AXIOM_DATASET/VITE_AXIOM_ENDPOINT, RESEND_*, plus app-side AXIOM_/CLOUDFLARE_/NEON_/R2_ keys) | dedicated Secret in buildmyhouse-dev | buildmyhouse-dev app + deployer CronJob | yes | buildmyhouse-app project `/` |
 | browser-adversary-auth | referenced optional:true in browser-adversary.yaml; absent live | browser-adversary auth mount | no keys defined yet | out of scope until keys are defined; then `/infra/browser-adversary` |
@@ -139,7 +139,7 @@ Prereqs: kubectl (kubeconfig for the new cluster), node 18+, jq.
    static seeds are superseded. Re-running `scripts/bootstrap-secrets.sh`
    remains safe at any time.
 
-5. Deploy workloads (`kubectl apply -k k8s` plus the buildmyhouse-dev manifests)
+5. Deploy workloads (`kubectl apply -k k8s/overlays/buildmy-prod` plus the buildmyhouse-dev manifests)
    and restart pods so they pick up envFrom values.
 
 **File-type secrets:** no pod file mounts are needed. The GitHub App private

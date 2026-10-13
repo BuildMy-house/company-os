@@ -32,7 +32,7 @@ sudo install -D -o "$USER" -g "$USER" -m 600 \
 ```
 
 The script uses the ignored `.env`, builds and pushes images to the
-in-cluster registry (`k8s/registry.yaml`), creates the Postgres init
+in-cluster registry (`k8s/base/registry/registry.yaml`), creates the Postgres init
 ConfigMap, and deploys persistent Postgres and Hermes data. See
 `docs/DEPLOY-ENGINEERING.md` for the full build/push/deploy/rollback flow.
 

@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base/core
+  - ../../base/postgres
+  - ../../base/registry
+  - ../../base/browser-adversary
+  - ../../base/hermes
+  - ../../base/engineering-build-dispatcher
+  - ../../base/engineering
+  - ../../base/hive
+  - ../../base/pm-agent
+  - ../../base/backups
+  - ../../base/dns-healthcheck

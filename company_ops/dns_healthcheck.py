@@ -8,7 +8,7 @@ result only (never remediates, never opens a Steward task).
 Auto-remediation (added 2026-09-28, explicitly authorized): on detection,
 patches the ``coredns`` Deployment's pod-template annotations to trigger a
 rollout restart — see ``attempt_remediation``. This requires the narrowly
-scoped RBAC grant in ``k8s/dns-healthcheck.yaml`` (get+patch on ONLY the
+scoped RBAC grant in ``k8s/base/dns-healthcheck/dns-healthcheck.yaml`` (get+patch on ONLY the
 named ``coredns`` Deployment in kube-system; nothing broader). A Steward
 task is opened on every detection regardless of remediation outcome, so
 there is always an audit trail of what was detected AND what automated
@@ -58,7 +58,7 @@ UNKNOWN_UPSTREAM = "<unparsed-upstream>"
 # Auto-remediation: patch the coredns Deployment (rollout-restart
 # equivalent) once the stale-upstream signal fires. Explicitly authorized
 # 2026-09-28 (repeated, explicit user grant) — see the RBAC comment in
-# k8s/dns-healthcheck.yaml for the exact scoped grant this relies on
+# k8s/base/dns-healthcheck/dns-healthcheck.yaml for the exact scoped grant this relies on
 # (get/patch on the single named "coredns" Deployment, kube-system only).
 COREDNS_NAMESPACE = "kube-system"
 COREDNS_DEPLOYMENT = "coredns"
@@ -118,7 +118,7 @@ def check_coredns_logs(
     unavailable = "no signal this run"): that returns ``detected: False`` with
     an ``error`` note. A *missing* kubectl binary (FileNotFoundError from
     subprocess) does raise — that is a deployment misconfiguration (this
-    module runs in a CronJob; see k8s/dns-healthcheck.yaml) and should fail
+    module runs in a CronJob; see k8s/base/dns-healthcheck/dns-healthcheck.yaml) and should fail
     the Job loudly instead of silently never detecting anything.
 
     Returns {"detected": bool, "matches": [{"upstream", "count",
@@ -212,7 +212,7 @@ def attempt_remediation(
     ``kubectl.kubernetes.io/restartedAt`` key kubectl itself uses, which
     k3s's deployment controller treats as a pod-template change and rolls
     the (single-replica) pod. Requires the scoped RBAC grant documented in
-    ``k8s/dns-healthcheck.yaml`` (get+patch on the single named "coredns"
+    ``k8s/base/dns-healthcheck/dns-healthcheck.yaml`` (get+patch on the single named "coredns"
     Deployment in kube-system) — a ServiceAccount without that grant gets a
     clean 403 back via ``kubectl``'s stderr, captured below, never a crash.
 
@@ -310,7 +310,7 @@ def _remediation_section(remediation: dict | None) -> str:
             f"rollout restart deployment/coredns -n kube-system`. The "
             f"`dns-healthcheck` ServiceAccount's RBAC grant is scoped to "
             f"get+patch on ONLY the named `coredns` Deployment in "
-            f"kube-system (see `k8s/dns-healthcheck.yaml`)."
+            f"kube-system (see `k8s/base/dns-healthcheck/dns-healthcheck.yaml`)."
         )
     return (
         f"Attempted and FAILED: {remediation.get('reason', 'kubectl patch failed')}"
@@ -330,7 +330,7 @@ def _task_text(evidence: dict, remediation: dict | None = None) -> tuple[str, st
     )
     body = [
         f"Automated detection by `company_ops/dns_healthcheck.py` "
-        f"(CronJob `k8s/dns-healthcheck.yaml`, every 15m) reading "
+        f"(CronJob `k8s/base/dns-healthcheck/dns-healthcheck.yaml`, every 15m) reading "
         f"`kubectl logs -n {evidence.get('namespace', 'kube-system')} "
         f"-l k8s-app=kube-dns --since={since}`.",
         "",
@@ -361,7 +361,7 @@ def _task_text(evidence: dict, remediation: dict | None = None) -> tuple[str, st
         "`kubectl rollout restart deployment/hermes-gateway -n company-ops`.",
         "",
         "Full context / detector source: `company_ops/dns_healthcheck.py` "
-        "(repo `company-os`); manifest `k8s/dns-healthcheck.yaml`. "
+        "(repo `company-os`); manifest `k8s/base/dns-healthcheck/dns-healthcheck.yaml`. "
         "Manual diagnosis steps: Steward skill `dns-stale-upstream-diagnosis`.",
         "",
         "## Evidence (tail of the checked log window)",
@@ -494,7 +494,7 @@ def run_healthcheck() -> dict:
     """Detect stale-upstream errors; remediate + open a Steward task.
 
     The not-detected path is the common case and must never raise, so the
-    CronJob (k8s/dns-healthcheck.yaml) exits 0 cleanly and does not spam
+    CronJob (k8s/base/dns-healthcheck/dns-healthcheck.yaml) exits 0 cleanly and does not spam
     failure notifications on a healthy cluster.
 
     When detected, ALWAYS attempts remediation (subject to its own cooldown

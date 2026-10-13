@@ -42,6 +42,21 @@ kubectl get deployment engineering-agent -n company-ops \
   -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
+## Rendering manifests
+
+Production manifests render from the Kustomize overlay
+`k8s/overlays/buildmy-prod`, which composes the component bases under
+`k8s/base/<component>/` (do not `kubectl apply -f` individual manifests for
+production). Render locally with `kubectl apply -k k8s/overlays/buildmy-prod`
+(or `kustomize build k8s/overlays/buildmy-prod`). To confirm a working tree
+renders byte-identical to the baseline:
+
+```bash
+scripts/verify-kustomize-render.sh k8s/overlays/buildmy-prod origin/main
+```
+
+It prints `RENDER IDENTICAL (N documents)` and exits 0 on success.
+
 ## Branch discipline
 
 `main` is the integration branch. `prod` is the branch approved for live
@@ -107,7 +122,7 @@ Old/unused image tags accumulate in the registry over time since builds are
 never automatically pruned. Operators should periodically check for tags no
 longer referenced by any Deployment and remove them via the registry API
 (the `registry:2` image needs `REGISTRY_STORAGE_DELETE_ENABLED=true`, already
-set in `k8s/registry.yaml`, and a garbage-collect pass to actually reclaim
+set in `k8s/base/registry/registry.yaml`, and a garbage-collect pass to actually reclaim
 disk):
 
 ```bash
@@ -191,7 +206,7 @@ pipeline exists to keep:
   has zero Kubernetes API access; it only ever talks to the git remote and
   the registry over plain HTTP/HTTPS.
 - The MCP tool (not the Job) authenticates to the Kubernetes API as a
-  **dedicated `builder-manager` ServiceAccount** (`k8s/builder-rbac.yaml`),
+  **dedicated `builder-manager` ServiceAccount** (`k8s/base/core/builder-rbac.yaml`),
   deliberately separate from the shared `company-ops` SA that
   `container_manager`/`k8s_deployment` use. Its Role can
   `create`/`get`/`list`/`watch`/`delete` **Jobs**, read their pods' logs,
@@ -220,7 +235,7 @@ pipeline exists to keep:
 
 The generic engineering builder runs in the dedicated
 `engineering-build-dispatcher` Deployment defined in
-`k8s/engineering-build-dispatcher.yaml`. Do not point the workspace builder
+`k8s/base/engineering-build-dispatcher/engineering-build-dispatcher.yaml`. Do not point the workspace builder
 MCP at `engineering-agent`, `engineering-opencode`, or
 `engineering-opencode-direct`: upgrading any of those pods would close an
 in-flight BuildKit call. The dispatcher uses the same build-only
@@ -332,7 +347,7 @@ git source to actually complete the context checkout (a garbage/random
 value makes the checkout itself fail before the `RUN` step ever runs,
 which proves nothing either way; see below). This test targets the
 container-isolation mechanism, not the Secret CRUD path, so it doesn't
-need the still-unapplied Secrets RBAC in `k8s/builder-rbac.yaml` — the
+need the still-unapplied Secrets RBAC in `k8s/base/core/builder-rbac.yaml` — the
 token is set as a literal container env value, never a real k8s Secret.
 The `RUN` step checks the default BuildKit secret mount path, its own env,
 and every readable `/proc/<pid>/environ` for the fixed, public `ghs_`
@@ -426,7 +441,7 @@ For changes to this boundary, deploy in this order:
    named `workspace` context; update the dispatcher manifest to that image.
 3. Build the Hermes image from the same pinned `company-os` commit with the
    engineering BuildKit tool.
-4. Apply `k8s/hermes-build-dispatcher.yaml` and `k8s/company-ops.yaml`, then
+4. Apply `k8s/base/hermes/hermes-build-dispatcher.yaml` and `k8s/base/hermes/company-ops.yaml`, then
    roll out `hermes-build-dispatcher` and `hermes-gateway`.
 5. Verify the Hermes API tool list contains `build_company_os_image` and does
    not contain `engineering` or `builder_build_and_push`; verify an invalid
@@ -535,7 +550,7 @@ engineering-manager or builder tools.
 
 ### `builder-manager` cannot mutate any deployment
 
-`builder-manager`'s RBAC (`k8s/builder-rbac.yaml`) grants
+`builder-manager`'s RBAC (`k8s/base/core/builder-rbac.yaml`) grants
 `create`/`get`/`list`/`watch`/`delete` on `jobs.batch`, `get`/`list`/
 `watch` on `pods`/`pods/log`, and `create`/`delete` (never `get`/`list`/
 `watch`/`patch`) on `secrets` in `company-ops` only — no verbs on

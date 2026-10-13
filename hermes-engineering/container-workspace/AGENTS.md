@@ -183,5 +183,5 @@ ServiceAccount token is mounted — see
 instead of a `kubectl` binary, which this image does not include. It is
 Claude-manager only (not advertised to OpenCode workers), matches
 Hermes's own `k8s_deployment` tool, and is read/limited-write per
-`k8s/rbac.yaml`: no Secrets access anywhere, no delete on
+`k8s/base/core/rbac.yaml`: no Secrets access anywhere, no delete on
 batch/cronjobs, no write access at all in `buildmyhouse-dev`.
