@@ -122,7 +122,7 @@ function buildServers() {
   if (fs.existsSync('/var/run/secrets/kubernetes.io/serviceaccount/token')) {
     // Same kubernetes-mcp-server Hermes already runs (hermes/config.yaml's
     // k8s_deployment entry) and the same "company-ops" ServiceAccount/RBAC
-    // (k8s/rbac.yaml) -- gives the engineering-agent itself live cluster
+    // (k8s/base/core/rbac.yaml) -- gives the engineering-agent itself live cluster
     // visibility for docs/DEV-CLUSTER-GATE.md's runbook (poller
     // CronJob/Job status and logs, buildmyhouse-dev pods/deploy-state
     // configmap) instead of only the scoped container-manager/
@@ -152,7 +152,7 @@ function buildServers() {
     };
     // Bridges Claude/agent-manager to this Hermes instance's own
     // OpenAI-compatible api_server endpoint (hermes/config.yaml
-    // platforms.api_server, k8s/company-ops.yaml's hermes-gateway Service).
+    // platforms.api_server, k8s/base/hermes/company-ops.yaml's hermes-gateway Service).
     // Same OpenCode skip-list treatment as container-manager/registry-manager
     // above: talking to Hermes can indirectly cause Hermes to act (e.g. call
     // its own container_manager tools), so it stays Claude-manager only.
@@ -163,7 +163,7 @@ function buildServers() {
     };
   }
 
-  // Ephemeral, rootless-BuildKit-based build+push (k8s/builder-rbac.yaml).
+  // Ephemeral, rootless-BuildKit-based build+push (k8s/base/core/builder-rbac.yaml).
   // Unlike container-manager/registry-manager/hermes-messenger above, this
   // one is deliberately NOT added to the OpenCode skip-list below — the
   // Job's own RBAC is already narrowly scoped (create/watch/delete Jobs it
@@ -174,7 +174,7 @@ function buildServers() {
   //
   // Gated on its OWN two prerequisites, not the generic in-cluster SA check
   // above: builder-manager-mcp.js authenticates with a distinct bound token
-  // at BUILDER_MANAGER_TOKEN_PATH (k8s/builder-rbac.yaml's
+  // at BUILDER_MANAGER_TOKEN_PATH (k8s/base/core/builder-rbac.yaml's
   // "builder-manager-token" Secret, mounted separately from the default SA
   // token — see that script's header), and it must actually be present in
   // this image (COPY'd by Dockerfile.engineering) to be launchable at all.

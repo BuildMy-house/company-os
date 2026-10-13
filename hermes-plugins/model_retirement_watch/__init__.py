@@ -48,7 +48,15 @@ _CONFIG_PATH = "/opt/data/config.yaml"
 # User-Agent; every request must carry a real one.
 _USER_AGENT = "model_retirement_watch/0.1.0"
 
-_AXIOM_INGEST_URL = "https://eu-central-1.aws.edge.axiom.co/v1/ingest/bmh-company"
+# Axiom ingest endpoint (COMP-6): both env-overridable, defaults equal today's
+# literals so unset env is behaviour-identical. AXIOM_URL, when set, is the
+# COMPLETE ingest endpoint and wins over the dataset-derived default below
+# (same naming as the axiom_usage plugin / hive telemetry).
+_DATASET = os.environ.get("AXIOM_DATASET", "bmh-company")
+_AXIOM_INGEST_URL = (
+    os.environ.get("AXIOM_URL")
+    or f"https://eu-central-1.aws.edge.axiom.co/v1/ingest/{_DATASET}"
+)
 
 _MCP_PROTOCOL_VERSION = "2024-11-05"
 
@@ -135,6 +143,43 @@ def _cooldown_active(marker, provider, model, now):
 
 # ------------------------------------------------------------ replacement ---
 
+def _load_shared_resolver():
+    """company_ops/model_resolver.py by file path (the package __init__
+    imports psycopg, which this image lacks). None if not present."""
+    import importlib.util
+
+    here = Path(__file__).resolve()
+    for path in (
+        Path(os.environ.get("COMPANY_OPS_DIR", "/opt/company-ops")) / "company_ops" / "model_resolver.py",
+        *[p / "company_ops" / "model_resolver.py" for p in here.parents],
+    ):
+        if path.is_file():
+            try:
+                spec = importlib.util.spec_from_file_location("model_resolver", path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+            except Exception as exc:
+                _record_failure("load_shared_resolver", exc)
+    return None
+
+
+def _is_free(model):
+    """Free = pricing is exactly 0/0 (shared definition). The ``:free``
+    suffix is unreliable (retired ids keep it; zero-priced ids lack it), so it
+    is only a last resort when the listing carries no pricing at all."""
+    if model.get("pricing"):
+        shared = _load_shared_resolver()
+        if shared is not None:
+            return shared.is_free(model)
+        try:
+            p = model["pricing"]
+            return float(p["prompt"]) == 0 and float(p["completion"]) == 0
+        except (KeyError, TypeError, ValueError):
+            return False
+    return str(model.get("id", "")).endswith(":free")
+
+
 def _list_models(base_url, key):
     url = base_url.rstrip("/") + "/models"
     headers = {"Accept": "application/json", "User-Agent": _USER_AGENT}
@@ -158,7 +203,7 @@ def _pick_replacement(models, retired_id):
     if not candidates:
         raise ValueError("no candidate replacement models available")
 
-    free = [m for m in candidates if str(m["id"]).endswith(":free")]
+    free = [m for m in candidates if _is_free(m)]
     pool = free or candidates
 
     def score(m):
@@ -169,7 +214,7 @@ def _pick_replacement(models, retired_id):
 
     best = max(pool, key=score)
     ctx = best.get("context_length")
-    parts = ["free-tier" if str(best["id"]).endswith(":free") else "paid"]
+    parts = ["free-tier" if _is_free(best) else "paid"]
     if ctx:
         parts.append("{}-token context".format(ctx))
     text = "{} {}".format(best.get("id", ""), best.get("description") or "").lower()
@@ -414,6 +459,18 @@ def _file_steward_task(evt, replacement, why):
     return result
 
 
+def _signal_recheck():
+    """Touch the trigger file the entrypoint's watcher polls so it re-runs
+    the model resolver now instead of at the next 6h tick. A signal only: the
+    plugin still never edits config or touches deployments."""
+    try:
+        d = Path(os.environ.get("RESOLVER_STATE_DIR", "/opt/data/.model-resolver"))
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "recheck").touch()
+    except Exception as exc:
+        _record_failure("signal_recheck", exc)
+
+
 # ------------------------------------------------------------------ hook ---
 
 def on_api_request_error(**kwargs):
@@ -431,6 +488,8 @@ def on_api_request_error(**kwargs):
         primary_provider, primary_model = _primary(config)
         if provider != primary_provider or model != primary_model:
             return  # fallback/aux lane failure — not a primary retirement
+
+        _signal_recheck()
 
         now = time.time()
         if _cooldown_active(_read_marker(), provider, model, now):

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Reproducible build+push of every repo-owned image to a container registry
-# (default: the in-cluster k3s registry at localhost:30500, k8s/registry.yaml).
+# (default: the in-cluster k3s registry at localhost:30500, k8s/base/registry/registry.yaml).
 # Works on a fresh host with only docker (buildx), git, and a reachable
 # registry — no host-specific paths, no locally pre-built images.
 #
@@ -24,7 +24,7 @@ set -euo pipefail
 #
 # Tags: every image gets the immutable short-SHA tag of the current checkout,
 # plus the mutable tag its k8s manifests reference (see the table below; keep
-# in sync with k8s/*.yaml — see docs/IMAGES.md).
+# in sync with k8s/**/*.yaml — see docs/IMAGES.md).
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"

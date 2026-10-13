@@ -8,7 +8,7 @@
 // records the new SHA as "deployed" once a live /healthz check passes.
 //
 // No inbound webhook is reachable by this cluster, so this is a polling
-// design (run on a schedule by k8s/buildmyhouse-dev-deployer-cronjob.yaml),
+// design (run on a schedule by k8s/projects/buildmyhouse-dev/buildmyhouse-dev-deployer-cronjob.yaml),
 // not a push-triggered one. Reuses buildJobManifest/buildAndPush directly
 // (imported, not via MCP/mcp-proxy) per PLAN.md's CO-DEV3 note — do not
 // reimplement that logic here.

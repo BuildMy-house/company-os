@@ -38,7 +38,7 @@ path if stronger isolation is ever needed.
 **Layer 2 — Runtime injection.**
 
 - Kubernetes (primary): Infisical Secrets Operator syncs every path into k8s
-  Secrets (`k8s/infisical-sync.yaml`, `k8s/buildmyhouse-dev-infisical-sync.yaml`);
+  Secrets (`k8s/base/infisical-sync/infisical-sync.yaml`, `k8s/projects/buildmyhouse-dev/buildmyhouse-dev-infisical-sync.yaml`);
   workloads consume them via `envFrom` of a single merged Secret
   (`company-ops-secrets`) or dedicated Secrets (`company-ops-steward-*`).
   On a new host the same Secrets are materialized statically by

@@ -36,7 +36,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INFISICAL_HOST_URL="${INFISICAL_HOST_URL:-https://eu.infisical.com}"
 INFISICAL_ENV="${INFISICAL_ENV:-dev}"
 # "Build My house" project (company-os runtime secrets) and "buildmyhouse-app"
-# project; same ids as k8s/infisical-sync.yaml / k8s/buildmyhouse-dev-infisical-sync.yaml.
+# project; same ids as k8s/base/infisical-sync/infisical-sync.yaml /
+# k8s/projects/buildmyhouse-dev/buildmyhouse-dev-infisical-sync.yaml.
 OPS_PROJECT_ID="${INFISICAL_PROJECT_ID:-8806c2b0-73d2-4bea-8537-5b874c5ff592}"
 APP_PROJECT_ID="${APP_PROJECT_ID:-58b43b81-effb-4392-a937-46f2448efb78}"
 OPS_NS="company-ops"
@@ -67,7 +68,7 @@ if [ "$DRY_RUN" = "1" ]; then
   echo "  ANALYTICS_ADMIN_TOKEN AXIOM_DATASET AXIOM_ENDPOINT AXIOM_TOKEN BUILDMYHOUSE_MCP_TOKEN CLOUDFLARE_API_TOKEN JWT_SECRET LUXCORE_WORKER_TOKEN NEON_API_KEY R2_ACCESS_KEY_ID R2_ACCOUNT_ID R2_BUCKET_NAME R2_PUBLIC_URL R2_S3_ENDPOINT R2_SECRET_ACCESS_KEY RESEND_API_KEY RESEND_FROM_EMAIL VITE_AXIOM_DATASET VITE_AXIOM_ENDPOINT VITE_AXIOM_TOKEN"
   echo
   echo "builder-manager-token (${OPS_NS}), buildmyhouse-dev-deployer-token (${OPS_NS})"
-  echo "  cluster-issued SA tokens — recreated by kubectl apply of k8s/builder-rbac.yaml + k8s/buildmyhouse-dev-deployer-rbac.yaml"
+  echo "  cluster-issued SA tokens — recreated by kubectl apply of k8s/base/core/builder-rbac.yaml + k8s/projects/buildmyhouse-dev/buildmyhouse-dev-deployer-rbac.yaml"
   exit 0
 fi
 
@@ -108,8 +109,8 @@ apply_secret() { # apply_secret <name> <namespace> <file...>
 }
 
 echo "[1/6] Ensuring namespaces..."
-kubectl apply -f "$REPO_ROOT/k8s/namespace.yaml" >/dev/null
-kubectl apply -f "$REPO_ROOT/k8s/buildmyhouse-dev-namespace.yaml" >/dev/null
+kubectl apply -f "$REPO_ROOT/k8s/base/core/namespace.yaml" >/dev/null
+kubectl apply -f "$REPO_ROOT/k8s/projects/buildmyhouse-dev/buildmyhouse-dev-namespace.yaml" >/dev/null
 
 echo "[2/6] Seeding infisical-bootstrap-credentials (the only manually provisioned secret)..."
 jq -n '{apiVersion: "v1", kind: "Secret",
@@ -144,11 +145,11 @@ fetch "$APP_PROJECT_ID" / "$TMP/app.json"
 apply_secret buildmyhouse-dev-secrets "$APP_NS" "$TMP/app.json"
 
 echo "[6/6] Recreating cluster-issued SA-token Secrets + live-sync manifests..."
-kubectl apply -f "$REPO_ROOT/k8s/builder-rbac.yaml" >/dev/null
-kubectl apply -f "$REPO_ROOT/k8s/buildmyhouse-dev-deployer-rbac.yaml" >/dev/null
+kubectl apply -f "$REPO_ROOT/k8s/base/core/builder-rbac.yaml" >/dev/null
+kubectl apply -f "$REPO_ROOT/k8s/projects/buildmyhouse-dev/buildmyhouse-dev-deployer-rbac.yaml" >/dev/null
 if kubectl get crd infisicalstaticsecrets.secrets.infisical.com >/dev/null 2>&1; then
-  kubectl apply -f "$REPO_ROOT/k8s/infisical-sync.yaml" >/dev/null
-  kubectl apply -f "$REPO_ROOT/k8s/buildmyhouse-dev-infisical-sync.yaml" >/dev/null
+  kubectl apply -f "$REPO_ROOT/k8s/base/infisical-sync/infisical-sync.yaml" >/dev/null
+  kubectl apply -f "$REPO_ROOT/k8s/projects/buildmyhouse-dev/buildmyhouse-dev-infisical-sync.yaml" >/dev/null
   echo "Infisical Secrets Operator detected — live-sync manifests applied."
 else
   echo "Infisical Secrets Operator CRDs not found — skipped live-sync manifests."

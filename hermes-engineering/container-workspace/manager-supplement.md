@@ -82,7 +82,7 @@ yourself to every time:
   explicitly (`Dockerfile`, `Dockerfile.engineering`, etc.), don't assume
   a default.
 - **`builder-manager` cannot deploy anything.** Its RBAC
-  (`k8s/builder-rbac.yaml`) is Jobs/pods-log/its-own-ephemeral-Secret only
+  (`k8s/base/core/builder-rbac.yaml`) is Jobs/pods-log/its-own-ephemeral-Secret only
   in `company-ops` — no `deployments.apps` verbs at all, and no ability to
   read back any Secret (including its own). The BuildKit Job pod itself
   has no Kubernetes API access whatsoever

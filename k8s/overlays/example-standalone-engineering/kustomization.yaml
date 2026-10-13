@@ -1,0 +1,130 @@
+# Example: stand up the engineering pool (3 Deployments + 3 Services) for a
+# DIFFERENT project ("acme") from k8s/base/engineering, with no fork. Copy this
+# directory to k8s/overlays/<project>-engineering/ (or edit in place) and
+# change the four things below; the base is shared and must never be edited:
+#   1. namespace.yaml / ServiceAccount.yaml — the project's own Namespace and
+#      ServiceAccount (the base Deployments run as serviceAccountName
+#      company-ops; the patches below repoint them at the new SA).
+#   2. `namespace:` — the namespace transformer, which rewrites
+#      metadata.namespace on every namespaced resource.
+#   3. `images:` — your registry and an immutable tag (the base image is the
+#      in-cluster dev registry).
+#   4. The three strategic-merge patches, one per Deployment, keyed by
+#      container name: the *_REPO_URL env values (placeholders under your
+#      org), and envFrom restated IN FULL — env merges by the `name` key, but
+#      envFrom/secret refs have no merge key, so the whole list is replaced
+#      and both entries must be rewritten every time.
+# Left as-is on purpose: HOME=/tmp/company-ops-home (cosmetic, why
+# "company-ops" is not in the gate's FORBID_LITERALS) and the
+# builder-manager-token volume, which your cluster's RBAC must mirror.
+#
+# Gate: FORBID_LITERALS="buildmyhouse BuildMy-house company-ops-secrets company-ops-steward localhost:30500 homely hermees" SKIP_BASELINE=1 scripts/verify-kustomize-render.sh k8s/overlays/example-standalone-engineering
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: acme-ops
+
+resources:
+  - namespace.yaml
+  - ServiceAccount.yaml
+  - ../../base/engineering
+
+images:
+  - name: localhost:30500/company-os-engineering
+    newName: registry.example.internal:5000/acme-engineering
+    newTag: replace-with-immutable-tag
+
+patches:
+  # engineering-agent
+  - target: {kind: Deployment, name: engineering-agent}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: engineering-agent
+      spec:
+        template:
+          spec:
+            serviceAccountName: acme-ops
+            containers:
+              - name: engineering-agent
+                env:
+                  - name: APP_REPO_URL
+                    value: "https://github.com/acme-org/app.git"
+                  - name: WEBSITE_REPO_URL
+                    value: "https://github.com/acme-org/website.git"
+                  - name: COMPANY_OS_REPO_URL
+                    value: "https://github.com/acme-org/company-os.git"
+                  - name: HERMEES_REPO_URL
+                    value: "https://github.com/acme-org/diary.git"
+                  - name: HERMEES_MEMORY_REPO_URL
+                    value: "https://github.com/acme-org/memory.git"
+                  - name: OBSERVER_WEBSITE_REPO_URL
+                    value: "https://github.com/acme-org/observer-website.git"
+                envFrom:
+                  - secretRef:
+                      name: acme-secrets
+                  - secretRef:
+                      name: acme-steward-engineering-agent
+  # engineering-opencode
+  - target: {kind: Deployment, name: engineering-opencode}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: engineering-opencode
+      spec:
+        template:
+          spec:
+            serviceAccountName: acme-ops
+            containers:
+              - name: engineering-opencode
+                env:
+                  - name: APP_REPO_URL
+                    value: "https://github.com/acme-org/app.git"
+                  - name: WEBSITE_REPO_URL
+                    value: "https://github.com/acme-org/website.git"
+                  - name: COMPANY_OS_REPO_URL
+                    value: "https://github.com/acme-org/company-os.git"
+                  - name: HERMEES_REPO_URL
+                    value: "https://github.com/acme-org/diary.git"
+                  - name: HERMEES_MEMORY_REPO_URL
+                    value: "https://github.com/acme-org/memory.git"
+                  - name: OBSERVER_WEBSITE_REPO_URL
+                    value: "https://github.com/acme-org/observer-website.git"
+                envFrom:
+                  - secretRef:
+                      name: acme-secrets
+                  - secretRef:
+                      name: acme-steward-engineering-opencode
+  # engineering-opencode-direct
+  - target: {kind: Deployment, name: engineering-opencode-direct}
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: engineering-opencode-direct
+      spec:
+        template:
+          spec:
+            serviceAccountName: acme-ops
+            containers:
+              - name: engineering-opencode-direct
+                env:
+                  - name: APP_REPO_URL
+                    value: "https://github.com/acme-org/app.git"
+                  - name: WEBSITE_REPO_URL
+                    value: "https://github.com/acme-org/website.git"
+                  - name: COMPANY_OS_REPO_URL
+                    value: "https://github.com/acme-org/company-os.git"
+                  - name: HERMEES_REPO_URL
+                    value: "https://github.com/acme-org/diary.git"
+                  - name: HERMEES_MEMORY_REPO_URL
+                    value: "https://github.com/acme-org/memory.git"
+                  - name: OBSERVER_WEBSITE_REPO_URL
+                    value: "https://github.com/acme-org/observer-website.git"
+                envFrom:
+                  - secretRef:
+                      name: acme-secrets
+                  - secretRef:
+                      name: acme-steward-engineering-opencode-direct

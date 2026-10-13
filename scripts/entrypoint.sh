@@ -56,6 +56,13 @@ if [ -f /opt/company-ops/hermes/config.yaml ]; then
   cp /opt/company-ops/hermes/config.yaml /opt/data/config.yaml
 fi
 
+# Render a live-probed FREE Nous model into model.default (the listing lies:
+# retired :free ids stay listed). Never fatal: on failure the baked default and
+# the glm-5.3-flash fallback_providers lane keep Hermes serving. See
+# hermes/resolve_model.py + company_ops/model_resolver.py.
+python3 /opt/company-ops/hermes/resolve_model.py \
+  || echo "[model] resolver found no free model; keeping baked default + fallback" >&2
+
 # SOUL.md is baked into the image so Hermes does not need GitHub credentials
 # or a runtime repository checkout.
 if [ -f /opt/company-ops/hermes/SOUL.md ]; then
@@ -118,6 +125,35 @@ sync_loop() {
   done
 }
 sync_loop &
+
+# Re-resolve every 6h, or within 60s of model_retirement_watch touching
+# the recheck trigger (5 min cooldown). If the best working model changed
+# (exit 75) stop Hermes; the Deployment restarts the pod, which re-resolves
+# at boot. Restart-on-change mirrors pm-agent and avoids hot-reloading Hermes.
+MAIN_PID=$$
+model_watch() {
+  local trigger=/opt/data/.model-resolver/recheck waited=0 last=0 now
+  while true; do
+    sleep 60
+    waited=$((waited + 60))
+    now=$(date +%s)
+    if [[ $waited -ge 21600 || ( -f "$trigger" && $((now - last)) -ge 300 ) ]]; then
+      waited=0
+      last=$now
+      rm -f "$trigger"
+      rc=0
+      python3 /opt/company-ops/hermes/resolve_model.py --check || rc=$?
+      if [[ $rc -eq 75 ]]; then
+        echo "[model] best free model changed; restarting Hermes" >&2
+        kill -TERM "$MAIN_PID"
+        exit 0
+      fi
+    fi
+  done
+}
+if [[ "${1:-}" == "hermes" && -n "${NOUS_API_KEY:-}" ]]; then
+  model_watch &
+fi
 
 if [[ "${1:-}" == "hermes" ]]; then
   shift

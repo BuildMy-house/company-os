@@ -21,8 +21,10 @@ PASSWORDS = {
     "OBSERVER_PASSWORD": "pwobserver-0123456789",
     "ANALYTICS_PASSWORD": "pwanalytics-0123456789",
     "PM_AGENT_WRITER_PASSWORD": "pwpmagent-0123456789",
+    "MCP_GATEWAY_KEYS_PASSWORD": "pwgwkeys-0123456789",
 }
-ROLES = ["hermes_company", "hermes_observer_writer", "hermes_analytics", "pm_agent_writer"]
+ROLES = ["hermes_company", "hermes_observer_writer", "hermes_analytics", "pm_agent_writer",
+         "mcp_gateway_keys"]
 
 
 def clean_env(**extra):
@@ -114,7 +116,7 @@ class ScratchPostgresTests(unittest.TestCase):
         else:
             cls.tearDownClass()
             raise unittest.SkipTest("scratch postgres never became ready")
-        for f in ("company_schema.sql", "observer_schema.sql", "pm_schema.sql"):
+        for f in ("company_schema.sql", "observer_schema.sql", "pm_schema.sql", "mcp_gateway_schema.sql"):
             r = subprocess.run(["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-U", "postgres",
                                 "-d", "homely_company", "-f", os.path.join(REPO, "sql", f)],
                                env=cls.env, capture_output=True, text=True)
@@ -141,7 +143,8 @@ class ScratchPostgresTests(unittest.TestCase):
         for r in ROLES:
             rc, out, _ = self.sql("select current_user", r, PASSWORDS[
                 {"hermes_company": "COMPANY_PASSWORD", "hermes_observer_writer": "OBSERVER_PASSWORD",
-                 "hermes_analytics": "ANALYTICS_PASSWORD", "pm_agent_writer": "PM_AGENT_WRITER_PASSWORD"}[r]])
+                 "hermes_analytics": "ANALYTICS_PASSWORD", "pm_agent_writer": "PM_AGENT_WRITER_PASSWORD",
+                 "mcp_gateway_keys": "MCP_GATEWAY_KEYS_PASSWORD"}[r]])
             self.assertEqual((rc, out), (0, r))
         pm_pw = PASSWORDS["PM_AGENT_WRITER_PASSWORD"]
         self.assertEqual(self.sql("select count(*) from company.pm_conversations", "pm_agent_writer", pm_pw)[0], 0)

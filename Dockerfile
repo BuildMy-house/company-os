@@ -1,4 +1,6 @@
-FROM nousresearch/hermes-agent:latest
+# Base pinned by digest (resolved read-only from Docker Hub 2026-10-13, was :latest).
+# Bump deliberately: look up the new digest, update here, rebuild, re-pin.
+FROM nousresearch/hermes-agent@sha256:444b42594e7f467425872fc35e077a227d377f0fe0726bc818706d62175fad8b
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 ENV PATH="/opt/company-ops-venv/bin:${PATH}"

@@ -1,6 +1,6 @@
 # Container images
 
-All repo-owned images live in the in-cluster registry (`k8s/registry.yaml`,
+All repo-owned images live in the in-cluster registry (`k8s/base/registry/registry.yaml`,
 NodePort `localhost:30500`) under `localhost:30500/<repo>`. Build and push
 every one of them from any checkout:
 
@@ -26,9 +26,9 @@ agent-driven builds; this script is the fresh-host/local-up path.
 | Image (localhost:30500/…) | Tag(s) in k8s/ | Consumed by | Dockerfile | Context | Extra | Who builds |
 |---|---|---|---|---|---|---|
 | `company-os` | `@sha256:…` (company-ops.yaml), `:dns-remediation` (dns-healthcheck.yaml) | hermes-gateway Deployment; dns-healthcheck CronJob | `Dockerfile` | repo root | — | build-push-images.sh / builder MCP |
-| `company-os-engineering` | `:hive-bid-8b29112` (engineering.yaml, engineering-opencode.yaml, engineering-opencode-direct.yaml), `@sha256:…` (engineering-build-dispatcher.yaml, hermes-build-dispatcher.yaml) | engineering-agent + opencode variants; both build dispatchers | `Dockerfile.engineering` | repo root | named `shared` context = `WORKSPACE_CONTEXT`; args `AGENT_FLAVOR`, `INSTALL_BROWSER` | build-push-images.sh / builder MCP |
-| `company-os-hive` | `:events` (hive.yaml) | hive-coordinator | `hive/Dockerfile` | repo root | — | build-push-images.sh |
-| `company-os-pm-agent` | `:latest` (pm-agent.yaml — **not** in kustomization; apply separately if wanted) | pm-agent | `pm-agent/Dockerfile` | repo root | — | build-push-images.sh |
+| `company-os-engineering` | `:hive-complete-1e5f382@sha256:26f13cb2ccf0e6d80089a2b384f37b67d2aeb2498af418f0738d1b84ad0cbf10` (engineering.yaml, engineering-opencode.yaml, engineering-opencode-direct.yaml), `@sha256:…` (engineering-build-dispatcher.yaml, hermes-build-dispatcher.yaml) | engineering-agent + opencode variants; both build dispatchers | `Dockerfile.engineering` | repo root | named `shared` context = `WORKSPACE_CONTEXT`; args `AGENT_FLAVOR`, `INSTALL_BROWSER` | build-push-images.sh / builder MCP |
+| `company-os-hive` | `:reaper-4de8a08@sha256:d7109388…` (hive.yaml) | hive-coordinator | `hive/Dockerfile` | repo root | — | build-push-images.sh |
+| `company-os-pm-agent` | `:latest` (pm-agent.yaml, included by `k8s/overlays/buildmy-prod`) | pm-agent | `pm-agent/Dockerfile` | repo root | — | build-push-images.sh |
 | `company-os-browser-adversary` | `:latest` (browser-adversary.yaml) | browser-adversary | `Dockerfile.browser-adversary` | repo root | — | build-push-images.sh |
 | `company-os-mcp-gateway` | digest-pinned (mcp-gateway.yaml — **not** in kustomization; admin applies once) | mcp-gateway | `Dockerfile.mcp-gateway` | repo root | — | `builder_build_and_push` only (see docs/MCP-GATEWAY.md) |
 
@@ -41,8 +41,8 @@ If you change a mutable tag in a manifest, update the matching entry in
 ## Digest pins that must move together
 
 `localhost:30500/company-os@sha256:<digest>` is referenced by three manifests:
-`k8s/company-ops.yaml`, `k8s/postgres-backup.yaml` and
-`k8s/hermes-data-backup.yaml`. The backup CronJobs run `company_ops.backup`
+`k8s/base/hermes/company-ops.yaml`, `k8s/base/backups/postgres-backup.yaml` and
+`k8s/base/backups/hermes-data-backup.yaml`. The backup CronJobs run `company_ops.backup`
 from the same image, so after any rebuild that changes `company_ops/` (the
 `--hermes-data` mode exists only in images built from this branch or later)
 get the new digest from `scripts/build-push-images.sh --only company-os
@@ -52,7 +52,7 @@ Do not introduce `docker.io/library/…` references for repo-owned images.
 
 ## Not reproducible from this repo
 
-- `localhost:30500/buildmyhouse-app|mcp|luxcore:dev-…` (k8s/buildmyhouse-dev-*.yaml):
+- `localhost:30500/buildmyhouse-app|mcp|luxcore:dev-…` (k8s/projects/buildmyhouse-dev/*.yaml):
   built from the separate BuildMy-house/app repo by the dev deployer
   (scripts/dev-deploy-poller.js via the in-cluster BuildKit job); not built
   from this repo.
@@ -65,3 +65,23 @@ Do not introduce `docker.io/library/…` references for repo-owned images.
 - Digest-pinned refs (company-ops.yaml, both build dispatchers) are pinned by
   whoever upgrades those Deployments after a build; `--print-digests` exists
   for exactly that step.
+
+## Tag scheme and why `buildmy-prod` has no `images:` entries (COMP-7)
+
+Production refs should be immutable: `<image>:<component>-<git-sha>@sha256:<digest>`
+(tag for humans, digest for the cluster). The Hermes base in `Dockerfile` is
+pinned by digest (`nousresearch/hermes-agent@sha256:444b4259...`, resolved
+2026-10-13); bump it deliberately.
+
+The kustomize images transformer matches by image *name* and rewrites every
+occurrence. `company-os-engineering` and `company-os` each run with several
+different refs in production, so one `images:` entry would change the render.
+The manifests therefore stay the source of truth and the `buildmy-prod` render
+stays identical; neutral overrides live in the example overlays.
+
+## Repo vs live drift (live inventory ns company-ops, 2026-10-13)
+
+| Workload | Repo | Live (2026-10-13) | Status |
+|---|---|---|---|
+| engineering-opencode-direct | `company-os-engineering:hive-complete-1e5f382@sha256:26f13cb2ccf0e6d80089a2b384f37b67d2aeb2498af418f0738d1b84ad0cbf10` | `company-os-engineering:engineering-6b7dcfe5244d@sha256:4762d2c23118e491bf2d0de3191d6c32e9fc59faeb2354442640900b6ae7a873` | repo is ahead: pending rollout via in-cluster agent |
+| hermes-gateway | `company-os@sha256:89b92c0be5cc05aa23d10043c89a5dcb3de6a925783f33321952985d8d761b4b` | `company-os:hermes-6b7dcfe5244d@sha256:e9c3462c4ee90cf33c6b62e05fea3fa92fdc3d76c6e41185d5a27f268b4263a2` | live is ahead: applying the repo would roll it back; sync proposed on branch `feat/sync-hermes-gateway-live-image` (not merged, changes the prod render). The two backup CronJobs keep the `89b92c0b…` digest (live matches). |

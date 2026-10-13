@@ -1,0 +1,454 @@
+# Supervised Streamable-HTTP MCP gateway (docs/MCP-GATEWAY.md). One-time admin apply:
+#   kubectl apply -f k8s/base/mcp-gateway/mcp-gateway.yaml
+# Not part of k8s/overlays/buildmy-prod on purpose: nothing applies this automatically.
+#
+# Exposure: NodePort 30430 on pop-os-1 only, restricted to the tailnet (100.64.0.0/10)
+# by NetworkPolicy AND scripts/mcp-gateway-host-firewall.sh (ufw INPUT does not
+# filter DNAT'd NodePort traffic, so the host script uses the FORWARD/PREROUTING path).
+# Every client needs its own bearer token (Secret mcp-gateway-tokens, synced from Infisical
+# /mcp-gateway by k8s/base/infisical-sync/infisical-sync.yaml); a request without one gets 401.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-gateway
+  namespace: company-ops
+automountServiceAccountToken: true
+---
+# Cluster-wide read-only, per the decisions addendum: nodes, namespaces, pods, pods/log,
+# events, services (get/list) and apps deployments, verbs get/list/watch only. No secrets,
+# no configmaps, no write verbs, no exec. One ClusterRole instead of a namespaced Role so
+# there is a single RBAC definition to keep in sync.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-gateway-read
+rules:
+  - apiGroups: [""]
+    resources: [nodes, namespaces, pods, pods/log, events]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mcp-gateway-read
+subjects:
+  - kind: ServiceAccount
+    name: mcp-gateway
+    namespace: company-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mcp-gateway-read
+---
+# Scoped identity for the container-manager child inside the gateway pod. The
+# gateway's own SA (mcp-gateway) stays read-only; these rules mirror exactly the
+# API calls container-manager-mcp.js makes for the five tools local-claude-deploy
+# may call: deployments get/list/patch (status, health, upgrade, rollback), pods
+# get/list (pod discovery by label), pods/log get. No delete/create (container_test
+# / container_remove_test are not exposed), no secrets, no exec.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-gateway-deployer
+  namespace: company-ops
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mcp-gateway-deployer
+  namespace: company-ops
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp-gateway-deployer
+  namespace: company-ops
+subjects:
+  - kind: ServiceAccount
+    name: mcp-gateway-deployer
+    namespace: company-ops
+roleRef:
+  kind: Role
+  name: mcp-gateway-deployer
+  apiGroup: rbac.authorization.k8s.io
+---
+# Legacy-style bound Secret token for the mcp-gateway-deployer SA (same pattern as
+# builder-manager-token in k8s/base/core/builder-rbac.yaml): annotating a Secret with
+# kubernetes.io/service-account.name makes the token controller populate
+# .data.token/.data.ca.crt. Mounted read-only at /var/run/secrets/container-manager and
+# selected by the container-manager server's CONTAINER_MANAGER_* env in policy.json.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mcp-gateway-deployer-token
+  namespace: company-ops
+  annotations:
+    kubernetes.io/service-account.name: mcp-gateway-deployer
+type: kubernetes.io/service-account-token
+---
+# Default-deny: a tool is reachable only if listed under clients.<id>.servers.<name>.tools.
+# Hive identities get read tools + hive_submit only (no bid/complete/heartbeat/next_work,
+# per the review decisions). Three client identities — local-claude, local-opencode,
+# local-codex — one token and one agentId each; they keep hive + kubernetes read-only
+# access only.
+#
+# The privileged children are exposed to exactly ONE identity, local-claude-deploy
+# (least privilege): container-manager (deploy/rollback/inspect) and builder (image
+# build+push). Those tools mutate the cluster and build supply-chain inputs, so:
+#   - no other client lists either server (their allowlists have no container-manager,
+#     no builder — adding one later is a policy edit, not a re-image),
+#   - local-claude-deploy has NO tokenFile: it authenticates only with issued DB keys
+#     (30-day TTL via keyTtlDays below; issued only by the gateway-admin identity) — a file token on
+#     disk would bypass that revocable path,
+#   - argLimits default-deny the dangerous shapes: only pinned-digest in-cluster images,
+#     never the gateway's or hermes's own deployment, BuildMy-house 40-hex git refs only,
+#     an explicit image_repo allowlist (company-os-mcp-gateway deliberately excluded so
+#     this gateway cannot rebuild itself), and _onlyArgs so unlisted new params can never
+#     ride along.
+# container-manager is deliberately NOT reachable by any other client (privileged
+# identity follow-up, see docs/MCP-GATEWAY.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-gateway-policy
+  namespace: company-ops
+data:
+  policy.json: |
+    {
+      "maxConcurrentLongPolls": 4,
+      "servers": {
+        "hive": {
+          "command": ["node", "/opt/mcp-gateway/scripts/hive-member-mcp.js"],
+          "env": { "HIVE_REGISTER": "false" },
+          "longPollTools": ["hive_wait"],
+          "callTimeoutSeconds": 960
+        },
+        "kubernetes": {
+          "command": ["/opt/mcp-gateway/node_modules/.bin/kubernetes-mcp-server", "--disable-destructive", "--log-file", "stderr", "--cluster-provider", "in-cluster"],
+          "redactTools": ["pods_log", "resources_get", "events_list"],
+          "callTimeoutSeconds": 60
+        },
+        "container-manager": {
+          "command": ["node", "/opt/mcp-gateway/scripts/container-manager-mcp.js"],
+          "env": {
+            "CONTAINER_MANAGER_TOKEN_PATH": "/var/run/secrets/container-manager/token",
+            "CONTAINER_MANAGER_CA_PATH": "/var/run/secrets/container-manager/ca.crt"
+          },
+          "callTimeoutSeconds": 600
+        },
+        "builder": {
+          "command": ["node", "/opt/mcp-gateway/scripts/builder-manager-mcp.js"],
+          "env": {
+            "BUILDER_SCOPE": "engineering",
+            "BUILDER_MANAGER_CA_PATH": "/var/run/secrets/builder-manager/ca.crt"
+          },
+          "callTimeoutSeconds": 3660,
+          "redactTools": ["builder_build_and_push"],
+          "longPollTools": ["builder_build_and_push"]
+        }
+      },
+      "clients": {
+        "local-claude": {
+          "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_CLAUDE_TOKEN",
+          "keyTtlDays": 90,
+          "servers": {
+            "hive": {
+              "agentId": "local-claude",
+              "tools": ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"]
+            },
+            "kubernetes": {
+              "tools": ["namespaces_list", "pods_list", "pods_list_in_namespace", "pods_get", "pods_log", "events_list", "resources_list", "resources_get"]
+            }
+          }
+        },
+        "local-opencode": {
+          "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_OPENCODE_TOKEN",
+          "keyTtlDays": 90,
+          "servers": {
+            "hive": {
+              "agentId": "local-opencode",
+              "tools": ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"]
+            },
+            "kubernetes": {
+              "tools": ["namespaces_list", "pods_list", "pods_list_in_namespace", "pods_get", "pods_log", "events_list", "resources_list", "resources_get"]
+            }
+          }
+        },
+        "local-codex": {
+          "tokenFile": "/etc/mcp-gateway/tokens/LOCAL_CODEX_TOKEN",
+          "keyTtlDays": 90,
+          "servers": {
+            "hive": {
+              "agentId": "local-codex",
+              "tools": ["hive_agents", "hive_available_work", "hive_diagnostics", "hive_events", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"]
+            },
+            "kubernetes": {
+              "tools": ["namespaces_list", "pods_list", "pods_list_in_namespace", "pods_get", "pods_log", "events_list", "resources_list", "resources_get"]
+            }
+          }
+        },
+        "gateway-admin": {
+          "admin": true,
+          "tokenFile": "/etc/mcp-gateway/tokens/GATEWAY_ADMIN_TOKEN"
+        },
+        "local-claude-deploy": {
+          "keyTtlDays": 30,
+          "servers": {
+            "container-manager": {
+              "tools": ["container_upgrade", "container_rollback", "container_status", "container_health", "container_logs"],
+              "argLimits": {
+                "container_upgrade": {
+                  "_onlyArgs": ["deployment", "image", "container", "timeout_seconds"],
+                  "deployment": {
+                    "required": true,
+                    "type": "string",
+                    "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+                    "notIn": ["hermes-gateway", "mcp-gateway"]
+                  },
+                  "image": {
+                    "required": true,
+                    "type": "string",
+                    "pattern": "^(localhost:30500|registry\\.company-ops\\.svc\\.cluster\\.local:5000)/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}$"
+                  },
+                  "container": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+                  },
+                  "timeout_seconds": { "max": 900 }
+                },
+                "container_rollback": {
+                  "_onlyArgs": ["deployment"],
+                  "deployment": {
+                    "required": true,
+                    "type": "string",
+                    "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+                    "notIn": ["hermes-gateway", "mcp-gateway"]
+                  }
+                },
+                "container_health": {
+                  "_onlyArgs": ["deployment"],
+                  "deployment": {
+                    "required": true,
+                    "type": "string",
+                    "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+                    "notIn": ["hermes-gateway", "mcp-gateway"]
+                  }
+                },
+                "container_logs": {
+                  "_onlyArgs": ["deployment", "tail_lines"],
+                  "deployment": {
+                    "required": true,
+                    "type": "string",
+                    "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+                    "notIn": ["hermes-gateway", "mcp-gateway"]
+                  },
+                  "tail_lines": { "max": 500 }
+                },
+                "container_status": { "_onlyArgs": [] }
+              }
+            },
+            "builder": {
+              "tools": ["builder_build_and_push"],
+              "argLimits": {
+                "builder_build_and_push": {
+                  "_onlyArgs": ["context_ref", "dockerfile_path", "image_repo", "image_tag", "contexts", "build_args", "timeout_seconds"],
+                  "context_ref": {
+                    "required": true,
+                    "type": "string",
+                    "pattern": "^https://github\\.com/BuildMy-house/[A-Za-z0-9._-]+\\.git#[0-9a-f]{40}$"
+                  },
+                  "contexts": {
+                    "mapKeyPattern": "^[A-Za-z0-9_-]+$",
+                    "mapValuePattern": "^https://github\\.com/BuildMy-house/[A-Za-z0-9._-]+\\.git#[0-9a-f]{40}$"
+                  },
+                  "image_repo": {
+                    "required": true,
+                    "type": "string",
+                    "in": ["company-os", "company-os-browser-adversary", "company-os-engineering", "company-os-engineering-opencode", "company-os-hive", "company-os-pm-agent", "buildmyhouse-app", "buildmyhouse-luxcore", "buildmyhouse-mcp"]
+                  },
+                  "dockerfile_path": {
+                    "required": true,
+                    "type": "string",
+                    "pattern": "^(?!.*\\.\\.)[A-Za-z0-9._/-]+$"
+                  },
+                  "image_tag": {
+                    "required": true,
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"
+                  },
+                  "build_args": {
+                    "mapKeyPattern": "^[A-Z][A-Z0-9_]*$",
+                    "mapValuePattern": "^[A-Za-z0-9._:/-]{0,128}$"
+                  },
+                  "timeout_seconds": { "max": 3600 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-gateway
+  namespace: company-ops
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mcp-gateway
+  template:
+    metadata:
+      labels:
+        app: mcp-gateway
+    spec:
+      serviceAccountName: mcp-gateway
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-gateway
+          # Pinned by digest after the BuildKit build (see docs/MCP-GATEWAY.md).
+          image: localhost:30500/company-os-mcp-gateway:feba4c9@sha256:36cd4c70b1f32ba060823cfb9ec7bb3d6afa119ff809ef1f60196fa06dd805bf
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MCP_GATEWAY_POLICY
+              value: /etc/mcp-gateway/policy/policy.json
+            - name: HIVE_URL
+              value: http://hive-coordinator:4100
+            - name: AXIOM_SERVICE_NAME
+              value: mcp-gateway
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: production
+            - name: AXIOM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: company-ops-secrets
+                  key: AXIOM_TOKEN
+                  optional: true
+            # Key store DSN (role mcp_gateway_keys, sql/roles.d/mcp_gateway_keys.yaml). Optional so the
+            # gateway still boots in file-token-only mode before the role/schema are provisioned;
+            # without it, issued keys and the gateway-admin tools are unavailable.
+            - name: MCP_GATEWAY_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway-tokens
+                  key: MCP_GATEWAY_DATABASE_URL
+                  optional: true
+            # Mint per-build GitHub App tokens for the builder child (mirrors
+            # engineering-build-dispatcher.yaml). Known blast-radius tradeoff: env
+            # vars are inherited by EVERY child process in this pod (hive, kubernetes,
+            # container-manager, builder), so a compromised child could read them.
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: company-ops-secrets
+                  key: GITHUB_APP_ID
+            - name: GITHUB_APP_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: company-ops-secrets
+                  key: GITHUB_APP_INSTALLATION_ID
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: company-ops-secrets
+                  key: GITHUB_APP_PRIVATE_KEY
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: policy, mountPath: /etc/mcp-gateway/policy, readOnly: true }
+            - { name: tokens, mountPath: /etc/mcp-gateway/tokens, readOnly: true }
+            # Scoped tokens for the two privileged children (never the pod's own SA token).
+            - { name: container-manager-token, mountPath: /var/run/secrets/container-manager, readOnly: true }
+            - { name: builder-manager-token, mountPath: /var/run/secrets/builder-manager, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: policy
+          configMap:
+            name: mcp-gateway-policy
+        - name: tokens
+          secret:
+            secretName: mcp-gateway-tokens
+        - name: container-manager-token
+          secret:
+            secretName: mcp-gateway-deployer-token
+        - name: builder-manager-token
+          secret:
+            secretName: builder-manager-token
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-gateway
+  namespace: company-ops
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector:
+    app: mcp-gateway
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30430
+---
+# Ingress only from the tailnet (100.64.0.0/10); LAN sources removed per the review
+# decisions. Enforcement depends on the cluster's NetworkPolicy controller and is unproven
+# until the rollout check in docs/MCP-GATEWAY.md passes; the host firewall script is the
+# second layer.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-gateway-ingress
+  namespace: company-ops
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp-gateway
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock: { cidr: 100.64.0.0/10 }
+      ports:
+        - protocol: TCP
+          port: 8080

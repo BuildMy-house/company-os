@@ -1,5 +1,5 @@
-# Hermes runtime configuration for pm-agent. Copied to $HERMES_HOME/config.yaml
-# by pm-agent/entrypoint.sh. Deliberately NOT derived from hermes/config.yaml:
+# Hermes runtime configuration for pm-agent. Rendered to $HERMES_HOME/config.yaml
+# by pm-agent/entrypoint.sh (model.default replaced by resolve_model.py). Deliberately NOT derived from hermes/config.yaml:
 # nothing here is inherited from Hermes (the CEO agent), and every capability
 # is opt-in. Review docs/PM-AGENT-HERMES.md before widening anything.
 agent:
@@ -24,14 +24,22 @@ agent:
     - todo
 
 model:
-  default: z-ai/glm-5.3-flash
+  # Baked default only: entrypoint.sh renders the live-probed free model over
+  # this line at boot (pm-agent/resolve_model.py).
+  default: inclusionai/ling-3.1-flash
   provider: custom:pm_llm
 
 custom_providers:
-  # One dedicated, spend-capped key: PM_AGENT_LLM_API_KEY from pm-agent-secrets.
+  # Nous inference API, same provider as the Hermes runtime default. One
+  # key only: PM_AGENT_LLM_API_KEY from pm-agent-secrets (not NOUS_API_KEY
+  # from company-ops-secrets). Nous rejects requests without tags (HTTP 400).
   - name: pm_llm
-    base_url: https://api.tokenrouter.com/v1
+    base_url: https://inference-api.nousresearch.com/v1
     key_env: PM_AGENT_LLM_API_KEY
+    extra_body:
+      tags:
+        - product=hermes-agent
+        - user=pm-agent
 
 # No auxiliary models, no plugins (the axiom_usage plugin is NOT enabled:
 # telemetry is structured stdout logs only), no memory across users.
@@ -61,7 +69,7 @@ mcp_servers:
     args: ["/opt/company-ops/pm-agent/pm_tools_mcp.py"]
     env:
       PM_DATABASE_URL: "${PM_DATABASE_URL}"
-      HIVE_URL: "http://hive-coordinator:4100"
+      HIVE_URL: "${HIVE_URL}"
       PM_CONTEXT_PATH: "/run/pm-agent/context.json"
       PYTHONPATH: "/opt/company-ops:/opt/company-ops/pm-agent"
     tools:

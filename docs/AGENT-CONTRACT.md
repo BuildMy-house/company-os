@@ -22,10 +22,16 @@ adapters and is not an agent-facing integration:
    available items. The tool reports each worker's bid, decline, timeout, or
    unavailable state. Workers submit their own bids. Prompting never creates
    bids or allocates work on behalf of a worker.
-5. Allocate available work with `hive_allocate`; Hive leases it
-   to the highest-ranked interested bidder.
+5. Allocate available work with `hive_allocate`; Hive leases it to the
+   cheapest bidder that can deliver (interested, confidence at least 0.5,
+   recently seen, not repeatedly `lease_expired`), falling back to the
+   highest-scored bid when none is eligible. While a connected pool worker has
+   not bid yet the reply is `{deferred: true, retry_after_seconds}` and nothing
+   is leased: wait and call again. `hive_work_bids` lists bids in this
+   allocation order. `hive_cost_ledger` shows per-agent allocations, failures,
+   runtime and estimated cost.
 
-Hive scores bids as `confidence^confidence_weight * benefit^benefit_weight /
+Hive scores bids (used for ties and as the fallback ranking) as `confidence^confidence_weight * benefit^benefit_weight /
 cost^cost_weight`. The weights are durable and adjustable through
 `GET/POST /scoring`; defaults are `1, 1, 1`.
 6. Renew with `hive_heartbeat` while executing.

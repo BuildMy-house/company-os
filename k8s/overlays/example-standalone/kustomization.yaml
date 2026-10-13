@@ -1,0 +1,48 @@
+# Example: stand up hive + pm-agent for a DIFFERENT project ("acme") from the
+# same base components, with no fork. Copy this directory to
+# k8s/overlays/<project>/ (scripts/new-project-overlay.sh does it for you) and
+# edit the four parameters below: namespace, secret name, image registry/tags,
+# and (via the namespace transformer) every Role/RoleBinding subject.
+#
+# Gate: FORBID_LITERALS="buildmyhouse company-ops localhost:30500 homely" \
+#   SKIP_BASELINE=1 scripts/verify-kustomize-render.sh k8s/overlays/example-standalone
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: acme-ops
+
+resources:
+  - namespace.yaml
+  - ../../base/hive
+  - ../../base/pm-agent
+
+images:
+  - name: localhost:30500/company-os-hive
+    newName: registry.example.internal:5000/acme-hive
+    newTag: replace-with-immutable-tag
+  - name: localhost:30500/company-os-pm-agent
+    newName: registry.example.internal:5000/acme-pm-agent
+    newTag: replace-with-immutable-tag
+
+patches:
+  # Shared secret: base hard-codes the BuildMy secret name; point it at the
+  # project's own Secret (created by your secret sync, never committed).
+  - target: {kind: Deployment, name: hive-coordinator}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/envFrom/0/secretRef/name
+        value: acme-secrets
+  - target: {kind: Deployment, name: pm-agent-gateway}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/valueFrom/secretKeyRef/name
+        value: acme-secrets
+  # Per-project identity for the Hive agent card.
+  - target: {kind: Deployment, name: hive-coordinator}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: HIVE_NAME, value: "Acme Hive"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: HIVE_DESCRIPTION, value: "Coordinates work between Acme agents"}

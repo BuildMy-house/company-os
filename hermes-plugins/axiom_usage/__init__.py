@@ -39,13 +39,21 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_DATASET = "bmh-company"
+# Env knobs (COMP-6): dataset + full ingest endpoint. Defaults equal today's
+# literals, so unset env behaves exactly as before. AXIOM_URL, when set, is the
+# COMPLETE ingest endpoint and wins over the dataset-derived default below
+# (AXIOM_DATASET naming mirrors hive/lib/hive/telemetry.ex and
+# scripts/engineering-manager-mcp.js).
+_DATASET = os.environ.get("AXIOM_DATASET", "bmh-company")
 # bmh-company lives on Axiom's eu-central-1 edge deployment, not the default
 # api.axiom.co domain — that domain rejects ingest for this dataset with
 # HTTP 400 ("must use the eu-central-1 edge deployment domain"). Edge
 # ingest also uses a different path shape (/v1/ingest/<dataset>, not
 # /v1/datasets/<dataset>/ingest). Confirmed live against the real token.
-_ENDPOINT = f"https://eu-central-1.aws.edge.axiom.co/v1/ingest/{_DATASET}"
+_ENDPOINT = (
+    os.environ.get("AXIOM_URL")
+    or f"https://eu-central-1.aws.edge.axiom.co/v1/ingest/{_DATASET}"
+)
 _FLUSH_INTERVAL = 5.0
 _BATCH_MAX = 50
 

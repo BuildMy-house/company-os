@@ -10,8 +10,14 @@ set -euo pipefail
 
 export HERMES_HOME="${HERMES_HOME:-/home/pmagent/.hermes}"
 mkdir -p "$HERMES_HOME" /run/pm-agent
-cp /opt/company-ops/pm-agent/hermes-config.yaml "$HERMES_HOME/config.yaml"
-cp /opt/company-ops/pm-agent/SOUL.md "$HERMES_HOME/SOUL.md"
+# Render the Hermes config with a live-probed FREE model (the baked file is
+# only the default). Fails the container if no free model works, so k8s
+# surfaces it instead of serving 404s; see pm-agent/resolve_model.py.
+export PM_AGENT_BAKED_CONFIG=/opt/company-ops/pm-agent/hermes-config.yaml
+python /opt/company-ops/pm-agent/resolve_model.py
+# Per-project persona: forks set PM_AGENT_CONTENT_DIR; default is the
+# buildmy.house content baked into the image (matches guard.py's default).
+cp "${PM_AGENT_CONTENT_DIR:-/opt/company-ops/pm-agent/content/buildmy-house}/SOUL.md" "$HERMES_HOME/SOUL.md"
 
 # Per-boot loopback credential between the front door and the Hermes runtime.
 API_SERVER_KEY="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"

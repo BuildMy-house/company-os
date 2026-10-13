@@ -131,16 +131,16 @@ Registry contents are **not** backed up — images are rebuilt on the new host
 kubectl create namespace company-ops
 kubectl -n company-ops create secret generic infisical-bootstrap-credentials \
   --from-literal=clientId='<from Infisical>' --from-literal=clientSecret='<from Infisical>'
-# 3. Infisical secrets operator (helm — same flags as documented in k8s/infisical-sync.yaml)
+# 3. Infisical secrets operator (helm — same flags as documented in k8s/base/infisical-sync/infisical-sync.yaml)
 helm repo add infisical-helm-charts https://dl.cloudsmith.io/public/infisical/helm-charts/helm/charts/
 helm repo update
 helm install operator-namespaced infisical-helm-charts/secrets-operator --version 0.11.9 \
   -n company-ops --set scopedNamespaces="company-ops\,buildmyhouse-dev" --set scopedRBAC=true
 # 4. Sync CRs → operator populates company-ops-secrets + company-ops-steward-*
-kubectl apply -f k8s/infisical-sync.yaml
+kubectl apply -f k8s/base/infisical-sync/infisical-sync.yaml
 kubectl get secret company-ops-secrets -n company-ops -o json | jq -r '.data|keys[]' | wc -l   # expect 44
 # 5. Core manifests
-kubectl apply -k k8s/          # includes pm-agent; waits not required; pods will CrashLoop until secrets/images exist — expected (pm-agent also needs PM_DATABASE_URL, see NAHAR-TODO.md Group L)
+kubectl apply -k k8s/overlays/buildmy-prod/          # includes pm-agent; waits not required; pods will CrashLoop until secrets/images exist — expected (pm-agent also needs PM_DATABASE_URL, see NAHAR-TODO.md Group L)
 ```
 
 ### Step 4 — Build and push images into the new in-cluster registry
@@ -154,9 +154,9 @@ scripts/build-push-images.sh          # rebuilds company-os, company-os-hive, co
 docker images --digests | grep localhost:30500   # record new digests
 ```
 
-The manifest image pins (`k8s/*.yaml`, e.g. `company-os@sha256:3362faca…`)
+The manifest image pins (`k8s/**/*.yaml`, e.g. `company-os@sha256:3362faca…`)
 reference old digests (company-ops.yaml, postgres-backup.yaml and hermes-data-backup.yaml must move together; see docs/IMAGES.md). After rebuilding, update the pins to the new digests in
-one commit on prod, then re-apply: `kubectl apply -k k8s/`. (Alternative —
+one commit on prod, then re-apply: `kubectl apply -k k8s/overlays/buildmy-prod/`. (Alternative —
 restore the old registry PVC — is deliberately not used: images are
 reproducible from git and the 20 Gi PVC transfer is not worth it.)
 
@@ -294,7 +294,7 @@ Cluster-internal DNS names move with the cluster:
   (in-cluster registry address) — unchanged.
 - `scripts/generate-agent-mcp-config.js` generated configs for in-pod agents —
   unchanged, **except** `KUBERNETES_SERVICE_HOST=10.43.0.1` (hardcoded in
-  `k8s/engineering.yaml`, `k8s/engineering-opencode*.yaml`,
+  `k8s/base/engineering/engineering.yaml`, `k8s/base/engineering/engineering-opencode*.yaml`,
   `hermes/config.yaml` `k8s_deployment` server, and as the script's default):
   valid only because the default k3s service CIDR is retained on the new host.
 
@@ -317,7 +317,7 @@ this cluster — unchanged.
 
 ### C. Image references — digests change, address doesn't
 
-`localhost:30500/...` in `k8s/*.yaml` is resolved by the **node's** kubelet
+`localhost:30500/...` in `k8s/**/*.yaml` is resolved by the **node's** kubelet
 (containerd on the node), which is why the NodePort exists (in-cluster registry
 DNS is not resolvable from the node). On the new host the same
 `localhost:30500` address works after `scripts/build-push-images.sh` runs —
@@ -388,8 +388,8 @@ cutover: raise its 500m CPU limit, or pass
 
 ## 6. Engineering-agent replicas
 
-Decision: the manifest value is authoritative. `k8s/engineering.yaml` declares
-`replicas: 1`, and `kubectl apply -k k8s/` on the new host yields 1 replica
+Decision: the manifest value is authoritative. `k8s/base/engineering/engineering.yaml` declares
+`replicas: 1`, and `kubectl apply -k k8s/overlays/buildmy-prod/` on the new host yields 1 replica
 regardless of any live `kubectl scale` on the old cluster. To run more, change
 `replicas:` in the manifest and commit it.
 
@@ -408,7 +408,7 @@ Options:
 | B. Migrate + resume immediately | poller fires */3 during cutover; hits a half-built cluster (needs buildmyhouse-dev-secrets via operator, engineering agent for builds) | noisy failures during a fragile window |
 | C. **Migrate suspended; resume after cutover verified** | zero interference; one manual trigger resumes testing | **recommended** |
 
-Implementation of C: on the new host apply `k8s/buildmyhouse-dev-*` with
+Implementation of C: on the new host apply `kubectl apply -k k8s/projects/buildmyhouse-dev` with
 `suspend: true` added to the CronJob manifest (or `kubectl patch cronjob
 buildmyhouse-dev-deployer -n company-ops --type merge -p '{"spec":{"suspend":true}}'`
 immediately after apply), then after all §2.8 rows pass, resume with
@@ -439,7 +439,7 @@ recorded here.
    `infisical-bootstrap-credentials` is the only manually copied secret; the
    operator then synced all 47 keys into `company-ops-secrets`.
 3. **Registry + images.** In-cluster registry (`localhost:30500`), images
-   rebuilt on the new host. Digest pins in `k8s/*.yaml` were repinned
+   rebuilt on the new host. Digest pins in `k8s/**/*.yaml` were repinned
    (`company-os` → `89b92c0be5cc…`, engineering → `1dbd268bc9c8…`).
 4. **Postgres.** `postgres-init` ConfigMap must exist before the pod starts
    (create from `sql/`). Final dump restored with `scripts/restore-postgres.sh
@@ -516,7 +516,7 @@ Not yet verified or open:
 - CronJobs `dns-healthcheck`, `postgres-backup`, `hermes-data-backup` are
   applied; a one-off `postgres-backup` run uploaded a dump to R2 on the new
   host. Keep `buildmyhouse-dev-deployer` suspended.
-- `k8s/pm-agent-gateway.yaml`: nginx container (NodePort 30420) that enforces
+- `k8s/base/pm-agent/pm-agent-gateway.yaml`: nginx container (NodePort 30420) that enforces
   `PM_AGENT_AUTH_TOKEN` in front of pm-agent, which has no auth of its own.
   Needs `PM_AGENT_AUTH_TOKEN` in `company-ops-secrets` (Infisical `/hermes`)
   or the pod stays in CreateContainerConfigError (intentional fail-closed).

@@ -16,7 +16,7 @@ cd "$repo_root"
 
 command -v kubectl >/dev/null || { echo "kubectl is required" >&2; exit 1; }
 
-kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/base/core/namespace.yaml
 
 kubectl create configmap postgres-init \
   --namespace company-ops \
@@ -34,7 +34,7 @@ else
   exit 1
 fi
 
-kubectl apply -k k8s
+kubectl apply -k k8s/overlays/buildmy-prod
 kubectl rollout status deployment/registry -n company-ops --timeout=120s
 
 if [ "${SKIP_BUILD:-0}" = "1" ]; then
@@ -50,9 +50,9 @@ fi
 # and postgres holds state. CronJobs (dns-healthcheck) pick up new images
 # on their next scheduled run.
 mapfile -t deps < <(
-  for f in $(sed -n 's/^  - //p' k8s/kustomization.yaml); do
-    awk '/^kind: Deployment/{d=1;next} d&&/^  name:/{print $2; d=0}' "k8s/$f"
-  done | grep -v -e '^registry$' -e '^postgres$'
+  kubectl kustomize k8s/overlays/buildmy-prod |
+    awk '/^kind: Deployment/{d=1;next} d&&/^  name:/{print $2; d=0}' |
+    grep -v -e '^registry$' -e '^postgres$'
 )
 
 for dep in "${deps[@]}"; do

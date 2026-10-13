@@ -17,3 +17,23 @@ jobs:
           python-version: '3.12'
       - run: pip install -e ".[test]"
       - run: python -m pytest -q
+  # Render gate: (a) the prod overlay must build, (b) the example-standalone
+  # overlay must be free of BuildMy literals. A baseline-identical check vs
+  # origin/main is not run here: on main it is trivially identical, and on PRs
+  # it would need fetch-depth: 0; scripts/verify-kustomize-render.sh covers it
+  # locally against any chosen baseline ref.
+  kustomize-render-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kustomize v5.4.3
+        run: |
+          curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin kustomize
+          kustomize version
+      - name: buildmy-prod overlay must render
+        run: SKIP_BASELINE=1 scripts/verify-kustomize-render.sh k8s/overlays/buildmy-prod
+      - name: example-standalone must be free of BuildMy literals
+        run: |
+          FORBID_LITERALS="buildmyhouse company-ops localhost:30500 homely" SKIP_BASELINE=1 \
+            scripts/verify-kustomize-render.sh k8s/overlays/example-standalone

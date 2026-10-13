@@ -1,0 +1,31 @@
+# Syncs the pm-agent Infisical folder into its OWN Secret, pm-agent-secrets.
+# pm-agent no longer reads company-ops-secrets.
+#
+# The Infisical folder /pm-agent (project "Build My house", environment dev)
+# must contain EXACTLY two secrets, because this sync copies every key in the
+# path into the Secret (tests/test_pm_agent.py cannot see Infisical; the
+# folder contents are a manual invariant):
+#   PM_DATABASE_URL        DSN for the pm_agent_writer role (sql/roles.d/pm_agent_writer.yaml)
+#   PM_AGENT_LLM_API_KEY   dedicated, spend-capped LLM key for pm-agent only
+# Uses the existing infisical-auth in company-ops (k8s/base/infisical-sync/infisical-sync.yaml).
+# Neither value is committed here, and this change did not write them.
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: pm-agent-sync
+  namespace: company-ops
+spec:
+  infisicalAuthRef:
+    name: infisical-auth
+    namespace: company-ops
+  syncOptions:
+    refreshInterval: 60s
+  sources:
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /pm-agent
+  targets:
+    - name: pm-agent-secrets
+      namespace: company-ops
+      kind: Secret
+      creationPolicy: Owner

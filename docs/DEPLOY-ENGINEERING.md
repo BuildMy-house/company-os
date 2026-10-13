@@ -24,11 +24,32 @@ with `container_test`, then use the container-manager MCP's
 `container_upgrade` for the specific deployment. Verify readiness and health
 after rollout, and use `container_rollback` if it fails. Keep the previous
 known-good digest available. Do not use mutable tags or raw Kubernetes
-deployment mutations as the routine update path. Workers without the deploy
-MCP hand the manager the source SHA, image digest, and test evidence.
+deployment mutations as the routine update path. The local Claude session is
+now an eligible caller of these tools through the MCP gateway (see "Rollouts
+from the local Claude session via the MCP gateway" below); OpenCode and Codex
+workers are not, and keep handing the manager the source SHA, image digest,
+and test evidence.
 
 This rule applies to the Hive coordinator and every other company-os runtime
 deployment, not just the engineering image described below.
+
+## Rollouts from the local Claude session via the MCP gateway
+
+The local Claude session may call `builder_build_and_push` and
+`container_upgrade`/`container_rollback`/`container_status`/`container_health`/
+`container_logs` through the MCP gateway, via the workspace `.mcp.json` MCP
+entries `container-manager-gw` and `builder-gw`, authenticated with the issued
+key in env `LOCAL_CLAUDE_DEPLOY_TOKEN`. Scope: NON-gateway images only
+(`mcp-gateway` and `hermes-gateway` are excluded by the gateway's `argLimits`)
+built from an already-merged immutable SHA — the source must be a merged
+commit, and `container_upgrade` requires a digest-pinned image. Verify health
+after every upgrade and roll back on failure.
+
+Explicit user approval is still required for: any prod-branch merge or prod
+deploy, anything touching secrets, upgrades of `hermes-gateway` or
+`mcp-gateway` (which go through the independent hive/engineering path), and
+issuing or rotating gateway keys — only Nahar's `gateway-admin` identity can
+do that, never the local session.
 
 ## Production deployment
 
@@ -41,6 +62,39 @@ Check the currently deployed image with:
 kubectl get deployment engineering-agent -n company-ops \
   -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
+
+## Rendering manifests
+
+Production manifests render from the Kustomize overlay
+`k8s/overlays/buildmy-prod`, which composes the component bases under
+`k8s/base/<component>/` (do not `kubectl apply -f` individual manifests for
+production). Render locally with `kubectl apply -k k8s/overlays/buildmy-prod`
+(or `kustomize build k8s/overlays/buildmy-prod`). To confirm a working tree
+renders byte-identical to the baseline:
+
+```bash
+scripts/verify-kustomize-render.sh k8s/overlays/buildmy-prod origin/main
+```
+
+It prints `RENDER IDENTICAL (N documents)` and exits 0 on success.
+
+## Standalone engineering pool
+
+To run the three engineering Deployments for a different project without
+forking the base, copy `k8s/overlays/example-standalone-engineering/` and edit
+its Namespace/ServiceAccount, its `namespace:` and `images:` entries, and the
+three container-keyed strategic-merge patches (repo URL env values, both
+`envFrom` secret names, and `serviceAccountName`). Verify it with:
+
+```bash
+FORBID_LITERALS="buildmyhouse BuildMy-house company-ops-secrets company-ops-steward localhost:30500 homely hermees" \
+  SKIP_BASELINE=1 scripts/verify-kustomize-render.sh k8s/overlays/example-standalone-engineering
+```
+
+The overlay does not fork `Dockerfile.engineering`: when building the pool's
+image, override the build context with
+`--build-context shared=<git-url#sha | local dir>` — any context containing
+`.agents/agent-manager.md` works (see that Dockerfile's header).
 
 ## Branch discipline
 
@@ -107,7 +161,7 @@ Old/unused image tags accumulate in the registry over time since builds are
 never automatically pruned. Operators should periodically check for tags no
 longer referenced by any Deployment and remove them via the registry API
 (the `registry:2` image needs `REGISTRY_STORAGE_DELETE_ENABLED=true`, already
-set in `k8s/registry.yaml`, and a garbage-collect pass to actually reclaim
+set in `k8s/base/registry/registry.yaml`, and a garbage-collect pass to actually reclaim
 disk):
 
 ```bash
@@ -191,7 +245,7 @@ pipeline exists to keep:
   has zero Kubernetes API access; it only ever talks to the git remote and
   the registry over plain HTTP/HTTPS.
 - The MCP tool (not the Job) authenticates to the Kubernetes API as a
-  **dedicated `builder-manager` ServiceAccount** (`k8s/builder-rbac.yaml`),
+  **dedicated `builder-manager` ServiceAccount** (`k8s/base/core/builder-rbac.yaml`),
   deliberately separate from the shared `company-ops` SA that
   `container_manager`/`k8s_deployment` use. Its Role can
   `create`/`get`/`list`/`watch`/`delete` **Jobs**, read their pods' logs,
@@ -220,7 +274,7 @@ pipeline exists to keep:
 
 The generic engineering builder runs in the dedicated
 `engineering-build-dispatcher` Deployment defined in
-`k8s/engineering-build-dispatcher.yaml`. Do not point the workspace builder
+`k8s/base/engineering-build-dispatcher/engineering-build-dispatcher.yaml`. Do not point the workspace builder
 MCP at `engineering-agent`, `engineering-opencode`, or
 `engineering-opencode-direct`: upgrading any of those pods would close an
 in-flight BuildKit call. The dispatcher uses the same build-only
@@ -332,7 +386,7 @@ git source to actually complete the context checkout (a garbage/random
 value makes the checkout itself fail before the `RUN` step ever runs,
 which proves nothing either way; see below). This test targets the
 container-isolation mechanism, not the Secret CRUD path, so it doesn't
-need the still-unapplied Secrets RBAC in `k8s/builder-rbac.yaml` — the
+need the still-unapplied Secrets RBAC in `k8s/base/core/builder-rbac.yaml` — the
 token is set as a literal container env value, never a real k8s Secret.
 The `RUN` step checks the default BuildKit secret mount path, its own env,
 and every readable `/proc/<pid>/environ` for the fixed, public `ghs_`
@@ -426,7 +480,7 @@ For changes to this boundary, deploy in this order:
    named `workspace` context; update the dispatcher manifest to that image.
 3. Build the Hermes image from the same pinned `company-os` commit with the
    engineering BuildKit tool.
-4. Apply `k8s/hermes-build-dispatcher.yaml` and `k8s/company-ops.yaml`, then
+4. Apply `k8s/base/hermes/hermes-build-dispatcher.yaml` and `k8s/base/hermes/company-ops.yaml`, then
    roll out `hermes-build-dispatcher` and `hermes-gateway`.
 5. Verify the Hermes API tool list contains `build_company_os_image` and does
    not contain `engineering` or `builder_build_and_push`; verify an invalid
@@ -500,6 +554,13 @@ engineering-manager or builder tools.
 
 ### When/how to call `container_upgrade`
 
+- **Eligible caller**: the local Claude session, through the gateway's
+  `container-manager-gw` MCP entry, for non-gateway deployments only — the
+  deploy identity's `argLimits` exclude `mcp-gateway` and `hermes-gateway`,
+  and require a merged source SHA and a digest-pinned image. Prod-branch
+  merges/deploys, secret changes, gateway upgrades, and gateway key
+  issue/rotation still need explicit user approval (see "Rollouts from the
+  local Claude session via the MCP gateway" above).
 - **Only after** a `builder_build_and_push` call
   has already independently confirmed the target tag exists in the
   registry — never point a Deployment at a tag you haven't confirmed was
@@ -535,7 +596,7 @@ engineering-manager or builder tools.
 
 ### `builder-manager` cannot mutate any deployment
 
-`builder-manager`'s RBAC (`k8s/builder-rbac.yaml`) grants
+`builder-manager`'s RBAC (`k8s/base/core/builder-rbac.yaml`) grants
 `create`/`get`/`list`/`watch`/`delete` on `jobs.batch`, `get`/`list`/
 `watch` on `pods`/`pods/log`, and `create`/`delete` (never `get`/`list`/
 `watch`/`patch`) on `secrets` in `company-ops` only — no verbs on

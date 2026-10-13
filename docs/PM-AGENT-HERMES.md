@@ -2,7 +2,7 @@
 
 pm-agent is the end-user chat front door for buildmy.house product feedback.
 It replaced a non-LLM script with canned replies. The persona is
-`pm-agent/SOUL.md`; the model runs in the Hermes runtime
+`pm-agent/content/buildmy-house/SOUL.md` (override dir via `PM_AGENT_CONTENT_DIR`); the model runs in the Hermes runtime
 (`nousresearch/hermes-agent` image) and registers with the Hive as
 `HIVE_AGENT_ID=pm-agent`.
 
@@ -37,7 +37,7 @@ front door serves only `/chat` and `/healthz`.
 
 | # | Criterion | Enforcement | Evidence |
 |---|---|---|---|
-| 1 | Own secret, two keys only, no `company-ops-secrets` | `k8s/pm-agent.yaml` env from `pm-agent-secrets` keys `PM_DATABASE_URL`, `PM_AGENT_LLM_API_KEY`; `envFrom` removed; `k8s/pm-agent-infisical-sync.yaml` syncs Infisical `/pm-agent` into it | `ManifestSecurityTest.test_own_secret_only_no_envfrom_company_ops`, `test_infisical_sync_targets_only_pm_agent_secret` |
+| 1 | Own secret, two keys only, no `company-ops-secrets` | `k8s/base/pm-agent/pm-agent.yaml` env from `pm-agent-secrets` keys `PM_DATABASE_URL`, `PM_AGENT_LLM_API_KEY`; `envFrom` removed; `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml` syncs Infisical `/pm-agent` into it | `ManifestSecurityTest.test_own_secret_only_no_envfrom_company_ops`, `test_infisical_sync_targets_only_pm_agent_secret` |
 | 2 | No Axiom | No Axiom env, plugin, or code; Hermes `plugins.enabled: []`; structured JSON logs to stdout | `test_no_axiom_credentials_or_env`, `test_no_axiom_anywhere_in_pm_agent_code` |
 | 3 | No SA token, dedicated SA, no RBAC | `ServiceAccount pm-agent`, `automountServiceAccountToken: false` on SA and pod, no Role/Binding | `test_dedicated_service_account_no_token_no_rbac` |
 | 4 | NetworkPolicy | Egress: hive-coordinator:4100, postgres:5432, kube-dns:53, public HTTPS:443 (LLM). Ingress: pm-agent-gateway:4200 only | `test_network_policy_*` (see enforcement finding below) |
@@ -118,10 +118,10 @@ The in-cluster engineering agent should, via the hive:
 1. Build the image at the merged SHA and push it to the in-cluster registry.
    The build fails fast if `hermes` is not on PATH in the base image.
 2. Confirm the Infisical `/pm-agent` folder holds exactly the two secrets (user
-   action below), then apply `k8s/pm-agent-infisical-sync.yaml` (it is not in
-   `k8s/kustomization.yaml`, like `k8s/infisical-sync.yaml`, because it needs
+   action below), then apply `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml` (it is not in
+   `k8s/overlays/buildmy-prod`, like `k8s/base/infisical-sync/infisical-sync.yaml`, because it needs
    the operator CRDs) and confirm `pm-agent-secrets` exists with two keys.
-3. Set the image tag in `k8s/pm-agent.yaml` to the built tag/digest and apply it
+3. Set the image tag in `k8s/base/pm-agent/pm-agent.yaml` to the built tag/digest and apply it
    (replacing `:latest`), then verify: pod Ready, `/healthz` 200, hive agent list
    shows `pm-agent`, a test `/chat` through the gateway returns a plain-text
    reply and writes `pm_conversations` rows (roles `user`, `tool`, `assistant`).
@@ -138,11 +138,36 @@ The in-cluster engineering agent should, via the hive:
 1. Infisical (project Build My house, env dev): create folder `/pm-agent` with
    exactly `PM_DATABASE_URL` (the `pm_agent_writer` DSN, existing role) and
    `PM_AGENT_LLM_API_KEY` (a new key dedicated to pm-agent with a hard spend cap;
-   the manifest assumes the TokenRouter endpoint `https://api.tokenrouter.com/v1`
-   and model `z-ai/glm-5.3-flash`, so create the key there or edit
-   `hermes-config.yaml` and the NetworkPolicy together).
+   the manifest uses the Nous inference API `https://inference-api.nousresearch.com/v1`
+   and an automatically chosen FREE model (see "Model selection" below);
+   to change provider, edit `hermes-config.yaml` and the NetworkPolicy together).
 2. Ensure the Infisical machine identity behind `infisical-auth` can read
    `/pm-agent` and the operator is allowed to create Secrets in `company-ops`.
 3. Merge PR #15 (writer UPDATE grant) before rollout: `record_message` and
    `upsert_signal` use UPDATE, so without it chat logging fails.
 4. Approve and merge this PR; approve the rollout via the engineering agent.
+
+## Model selection (automatic, free-only)
+
+Nous retires `:free` models without notice and its `/v1/models` listing keeps
+showing retired ones (`meituan/longcat-2.0:free` answered 404 while listed as
+free), so `company_ops/model_resolver.py` (via `pm-agent/resolve_model.py`) probes instead of trusting the list.
+
+- At boot `entrypoint.sh` runs the resolver: fetch `/v1/models`, keep models
+  that are free (prompt and completion price 0), advertise `tools`, have
+  context >= 100k, are not within 3 days of `expiration_date`, and are not
+  domain-specialised (`-fin`, `-sante`) or `stealth/*`. Order by
+  `company_ops/model-preferences.json` (preferred ids first, then context length),
+  send a 1-token chat completion to each, take the first HTTP 200, and render it
+  into `$HERMES_HOME/config.yaml` (the baked `hermes-config.yaml` is only the
+  default). The last working model is kept in `/run/pm-agent/resolved-model.json`
+  and reused if every fresh probe fails.
+- If nothing works the container exits non-zero (visible in k8s). A paid
+  fallback (cheapest paid model with tools) happens only if `PM_AGENT_ALLOW_PAID=true`.
+- `agent.py` runs a watchdog thread: every 6h, and when an LLM call fails with a
+  404/model-unavailable style error (5 min cooldown), it runs
+  `resolve_model.py --check`. If the resolved model differs from the rendered
+  one, the process exits (code 75), `entrypoint.sh` stops Hermes, and k8s
+  restarts the pod, which re-resolves. Restart-on-change was chosen over
+  hot-reloading Hermes as the simpler, more robust option.
+- To prefer a different model edit `company_ops/model-preferences.json`; stale ids are skipped.

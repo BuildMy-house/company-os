@@ -4,7 +4,7 @@ Infisical is the single source of truth for every company-os secret. On a new
 host the ONLY manually provisioned secret is the Infisical bootstrap machine
 identity; everything else is pulled by `scripts/bootstrap-secrets.sh`
 (static k8s Secrets) and then kept live by the Infisical Secrets Operator
-(`k8s/infisical-sync.yaml`, `k8s/buildmyhouse-dev-infisical-sync.yaml`).
+(`k8s/base/infisical-sync/infisical-sync.yaml`, `k8s/projects/buildmyhouse-dev/buildmyhouse-dev-infisical-sync.yaml`).
 
 - Infisical host: `https://eu.infisical.com`, environment `dev`
 - Project **Build My house** (`8806c2b0-73d2-4bea-8537-5b874c5ff592`) — company-os runtime
@@ -24,7 +24,7 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | POSTGRES_PASSWORD | company-ops-secrets | postgres.yaml, entrypoint.sh | yes | Build My house `/hermes` |
 | COMPANY_PASSWORD, OBSERVER_PASSWORD, ANALYTICS_PASSWORD, PM_AGENT_WRITER_PASSWORD (each role's `password_key` in `sql/roles.d/*.yaml`) | read by `scripts/provision-db-roles.sh` from env or Infisical | role provisioning (see below) | yes | `/hermes` (NOT `/infra`) |
 | COMPANY_DATABASE_URL, OBSERVER_DATABASE_URL, ANALYTICS_DATABASE_URL | company-ops-secrets | hermes-gateway, engineering pods | yes | `/hermes` |
-| PM_DATABASE_URL, PM_AGENT_LLM_API_KEY | `pm-agent-secrets` (own Secret, `k8s/pm-agent-infisical-sync.yaml`; pm-agent no longer reads company-ops-secrets) | pm-agent only (docs/PM-AGENT-HERMES.md) | **NO — gap** | `/pm-agent` (exactly these two keys) |
+| PM_DATABASE_URL, PM_AGENT_LLM_API_KEY | `pm-agent-secrets` (own Secret, `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml`; pm-agent no longer reads company-ops-secrets) | pm-agent only (docs/PM-AGENT-HERMES.md) | **NO — gap** | `/pm-agent` (exactly these two keys) |
 | DISCORD_BOT_TOKEN | company-ops-secrets | hermes-gateway | yes | `/hermes` |
 | DISCORD_ALLOWED_CHANNELS, DISCORD_ALLOW_ALL_USERS, DISCORD_ANNOUNCE_CHANNEL, DISCORD_BLOG_CHANNEL, DISCORD_HIL_CHANNEL, DISCORD_FINANCE_CHANNEL, DISCORD_DM_USER | company-ops-secrets | hermes-gateway, company_ops/human_interface.py | yes | `/hermes` |
 | NOUS_API_KEY | company-ops-secrets | hermes model inference | yes | `/hermes` |
@@ -49,8 +49,8 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | VITE_AXIOM_TOKEN | company-ops-secrets | app telemetry ingest | yes | `/infra` |
 | INFISICAL_HOST_URL, INFISICAL_PROJECT_ID, INFISICAL_ENV, INFISICAL_SECRET_PATH | local .env (non-secret config; ids also committed in sync manifests) | fetch-infisical-secrets.js, entrypoints | n/a — config, not secrets | hard-coded defaults in scripts |
 | INFISICAL_UNIVERSAL_AUTH_CLIENT_ID, INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET | the one manual bootstrap credential | Infisical operator (via `infisical-bootstrap-credentials` Secret), fetch script | no — it authenticates TO Infisical | provisioned by hand, then seeded as k8s Secret `infisical-bootstrap-credentials` (keys: `clientId`, `clientSecret`) in `company-ops` + `buildmyhouse-dev` |
-| builder-manager-token (ca.crt, namespace, token) | k8s token controller | builder-manager-mcp.js in engineering/dispatcher pods | no — cluster-issued SA token, not portable | recreated by `kubectl apply` of k8s/builder-rbac.yaml |
-| buildmyhouse-dev-deployer-token (ca.crt, namespace, token) | k8s token controller | buildmyhouse-dev-deployer CronJob | no — cluster-issued SA token | recreated by `kubectl apply` of k8s/buildmyhouse-dev-deployer-rbac.yaml |
+| builder-manager-token (ca.crt, namespace, token) | k8s token controller | builder-manager-mcp.js in engineering/dispatcher pods | no — cluster-issued SA token, not portable | recreated by `kubectl apply` of k8s/base/core/builder-rbac.yaml |
+| buildmyhouse-dev-deployer-token (ca.crt, namespace, token) | k8s token controller | buildmyhouse-dev-deployer CronJob | no — cluster-issued SA token | recreated by `kubectl apply` of k8s/projects/buildmyhouse-dev/buildmyhouse-dev-deployer-rbac.yaml |
 | buildmyhouse-dev-secrets (JWT_SECRET, ANALYTICS_ADMIN_TOKEN, BUILDMYHOUSE_MCP_TOKEN, LUXCORE_WORKER_TOKEN, R2_ACCOUNT_ID/R2_BUCKET_NAME/R2_PUBLIC_URL/R2_S3_ENDPOINT, VITE_AXIOM_DATASET/VITE_AXIOM_ENDPOINT, RESEND_*, plus app-side AXIOM_/CLOUDFLARE_/NEON_/R2_ keys) | dedicated Secret in buildmyhouse-dev | buildmyhouse-dev app + deployer CronJob | yes | buildmyhouse-app project `/` |
 | browser-adversary-auth | referenced optional:true in browser-adversary.yaml; absent live | browser-adversary auth mount | no keys defined yet | out of scope until keys are defined; then `/infra/browser-adversary` |
 | mcp-workers.json | tracked in git, verified identical to mcp-workers.example.json (commands/models only — no secret values) | company_ops/cli.py worker subcommand | n/a — contains no secrets | if tokens are ever added: `/infra` + env injection, never the JSON file |
@@ -132,14 +132,14 @@ Prereqs: kubectl (kubeconfig for the new cluster), node 18+, jq.
    helm install operator-namespaced infisical-helm-charts/secrets-operator \
      -n company-ops --create-namespace \
      --set scopedNamespaces="{company-ops,buildmyhouse-dev}" --set scopedRBAC=true
-   kubectl apply -f k8s/infisical-sync.yaml -f k8s/buildmyhouse-dev-infisical-sync.yaml
+   kubectl apply -f k8s/base/infisical-sync/infisical-sync.yaml -f k8s/projects/buildmyhouse-dev/buildmyhouse-dev-infisical-sync.yaml
    ```
 
    From then on the operator owns those Secrets (refreshInterval 60s) and the
    static seeds are superseded. Re-running `scripts/bootstrap-secrets.sh`
    remains safe at any time.
 
-5. Deploy workloads (`kubectl apply -k k8s` plus the buildmyhouse-dev manifests)
+5. Deploy workloads (`kubectl apply -k k8s/overlays/buildmy-prod` plus `kubectl apply -k k8s/projects/buildmyhouse-dev`)
    and restart pods so they pick up envFrom values.
 
 **File-type secrets:** no pod file mounts are needed. The GitHub App private

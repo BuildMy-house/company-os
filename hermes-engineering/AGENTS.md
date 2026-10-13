@@ -75,7 +75,7 @@ For live debugging against `buildmyhouse-dev` (disposable copy of `app`'s
 (Hermes, and the engineering-agent's Claude-manager side) instead of a raw
 `kubectl` binary -- see `hermes/config.yaml`'s `k8s_deployment` entry and
 `scripts/generate-agent-mcp-config.js`'s `kubernetes` entry for how it's
-wired, and `k8s/rbac.yaml` for exactly what it can and cannot do.
+wired, and `k8s/base/core/rbac.yaml` for exactly what it can and cannot do.
 
 ## E2E Tests (Playwright) — MANDATORY for UI work
 

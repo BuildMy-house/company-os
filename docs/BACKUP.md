@@ -5,8 +5,8 @@ distinct top-level prefixes:
 
 | What | Prefix | Schedule | Where |
 |---|---|---|---|
-| Postgres `company` + `observer` schemas | `backups/` | 03:00 | k8s CronJob `postgres-backup` (`k8s/postgres-backup.yaml`) |
-| hermes-data PVC (Hermes state/memory/sessions) | `hermes-data-backups/` | 03:30 | k8s CronJob `hermes-data-backup` (`k8s/hermes-data-backup.yaml`) |
+| Postgres `company` + `observer` schemas | `backups/` | 03:00 | k8s CronJob `postgres-backup` (`k8s/base/backups/postgres-backup.yaml`) |
+| hermes-data PVC (Hermes state/memory/sessions) | `hermes-data-backups/` | 03:30 | k8s CronJob `hermes-data-backup` (`k8s/base/backups/hermes-data-backup.yaml`) |
 
 Both CronJobs run `company_ops.backup` from the same digest-pinned image as
 the app, with credentials from the `company-ops-secrets` secret (provisioned
