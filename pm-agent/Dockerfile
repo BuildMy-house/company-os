@@ -3,7 +3,8 @@
 # from the repository root, via the isolated BuildKit builder at an immutable
 # source SHA (never from a dirty checkout):
 #   docker buildx build -f pm-agent/Dockerfile -t localhost:30500/company-os-pm-agent:<sha> .
-FROM nousresearch/hermes-agent:latest
+# Pinned by digest (tag :latest as of 2026-10-12); bump deliberately.
+FROM nousresearch/hermes-agent:latest@sha256:444b42594e7f467425872fc35e077a227d377f0fe0726bc818706d62175fad8b
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
