@@ -1,6 +1,8 @@
 # Build from the company-os root, with the canonical agent-manager prompt
-# pulled directly from the buildmy.house/workspace repo as an additional
-# build context (Docker 23+/buildx required):
+# pulled from the additional build context named `shared` (Docker 23+/buildx
+# required). `shared` may be ANY context that contains
+# .agents/agent-manager.md — a git URL (pin `#<40-hex-sha>` for a reproducible
+# build) or a local directory — for example this project's own workspace repo:
 # docker build -f Dockerfile.engineering \
 #   --build-context shared=https://github.com/BuildMy-house/workspace.git \
 #   -t hermes-engineering .
@@ -75,9 +77,10 @@ RUN useradd --create-home --uid 1001 --shell /bin/bash engineering \
   && mkdir -p /workspace \
   && chown -R engineering:engineering /opt/company-ops /workspace /home/engineering
 
-# Canonical agent-manager body lives once in buildmy.house/workspace's
-# .agents/agent-manager.md — pulled live from the remote at build time so
-# there is no hand-maintained copy of it inside company-os. Concatenated
+# Canonical agent-manager body lives in the `shared` context's
+# .agents/agent-manager.md (any context containing it: git URL or local
+# directory) — pulled at build time so there is no hand-maintained copy of it
+# inside company-os. Concatenated
 # with a small container-only supplement (self-upgrade, reporting to
 # Hermes) that has no equivalent outside the container.
 COPY --from=shared .agents/agent-manager.md /opt/company-ops/agent-config/canonical-agent-manager.md

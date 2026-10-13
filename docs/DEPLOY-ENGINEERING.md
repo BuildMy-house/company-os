@@ -78,6 +78,24 @@ scripts/verify-kustomize-render.sh k8s/overlays/buildmy-prod origin/main
 
 It prints `RENDER IDENTICAL (N documents)` and exits 0 on success.
 
+## Standalone engineering pool
+
+To run the three engineering Deployments for a different project without
+forking the base, copy `k8s/overlays/example-standalone-engineering/` and edit
+its Namespace/ServiceAccount, its `namespace:` and `images:` entries, and the
+three container-keyed strategic-merge patches (repo URL env values, both
+`envFrom` secret names, and `serviceAccountName`). Verify it with:
+
+```bash
+FORBID_LITERALS="buildmyhouse BuildMy-house company-ops-secrets company-ops-steward localhost:30500 homely hermees" \
+  SKIP_BASELINE=1 scripts/verify-kustomize-render.sh k8s/overlays/example-standalone-engineering
+```
+
+The overlay does not fork `Dockerfile.engineering`: when building the pool's
+image, override the build context with
+`--build-context shared=<git-url#sha | local dir>` — any context containing
+`.agents/agent-manager.md` works (see that Dockerfile's header).
+
 ## Branch discipline
 
 `main` is the integration branch. `prod` is the branch approved for live
