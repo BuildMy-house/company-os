@@ -1,3 +1,6 @@
+# Cron expressions (dream-audit: 0 0,12 * * * = 06:00/18:00 BTT) are UTC.
+timezone: UTC
+
 agent:
   disabled_toolsets:
     - code_execution

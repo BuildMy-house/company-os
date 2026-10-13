@@ -97,6 +97,10 @@ done
 
 chmod 644 /opt/data/.env
 
+# dream-audit: sync skill (only dream-audit), seed mode flag + cron job (idempotent).
+# memories/*.md above are seeded only when missing, so dream edits survive restarts.
+bash "$SCRIPT_DIR/seed-dream-audit.sh" || true
+
 REPO_DIR="/opt/hermees"
 REMOTE="git@github.com:BuildMy-house/hermees-diary.git"
 

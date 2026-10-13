@@ -152,6 +152,27 @@ channels. Keep `DISCORD_ALLOWED_USERS` restricted to you.
 The default CEO identity is in `hermes/SOUL.md`; it is planning-only until
 execution policies and credentials are deliberately enabled.
 
+### Dream-audit (memory consolidation loop)
+
+Hermes runs the `dream-audit` skill (`hermes/skills/dream-audit/`) from a Hermes
+cron job at 06:00 and 18:00 Bhutan Time (`0 0,12 * * *`, UTC; `timezone: UTC` in
+`hermes/config.yaml`). `scripts/seed-dream-audit.sh` (called from the entrypoint)
+syncs only that skill, seeds `$HERMES_HOME/dream-audit.mode` (`audit`) if missing,
+and creates the job once via `hermes cron create`. A pre-run script
+(`hermes/scripts/dream-audit-prepare.sh`) snapshots `MEMORY.md`/`USER.md` to
+`$HERMES_HOME/cron/output/dream-audit/<ts>/pre-run/` and harvests the diary into
+`$HERMES_HOME/DREAMS.md`. Durable notes live on the PVC in `$HERMES_HOME/memory/`.
+
+- **Audit-only by default:** it changes nothing and posts a proposed diff to
+  `#human-in-the-loop`. To go live the Board runs
+  `echo apply > /opt/data/dream-audit.mode` in the pod (reversible: `audit`).
+- **Rollback:** copy the files from the run's `pre-run/` snapshot back to
+  `$HERMES_HOME/memories/`.
+- **Monitor:** `hermes cron list`, `hermes cron incidents`, `hermes cron runs dream-audit`.
+- **Retrieval test:** plant a fact in a Board session, `hermes cron run dream-audit`
+  in audit mode, check the proposal cites it with a Source pointer.
+- Tests: `pytest tests/test_dream_audit_seed.py`.
+
 ## Policy defaults
 
 The starting daily allowance is 100 credits. Costs and the 70% net-revenue
