@@ -52,12 +52,21 @@ def run_when_idle(
     context_path: str,
     stop: threading.Event,
     sleep: Callable[[float], bool] | None = None,
+    is_idle: Callable[[], bool] = lambda: True,
 ) -> None:
-    """Background loop: wipe once per idle period (no active request context)."""
+    """Background loop: wipe once per idle period.
+
+    Idle means: no request for IDLE_SECONDS, the chat queue is empty with no
+    exchange running (`is_idle`), and no request context file exists.
+    """
     wait = sleep or stop.wait
     wiped_since_activity = False
     while not wait(CHECK_INTERVAL_SECONDS):
-        if seconds_idle() < IDLE_SECONDS or Path(context_path).exists():
+        if (
+            seconds_idle() < IDLE_SECONDS
+            or not is_idle()
+            or Path(context_path).exists()
+        ):
             wiped_since_activity = False
             continue
         if wiped_since_activity:

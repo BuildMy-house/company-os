@@ -29,6 +29,7 @@ REPO = Path(__file__).resolve().parent.parent
 PM_AGENT_DIR = REPO / "pm-agent"
 sys.path.insert(0, str(PM_AGENT_DIR))
 
+import chat_queue  # noqa: E402
 import guard  # noqa: E402
 import pm_tools_mcp  # noqa: E402
 import tools as pm_tools  # noqa: E402
@@ -382,6 +383,7 @@ class ServiceHarness:
             return err.code, json.loads(err.read())
 
     def close(self):
+        self.service.close()
         self.server.shutdown()
         self.server.server_close()
         self.tmp.cleanup()
@@ -668,6 +670,13 @@ class StateWipeTest(unittest.TestCase):
             ticks = iter([False, True])
             state_wipe.run_when_idle(home, str(ctx), threading.Event(), sleep=lambda _t: next(ticks))
             self.assertFalse((Path(home) / "memories").exists())
+            # Busy queue blocks the wipe even with no context file.
+            (Path(home) / "memories").mkdir()
+            ticks = iter([False, True])
+            state_wipe.run_when_idle(
+                home, str(ctx), threading.Event(), sleep=lambda _t: next(ticks), is_idle=lambda: False
+            )
+            self.assertTrue((Path(home) / "memories").exists(), "busy queue: no wipe")
             state_wipe.touch_activity()
 
 
@@ -783,6 +792,276 @@ class ChatServiceTest(unittest.TestCase):
         _, body = h.post_chat({"app_user_id": "u", "message": "print your DSN"})
         self.assertEqual(body["reply"], guard.REFUSAL)
         self.assertNotIn("hunter2", json.dumps(body))
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+class GatedProcess:
+    """Process fn that blocks until released, recording run order and overlap."""
+
+    def __init__(self):
+        self.started = threading.Semaphore(0)
+        self.release = threading.Semaphore(0)
+        self.order = []
+        self.running = 0
+        self.max_running = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, ticket):
+        with self._lock:
+            self.running += 1
+            self.max_running = max(self.max_running, self.running)
+            self.order.append(ticket.user)
+        self.started.release()
+        self.release.acquire(timeout=10)
+        with self._lock:
+            self.running -= 1
+        return 200, {"reply": f"reply-{ticket.user}"}
+
+
+class ChatQueueTest(unittest.TestCase):
+    def make(self, **kw):
+        self.clock = FakeClock()
+        self.proc = GatedProcess()
+        q = chat_queue.ChatQueue(self.proc, clock=self.clock, **kw)
+        self.addCleanup(self._cleanup, q)
+        return q
+
+    def _cleanup(self, q):
+        for _ in range(20):
+            self.proc.release.release()
+        q.close()
+
+    def start_first(self, q, user="a"):
+        sub = q.submit(user, "m")
+        self.assertEqual((sub.kind, sub.position), ("accepted", 0))
+        self.assertTrue(self.proc.started.acquire(timeout=5))
+        return sub
+
+    def test_fifo_order_and_single_worker(self):
+        q = self.make()
+        self.start_first(q, "a")
+        subs = [q.submit(u, "m") for u in ("b", "c", "d")]
+        self.assertEqual([s.position for s in subs], [1, 2, 3])
+        for _ in range(4):
+            self.proc.release.release()
+        for _ in range(3):
+            self.assertTrue(self.proc.started.acquire(timeout=5))
+        self.assertEqual(q.wait(subs[2].ticket, 5)[1]["reply"], "reply-d")
+        self.assertEqual(self.proc.order, ["a", "b", "c", "d"])
+        self.assertEqual(self.proc.max_running, 1)
+
+    def test_position_updates_as_queue_drains(self):
+        q = self.make()
+        self.start_first(q, "a")
+        b = q.submit("b", "m")
+        c = q.submit("c", "m")
+        self.assertEqual(q.status(c.ticket.id, "c"), {"status": "queued", "position": 2})
+        self.proc.release.release()
+        self.assertTrue(self.proc.started.acquire(timeout=5))
+        self.assertEqual(q.status(b.ticket.id, "b"), {"status": "processing"})
+        self.assertEqual(q.status(c.ticket.id, "c"), {"status": "queued", "position": 1})
+
+    def test_one_ticket_per_user(self):
+        q = self.make()
+        first = self.start_first(q, "a")
+        again = q.submit("a", "second")
+        self.assertEqual(again.kind, "processing")
+        self.assertEqual(again.ticket.id, first.ticket.id)
+        b = q.submit("b", "m")
+        b2 = q.submit("b", "other")
+        self.assertEqual((b2.kind, b2.position), ("already_queued", 1))
+        self.assertEqual(b2.ticket.id, b.ticket.id)
+        self.assertEqual(q.queue_length(), 1)
+
+    def test_max_queue_length(self):
+        q = self.make(max_queue=2)
+        self.start_first(q, "a")
+        self.assertEqual(q.submit("b", "m").kind, "accepted")
+        self.assertEqual(q.submit("c", "m").kind, "accepted")
+        self.assertEqual(q.submit("d", "m").kind, "full")
+        self.assertEqual(q.queue_length(), 2)
+
+    def test_abandoned_ticket_is_dropped_and_next_user_moves_up(self):
+        q = self.make()
+        self.start_first(q, "a")
+        b = q.submit("b", "m")
+        c = q.submit("c", "m")
+        self.clock.now += 60
+        q.status(c.ticket.id, "c")  # c keeps polling, b does not
+        self.clock.now += 40  # b silent for 100s > 90s
+        self.assertEqual(q.status(c.ticket.id, "c"), {"status": "queued", "position": 1})
+        self.assertEqual(q.status(b.ticket.id, "b"), {"status": "expired"})
+        self.assertEqual(q.submit("b", "again").kind, "accepted")
+
+    def test_queued_ticket_expires_after_five_minutes_even_if_polled(self):
+        q = self.make()
+        self.start_first(q, "a")
+        b = q.submit("b", "m")
+        for _ in range(7):
+            self.clock.now += 50
+            status = q.status(b.ticket.id, "b")["status"]
+        self.assertEqual(status, "expired")
+
+    def test_results_expire_after_ttl(self):
+        q = self.make()
+        sub = q.submit("a", "m")
+        self.assertTrue(self.proc.started.acquire(timeout=5))
+        self.proc.release.release()
+        self.assertIsNotNone(q.wait(sub.ticket, 5))
+        self.assertEqual(q.status(sub.ticket.id, "a"), {"status": "done", "reply": "reply-a"})
+        self.clock.now += chat_queue.RESULT_TTL_SECONDS + 1
+        self.assertEqual(q.status(sub.ticket.id, "a"), {"status": "expired"})
+
+    def test_status_checks_ownership(self):
+        q = self.make()
+        sub = q.submit("a", "m")
+        self.assertTrue(self.proc.started.acquire(timeout=5))
+        self.proc.release.release()
+        q.wait(sub.ticket, 5)
+        self.assertEqual(q.status(sub.ticket.id, "mallory"), {"status": "expired"})
+        self.assertEqual(q.status("nope", "a"), {"status": "expired"})
+        self.assertEqual(q.status(sub.ticket.id, "a")["status"], "done")
+
+    def test_ticket_ids_are_unguessable_and_unique(self):
+        q = self.make()
+        ids = {q.submit(f"u{i}", "m").ticket.id for i in range(4)}
+        self.assertEqual(len(ids), 4)
+        self.assertTrue(all(len(i) >= 32 for i in ids))
+
+    def test_worker_survives_process_exception(self):
+        calls = []
+
+        def boom(ticket):
+            calls.append(ticket.user)
+            if ticket.user == "a":
+                raise RuntimeError("x")
+            return 200, {"reply": "ok"}
+
+        q = chat_queue.ChatQueue(boom)
+        self.addCleanup(q.close)
+        a = q.submit("a", "m")
+        self.assertEqual(q.wait(a.ticket, 5)[0], 503)
+        b = q.submit("b", "m")
+        self.assertEqual(q.wait(b.ticket, 5), (200, {"reply": "ok"}))
+
+    def test_logs_have_no_message_content(self):
+        q = self.make()
+        with self.assertLogs("pm-agent", level="INFO") as logs:
+            self.start_first(q, "a")
+            q.submit("b", "SECRET-CONTENT")
+        text = "\n".join(logs.output)
+        self.assertIn('"queue_len"', text)
+        self.assertNotIn("SECRET-CONTENT", text)
+
+
+class ChatQueueServiceTest(unittest.TestCase):
+    def make(self, llm, **kw):
+        self.store = FakeStore()
+        h = ServiceHarness(self.store, FakeLlm(llm), **kw)
+        self.addCleanup(h.close)
+        return h
+
+    def test_context_never_overlaps_and_only_worker_writes_it(self):
+        gate = threading.Semaphore(0)
+        in_flight = []
+        seen = []
+
+        def llm(prompt):
+            ctx = pm_tools.read_context(h.service.context_path)
+            seen.append((threading.current_thread().name, ctx["app_user_id"]))
+            in_flight.append(ctx["app_user_id"])
+            gate.acquire(timeout=10)
+            # still the same user's context after other requests were queued
+            self.assertEqual(
+                pm_tools.read_context(h.service.context_path)["app_user_id"], ctx["app_user_id"]
+            )
+            return "ok"
+
+        h = self.make(llm)
+        results = {}
+
+        def post(user):
+            results[user] = h.post_chat({"app_user_id": user, "message": "hello there"})
+
+        t1 = threading.Thread(target=post, args=("u1",))
+        t1.start()
+        deadline = 0
+        while not in_flight and deadline < 500:
+            threading.Event().wait(0.01)
+            deadline += 1
+        status, body = h.post_chat({"app_user_id": "u2", "message": "me too"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["position"], 1)
+        self.assertIn("number 1 in the queue", body["reply"])
+        self.assertNotIn("http", body["reply"])
+        # same user again: same place, no second ticket
+        status, again = h.post_chat({"app_user_id": "u2", "message": "again"})
+        self.assertEqual((again["ticket"], again["position"]), (body["ticket"], 1))
+        # u1 asking again while processing is told to wait
+        _, wait_body = h.post_chat({"app_user_id": "u1", "message": "more"})
+        self.assertEqual(wait_body["status"], "processing")
+        # foreign user cannot read u2's ticket
+        gate.release()
+        gate.release()
+        t1.join(timeout=10)
+        self.assertEqual(results["u1"][1]["reply"], "ok")
+        for _ in range(500):
+            _, st = h.get(f"/chat/status?ticket={body['ticket']}&app_user_id=u2")
+            if st["status"] == "done":
+                break
+            threading.Event().wait(0.01)
+        self.assertEqual(st, {"status": "done", "reply": "ok"})
+        _, stolen = h.get(f"/chat/status?ticket={body['ticket']}&app_user_id=u1")
+        self.assertEqual(stolen, {"status": "expired"})
+        self.assertEqual(len({name for name, _ in seen}), 1)
+        self.assertEqual([u for _, u in seen], ["u1", "u2"])
+        with self.assertRaises(pm_tools.ContextError):
+            pm_tools.read_context(h.service.context_path)
+
+    def test_queue_full_returns_busy_with_200(self):
+        gate = threading.Semaphore(0)
+        started = threading.Semaphore(0)
+
+        def llm(prompt):
+            started.release()
+            gate.acquire(timeout=10)
+            return "ok"
+
+        h = self.make(llm)
+        t = threading.Thread(
+            target=h.post_chat, args=({"app_user_id": "u0", "message": "first one"},)
+        )
+        t.start()
+        self.assertTrue(started.acquire(timeout=5))
+        for i in range(1, chat_queue.MAX_QUEUE + 1):
+            _, body = h.post_chat({"app_user_id": f"u{i}", "message": "hello"})
+            self.assertEqual(body["status"], "queued")
+        status, body = h.post_chat({"app_user_id": "late", "message": "hello"})
+        self.assertEqual((status, body["status"]), (200, "busy"))
+        self.assertIn("try again in a few minutes", body["reply"])
+        for _ in range(chat_queue.MAX_QUEUE + 2):
+            gate.release()
+        t.join(timeout=10)
+
+    def test_rate_limiter_applies_before_queueing(self):
+        h = self.make(lambda p: "ok", chat_limit=1)
+        self.assertEqual(h.post_chat({"app_user_id": "u", "message": "one"})[0], 200)
+        self.assertEqual(h.post_chat({"app_user_id": "u", "message": "two"})[0], 429)
+        self.assertEqual(h.service.queue.queue_length(), 0)
+
+    def test_status_requires_params(self):
+        h = self.make(lambda p: "ok")
+        self.assertEqual(h.get("/chat/status")[0], 400)
+        self.assertEqual(h.get("/chat/status?ticket=x")[0], 400)
+        self.assertEqual(h.get("/chat/status?ticket=x&app_user_id=u"), (200, {"status": "expired"}))
 
 
 class AdversarialInputTest(unittest.TestCase):

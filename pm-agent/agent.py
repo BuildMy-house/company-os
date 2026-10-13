@@ -28,11 +28,13 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+import chat_queue
 import guard
 import hive_presence
 import state_wipe
@@ -44,9 +46,12 @@ DEFAULT_PORT = 4200
 DEFAULT_HIVE_URL = "http://hive-coordinator:4100"
 DEFAULT_HERMES_URL = "http://127.0.0.1:8642"
 CHATS_PER_USER_PER_HOUR = 20
-# Must stay below the app proxy's 60s (app/server/src/chat.ts PM_AGENT_TIMEOUT_MS)
-# so the front door answers (reply or fallback) before the app gives up.
+# One LLM call; must stay below the app proxy's 60s (app/server/src/chat.ts
+# PM_AGENT_TIMEOUT_MS) together with INLINE_WAIT_SECONDS.
 LLM_TIMEOUT_SECONDS = 50
+# How long POST /chat waits inline for an idle-agent exchange before handing
+# back a ticket to poll instead. Stays under the app proxy's 60s.
+INLINE_WAIT_SECONDS = LLM_TIMEOUT_SECONDS + 5
 OUT_OF_SCOPE_SENTINEL = "OUT_OF_SCOPE"
 SECRET_ENV_NAMES = ("PM_DATABASE_URL", "PM_AGENT_LLM_API_KEY", "API_SERVER_KEY")
 
@@ -91,6 +96,28 @@ def finalize_reply(raw: str, secrets_to_hide: tuple[str, ...] = ()) -> str:
     return reply or guard.REFUSAL
 
 
+BUSY_REPLY = (
+    "Our support agent is very busy right now. "
+    "Please try again in a few minutes."
+)
+WAIT_FOR_PREVIOUS_REPLY = (
+    "I'm still working on your previous message. Please wait for that answer first."
+)
+
+
+def queued_body(ticket: str, position: int) -> dict[str, Any]:
+    return {
+        "status": "queued",
+        "ticket": ticket,
+        "position": position,
+        "reply": (
+            "Our support agent is busy helping another user. "
+            f"You're number {position} in the queue; "
+            "I'll answer as soon as it's your turn."
+        ),
+    }
+
+
 class ChatService:
     """Everything behind POST /chat except HTTP framing."""
 
@@ -101,6 +128,7 @@ class ChatService:
         context_path: str = pm_tools.DEFAULT_CONTEXT_PATH,
         chat_limiter: guard.RateLimiter | None = None,
         secrets_to_hide: tuple[str, ...] = (),
+        max_queue: int = chat_queue.MAX_QUEUE,
     ) -> None:
         self.store = store
         self.llm = llm
@@ -110,8 +138,13 @@ class ChatService:
         )
         self.secrets_to_hide = secrets_to_hide
         # The tools read the active user from a context file, so exactly one
-        # exchange may be in flight at a time.
-        self._lock = threading.Lock()
+        # exchange may be in flight at a time: requests become tickets and the
+        # queue's single worker thread is the only caller of _run (and so the
+        # only writer of the context file).
+        self.queue = chat_queue.ChatQueue(self._run, max_queue=max_queue)
+
+    def close(self) -> None:
+        self.queue.close()
 
     def _history(self, conversation_id: str, app_user_id: str) -> list[tuple[str, str]]:
         """This user's own recent turns (oldest first), refusals/errors skipped.
@@ -159,50 +192,80 @@ class ChatService:
         if not clean:
             return 400, {"error": "message is required"}
 
-        if not self._lock.acquire(timeout=LLM_TIMEOUT_SECONDS):
-            return 503, {"error": "busy", "reply": guard.UNAVAILABLE_REPLY}
+        sub = self.queue.submit(app_user_id, clean)
+        if sub.kind == "full":
+            return 200, {"status": "busy", "reply": BUSY_REPLY}
+        if sub.kind == "processing":
+            return 200, {
+                "status": "processing",
+                "ticket": sub.ticket.id,
+                "reply": WAIT_FOR_PREVIOUS_REPLY,
+            }
+        if sub.kind == "already_queued":
+            return 200, queued_body(sub.ticket.id, sub.position)
+        if sub.position > 0:
+            return 200, queued_body(sub.ticket.id, sub.position)
+        # Agent was idle: run as before, answering inline if it finishes in time.
+        result = self.queue.wait(sub.ticket, INLINE_WAIT_SECONDS)
+        if result is None:
+            return 200, {"status": "processing", "ticket": sub.ticket.id}
+        return result
+
+    def status(self, ticket: str, app_user_id: str) -> tuple[int, dict[str, Any]]:
+        if not ticket or not app_user_id or len(app_user_id) > guard.MAX_USER_ID_CHARS:
+            return 400, {"error": "ticket and app_user_id are required"}
+        return 200, self.queue.status(ticket, app_user_id)
+
+    def _run(self, ticket: chat_queue.Ticket) -> tuple[int, dict[str, Any]]:
+        """Run one exchange. Called only from the queue's worker thread."""
+        app_user_id, clean = ticket.user, ticket.message
+        conversation_id = self.store.get_or_create_conversation(app_user_id)
+        # History is read inside the worker-run exchange, before this turn is
+        # recorded, scoped to this user's own current conversation.
+        history = self._history(conversation_id, app_user_id)
+        self.store.record_message(conversation_id, app_user_id, "user", clean)
+        pm_tools.write_context(self.context_path, app_user_id, conversation_id, clean)
         try:
-            conversation_id = self.store.get_or_create_conversation(app_user_id)
-            history = self._history(conversation_id, app_user_id)
-            self.store.record_message(conversation_id, app_user_id, "user", clean)
-            pm_tools.write_context(
-                self.context_path, app_user_id, conversation_id, clean
+            raw = self.llm(guard.wrap_untrusted(clean, history))
+        except (OSError, ValueError, KeyError, IndexError, urllib.error.URLError):
+            log.exception("hermes runtime call failed")
+            if looks_like_model_unavailable(sys.exc_info()[1] or Exception()):
+                request_re_resolve()
+            self.store.record_message(
+                conversation_id, app_user_id, "assistant", "[runtime error]"
             )
-            try:
-                raw = self.llm(guard.wrap_untrusted(clean, history))
-            except (OSError, ValueError, KeyError, IndexError, urllib.error.URLError):
-                log.exception("hermes runtime call failed")
-                if looks_like_model_unavailable(sys.exc_info()[1] or Exception()):
-                    request_re_resolve()
-                self.store.record_message(
-                    conversation_id, app_user_id, "assistant", "[runtime error]"
-                )
-                return 503, {"error": "agent unavailable", "reply": guard.UNAVAILABLE_REPLY}
-            finally:
-                pm_tools.clear_context(self.context_path)
-            reply = finalize_reply(raw, self.secrets_to_hide)
-            self.store.record_message(conversation_id, app_user_id, "assistant", reply)
-            log.info(
-                json.dumps(
-                    {
-                        "event": "chat",
-                        "app_user_id": app_user_id,
-                        "message_chars": len(clean),
-                        "reply_chars": len(reply),
-                        "refused": reply == guard.REFUSAL,
-                    }
-                )
-            )
-            return 200, {"reply": reply}
+            return 503, {"error": "agent unavailable", "reply": guard.UNAVAILABLE_REPLY}
         finally:
-            self._lock.release()
+            pm_tools.clear_context(self.context_path)
+        reply = finalize_reply(raw, self.secrets_to_hide)
+        self.store.record_message(conversation_id, app_user_id, "assistant", reply)
+        log.info(
+            json.dumps(
+                {
+                    "event": "chat",
+                    "app_user_id": app_user_id,
+                    "message_chars": len(clean),
+                    "reply_chars": len(reply),
+                    "refused": reply == guard.REFUSAL,
+                }
+            )
+        )
+        return 200, {"reply": reply}
 
 
 def make_handler(service: ChatService) -> type[BaseHTTPRequestHandler]:
     class ChatHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            if self.path.split("?")[0] == "/healthz":
+            parsed = urllib.parse.urlsplit(self.path)
+            if parsed.path == "/healthz":
                 self._send(200, {"status": "ok"})
+            elif parsed.path == "/chat/status":
+                query = urllib.parse.parse_qs(parsed.query)
+                status, body = service.status(
+                    (query.get("ticket") or [""])[0],
+                    (query.get("app_user_id") or [""])[0],
+                )
+                self._send(status, body)
             else:
                 self._send(404, {"error": "not found"})
 
@@ -310,6 +373,7 @@ def main() -> None:
     threading.Thread(
         target=state_wipe.run_when_idle,
         args=(os.environ.get("HERMES_HOME", "/home/pmagent/.hermes"), service.context_path, stop),
+        kwargs={"is_idle": service.queue.is_idle},
         name="state-wipe",
         daemon=True,
     ).start()
@@ -324,6 +388,7 @@ def main() -> None:
     finally:
         stop.set()
         server.server_close()
+        service.close()
         store.close()
 
 
