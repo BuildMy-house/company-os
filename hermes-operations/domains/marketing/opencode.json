@@ -1,7 +1,12 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "opencode/mimo-v2.5-free",
+  "compaction": {"auto": true, "prune": true, "reserved": 20000},
   "provider": {
+    "opencode": {"models": {
+      "mimo-v2.6-flash-free": {"limit": {"context": 200000, "input": 120000, "output": 32000}},
+      "mimo-v2.5-free": {"limit": {"context": 200000, "input": 120000, "output": 32000}}
+    }},
     "tokenrouter": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "TokenRouter",
@@ -10,8 +15,8 @@
         "apiKey": "{env:TOKENROUTER_API_KEY}"
       },
       "models": {
-        "mimo-v2.5-free": {"name": "MiMo-V2.5 Free"},
-        "z-ai/glm-5.3-flash": {"name": "GLM 5.3 Flash"}
+        "mimo-v2.5-free": {"name": "MiMo-V2.5 Free", "limit": {"context": 200000, "input": 120000, "output": 32000}},
+        "z-ai/glm-5.3-flash": {"name": "GLM 5.3 Flash", "limit": {"context": 1000000, "input": 120000, "output": 131072}}
       }
     }
   },
