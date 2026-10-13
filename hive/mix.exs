@@ -7,9 +7,13 @@ defmodule Hive.MixProject do
       version: "0.1.0",
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      aliases: aliases()
     ]
   end
+
+  # The guard must run before the app boots: Hive.Work connects to Postgres on start.
+  defp aliases, do: [test: ["hive.test_guard", "test"]]
 
   def application do
     [extra_applications: [:logger, :inets, :ssl], mod: {Hive.Application, []}]

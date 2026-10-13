@@ -106,3 +106,35 @@ mix deps.get
 mix test
 mix run --no-halt
 ```
+
+## Test database safety
+
+`mix test` must never touch the production Postgres. On 2026-10-12 a test run
+with the prod `COMPANY_DATABASE_URL` in its environment wrote junk work items,
+events and agents into the prod `company` schema and starved real tasks.
+
+`mix test` is aliased to run `mix hive.test_guard` first (before the app boots,
+since `Hive.Work` connects on startup). The guard (`Hive.TestDatabaseGuard`)
+checks `COMPANY_DATABASE_URL` and `DATABASE_URL` and aborts with a clear error
+when a URL:
+
+- points at the prod Postgres host (`postgres`, `postgres.company-ops[...]`),
+- names the prod database `homely_company`, or any database not ending in `_test`,
+- selects the `company` schema via `search_path`/`schema` URL parameters.
+
+With neither variable set, tests use the in-memory store, which is always safe.
+To exercise the Postgres path, use a throwaway database:
+
+```sh
+docker run --rm -d -p 5433:5432 -e POSTGRES_USER=hive -e POSTGRES_PASSWORD=hive \
+  -e POSTGRES_DB=hive_test postgres:16-alpine
+export COMPANY_DATABASE_URL=postgresql://hive:hive@localhost:5433/hive_test
+psql "$COMPANY_DATABASE_URL" -c 'CREATE SCHEMA IF NOT EXISTS company'
+mix test
+```
+
+
+Note: the SQL in `Hive.Work` hardcodes the `company` schema name, so isolation
+comes from the dedicated `*_test` *database*, not a renamed schema. CI should
+likewise run `mix test` against a disposable Postgres service container whose
+database name ends in `_test`.
