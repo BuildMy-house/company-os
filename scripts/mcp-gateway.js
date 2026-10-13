@@ -35,6 +35,58 @@ export function redact(text) {
   return REDACTIONS.reduce((out, pattern) => out.replace(pattern, "[REDACTED]"), text);
 }
 
+// Default-deny argument limits (argLimits.<tool>.<field>), evaluated before a tool
+// call reaches its child. Violation strings are short and never echo the offending
+// value — they land in audit logs (error_class) and go back to the caller.
+//   _onlyArgs: tool-level key (not a field); any argument key outside the list is a violation
+//   required: field must be present (not undefined/null)
+//   type: "string": present value must be a JS string (numbers/arrays/objects rejected)
+//   max: numeric ceiling (backward compatible; limit.default fills in when absent)
+//   pattern: compiled as written (policies use explicit ^...$ anchors). Matched against
+//     the raw string value — a non-string value is a violation, and a match that does
+//     not consume the whole input is too, so "x\n" cannot slip an anchored pattern via
+//     the pre-final-newline meaning of `$`. Absent values skip the check (unchanged).
+//   in / notIn: exact string allowlist / blocklist
+//   mapKeyPattern / mapValuePattern: for object-valued fields, every key / every string
+//     value must match; a non-object (or array) value is a violation.
+export function violatesLimits(clientServer, tool, args) {
+  const limits = clientServer.argLimits?.[tool] || {};
+  const entries = Object.entries(limits);
+  if (!entries.length) return null;
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return "arguments must be an object";
+  for (const [field, limit] of entries) {
+    if (field === "_onlyArgs") continue;
+    const value = args[field];
+    const present = value !== undefined && value !== null;
+    if (limit.required && !present) return `${field} is required`;
+    if (limit.type === "string" && present && typeof value !== "string") return `${field} must be a string`;
+    if (limit.max !== undefined && Number(value ?? limit.default ?? 0) > limit.max) return `${field} exceeds ${limit.max}`;
+    if (limit.pattern && present) {
+      const match = typeof value === "string" ? new RegExp(limit.pattern).exec(value) : null;
+      if (!match || match[0].length !== value.length) return `${field} does not match required pattern`;
+    }
+    if (limit.in && present && !limit.in.includes(value)) return `${field} is not in the allowed list`;
+    if (limit.notIn && present && limit.notIn.includes(value)) return `${field} is in notIn list`;
+    if ((limit.mapKeyPattern || limit.mapValuePattern) && present) {
+      if (typeof value !== "object" || Array.isArray(value)) return `${field} must be an object`;
+      for (const [key, entry] of Object.entries(value)) {
+        if (limit.mapKeyPattern && !new RegExp(limit.mapKeyPattern).test(key)) return `${field} has a key not matching mapKeyPattern`;
+        if (limit.mapValuePattern) {
+          const match = typeof entry === "string" ? new RegExp(limit.mapValuePattern).exec(entry) : null;
+          if (!match || match[0].length !== entry.length) return `${field} has a value not matching mapValuePattern`;
+        }
+      }
+    }
+  }
+  const only = limits._onlyArgs;
+  if (Array.isArray(only)) {
+    for (const key of Object.keys(args)) {
+      if (!only.includes(key)) return `argument ${key} is not permitted`;
+    }
+  }
+  return null;
+}
+
 export function loadPolicy(file) {
   const policy = JSON.parse(readFileSync(file, "utf8"));
   if (!policy.servers || !policy.clients) throw new Error("policy needs servers and clients");
@@ -196,15 +248,6 @@ export function createGateway({ policy, env = process.env, fetchImpl = fetch } =
 
   const rpcError = (id, code, message) => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
   const argsHash = (args) => createHash("sha256").update(JSON.stringify(args ?? {})).digest("hex");
-
-  function violatesLimits(clientServer, tool, args) {
-    for (const [field, limit] of Object.entries(clientServer.argLimits?.[tool] || {})) {
-      const value = args?.[field];
-      if (limit.max !== undefined && Number(value ?? limit.default ?? 0) > limit.max) return `${field} exceeds ${limit.max}`;
-      if (limit.pattern && value !== undefined && !new RegExp(limit.pattern).test(String(value))) return `${field} does not match required pattern`;
-    }
-    return null;
-  }
 
   async function handleRpc(clientId, serverName, message) {
     const clientServer = policy.clients[clientId].servers[serverName];
