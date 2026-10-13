@@ -1,0 +1,122 @@
+# Hindsight memory server for Hermes (plugin mode local_external).
+# Separate Deployment because the hermes-gateway pod limit is 2Gi and the
+# server loads local embedding + reranker models. Reached in-cluster only at
+# http://hindsight:8888 (ClusterIP, no Ingress).
+#
+# LLM extraction goes to Nous (OpenAI-compatible). Nous requires
+# extra_body.tags on every request; HINDSIGHT_API_LLM_EXTRA_BODY merges them in.
+# No credentials here: keys come from company-ops-secrets (Infisical sync):
+#   NOUS_API_KEY       (/hermes or /)  - already used by Hermes
+#   HINDSIGHT_API_KEY  (/hermes)       - NEW: shared bearer token, plugin <-> server
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hindsight-data
+  namespace: company-ops
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hindsight
+  namespace: company-ops
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: hindsight
+  template:
+    metadata:
+      labels:
+        app: hindsight
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: hindsight
+          image: ghcr.io/vectorize-io/hindsight-api:0.10.3@sha256:f80f304db313cbc8775acd601fda7d094f5854ebf9bc252d8134eb9276d56b40
+          ports:
+            - containerPort: 8888
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          env:
+            - name: HINDSIGHT_API_LLM_PROVIDER
+              value: openai
+            - name: HINDSIGHT_API_LLM_BASE_URL
+              value: https://inference-api.nousresearch.com/v1
+            - name: HINDSIGHT_API_LLM_MODEL
+              value: meituan/longcat-2.5-preview:free
+            - name: HINDSIGHT_API_LLM_EXTRA_BODY
+              value: '{"tags":["product=hermes-agent","user=hermes-agent"]}'
+            - name: HINDSIGHT_API_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: company-ops-secrets
+                  key: NOUS_API_KEY
+            - name: HINDSIGHT_API_TENANT_EXTENSION
+              value: hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension
+            - name: HINDSIGHT_API_TENANT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: company-ops-secrets
+                  key: HINDSIGHT_API_KEY
+            - name: HINDSIGHT_API_RETAIN_EXTRACTION_MODE
+              value: verbatim
+            - name: HINDSIGHT_API_ENABLE_OBSERVATIONS
+              value: "false"
+          volumeMounts:
+            - name: data
+              mountPath: /home/hindsight/.pg0
+            - name: shm
+              mountPath: /dev/shm
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8888
+            periodSeconds: 10
+            failureThreshold: 60   # first start downloads embedding models
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8888
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8888
+            periodSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: hindsight-data
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hindsight
+  namespace: company-ops
+spec:
+  selector:
+    app: hindsight
+  ports:
+    - port: 8888
+      targetPort: 8888
