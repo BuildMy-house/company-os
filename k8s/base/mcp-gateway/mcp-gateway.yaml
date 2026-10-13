@@ -332,7 +332,7 @@ spec:
       containers:
         - name: mcp-gateway
           # Pinned by digest after the BuildKit build (see docs/MCP-GATEWAY.md).
-          image: localhost:30500/company-os-mcp-gateway@sha256:85dff6e558a111cb87623d46782870dca1a159dea42f766993bcea8cce5158f2
+          image: localhost:30500/company-os-mcp-gateway:feba4c9@sha256:36cd4c70b1f32ba060823cfb9ec7bb3d6afa119ff809ef1f60196fa06dd805bf
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
