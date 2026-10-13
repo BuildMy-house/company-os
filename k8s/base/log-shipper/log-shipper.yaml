@@ -1,0 +1,158 @@
+# log-shipper: one Vector pod per node tails every container's stdout/stderr
+# (all namespaces) and ships it to Axiom, tagged with namespace/pod/container/
+# image/node. Applications need no Axiom credentials and no logging code; only
+# this pod holds the ingest-only token (log-shipper-secrets). Structured events
+# apps already send themselves to the bmh-company dataset are unchanged.
+#
+# Raw stdout goes to a separate dataset (AXIOM_LOG_DATASET) so it does not drown
+# the structured events in bmh-company. Known secret shapes are redacted before
+# shipping (see the redact transform); redaction is best effort, not a guarantee.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: log-shipper
+  namespace: company-ops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: log-shipper
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, nodes, pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: log-shipper
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: log-shipper
+subjects:
+  - kind: ServiceAccount
+    name: log-shipper
+    namespace: company-ops
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: log-shipper-config
+  namespace: company-ops
+data:
+  vector.yaml: |
+    data_dir: /vector-data
+    api:
+      enabled: false
+    sources:
+      k8s:
+        type: kubernetes_logs
+        # Do not ship our own output back to ourselves.
+        exclude_paths_glob_patterns:
+          - "/var/log/pods/company-ops_log-shipper-*/**"
+    transforms:
+      redact:
+        type: remap
+        inputs: [k8s]
+        source: |
+          msg = string(.message) ?? ""
+          msg = replace(msg, r'(?i)(bearer|token|authorization)(["\x27:= \s]+)[A-Za-z0-9._~+/=-]{12,}', "$$1$$2[REDACTED]")
+          msg = replace(msg, r'(?i)(api[_-]?key|secret|password|passwd|private[_-]?key)(["\x27:= \s]+)[^\s",}]{6,}', "$$1$$2[REDACTED]")
+          msg = replace(msg, r'(xaat|xapt|ghp|ghs|github_pat|sk|xox[abp])[-_][A-Za-z0-9_-]{16,}', "[REDACTED]")
+          msg = replace(msg, r'postgres(ql)?://[^\s"]+', "postgres://[REDACTED]")
+          .message = msg
+          .service = "container-logs"
+          .environment = get_env_var("DEPLOYMENT_ENVIRONMENT") ?? "local-k8s"
+          .namespace = .kubernetes.pod_namespace
+          .pod = .kubernetes.pod_name
+          .container = .kubernetes.container_name
+          .app = .kubernetes.pod_labels.app
+          .image = .kubernetes.container_image
+          .node = .kubernetes.pod_node_name
+          del(.kubernetes)
+          del(.file)
+    sinks:
+      axiom:
+        type: axiom
+        inputs: [redact]
+        token: "${AXIOM_LOG_TOKEN}"
+        dataset: "${AXIOM_LOG_DATASET}"
+        url: "https://eu-central-1.aws.edge.axiom.co"
+        buffer:
+          type: disk
+          max_size: 1073741824
+          when_full: drop_newest
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: log-shipper
+  namespace: company-ops
+spec:
+  selector:
+    matchLabels:
+      app: log-shipper
+  template:
+    metadata:
+      labels:
+        app: log-shipper
+    spec:
+      serviceAccountName: log-shipper
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: vector
+          image: timberio/vector:0.43.1-alpine
+          args: ["--config", "/etc/vector/vector.yaml"]
+          env:
+            - name: VECTOR_SELF_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: AXIOM_LOG_DATASET
+              value: bmh-container-logs
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: local-k8s
+            - name: AXIOM_LOG_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: log-shipper-secrets
+                  key: AXIOM_LOG_TOKEN
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/vector
+              readOnly: true
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: data
+              mountPath: /vector-data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: log-shipper-config
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+        - name: data
+          hostPath:
+            path: /var/lib/log-shipper
+            type: DirectoryOrCreate
+        - name: tmp
+          emptyDir: {}

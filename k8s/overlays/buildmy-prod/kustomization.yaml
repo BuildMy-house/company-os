@@ -13,3 +13,4 @@ resources:
   - ../../base/pm-agent
   - ../../base/backups
   - ../../base/dns-healthcheck
+  - ../../base/log-shipper
