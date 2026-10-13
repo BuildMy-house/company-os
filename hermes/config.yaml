@@ -128,13 +128,28 @@ display:
   tool_progress: log
   interim_assistant_messages: false
 
+# Context compression. `threshold` (ratio of the active model's window) is left
+# at its default; `threshold_tokens` is Hermes's absolute-token cap and the
+# trigger is the LOWER of the two (hermes_cli/config.py: "takes lower of ratio
+# vs absolute"; agent/agent_init.py clamps it to the window). Primary model
+# meituan/longcat-2.0:free has a ~1.05M window and the glm-5.3-flash fallback
+# 1M, so the default 50% ratio would only compact at ~500k tokens; cap it at
+# 100k so long CEO sessions compact long before context rot sets in. The
+# summariser is auxiliary.compression (glm-5.3-flash, 1M window), so 100k fits.
+compression:
+  enabled: true
+  threshold_tokens: 100000
+
 memory:
   memory_enabled: true
   user_profile_enabled: true
   write_approval: false
   memory_char_limit: 2200
   user_char_limit: 1375
-  nudge_interval: 10
+  # Nudge every N user turns to review the conversation for durable facts
+  # worth saving with the `memory` tool (0 disables). Was 10; the live
+  # MEMORY.md/USER.md stayed ~180 bytes (of 2200/1375 chars), i.e. unused.
+  nudge_interval: 5
   provider: ""
 
 mcp_servers:
