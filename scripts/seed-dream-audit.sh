@@ -13,9 +13,11 @@ export HERMES_HOME="$H"
 SRC="${DREAM_SRC:-/opt/company-ops/hermes}"
 DREAM_CRON="${DREAM_AUDIT_CRON:-0 0,12 * * *}"
 DREAM_DELIVER="${DREAM_AUDIT_DELIVER:-discord:#human-in-the-loop}"
-# Free TokenRouter model, same provider name as hermes/config.yaml auxiliary slots.
-DREAM_PROVIDER="${DREAM_AUDIT_PROVIDER:-custom:tokenrouter}"
-DREAM_MODEL="${DREAM_AUDIT_MODEL:-z-ai/glm-5.3-flash}"
+# Same Nous provider and model as hermes/config.yaml `model:` (baked default; the
+# entrypoint may render a different live-probed free model there at boot, in
+# which case override with DREAM_AUDIT_MODEL).
+DREAM_PROVIDER="${DREAM_AUDIT_PROVIDER:-custom:nous}"
+DREAM_MODEL="${DREAM_AUDIT_MODEL:-meituan/longcat-2.5-preview:free}"
 
 # 1. Skill: copy-per-skill, overwrite ONLY dream-audit; never touch other skills.
 if [ -d "$SRC/skills/dream-audit" ]; then
