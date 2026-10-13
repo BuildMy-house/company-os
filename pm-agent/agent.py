@@ -43,7 +43,9 @@ DEFAULT_PORT = 4200
 DEFAULT_HIVE_URL = "http://hive-coordinator:4100"
 DEFAULT_HERMES_URL = "http://127.0.0.1:8642"
 CHATS_PER_USER_PER_HOUR = 20
-LLM_TIMEOUT_SECONDS = 90
+# Must stay below the app proxy's 60s (app/server/src/chat.ts PM_AGENT_TIMEOUT_MS)
+# so the front door answers (reply or fallback) before the app gives up.
+LLM_TIMEOUT_SECONDS = 50
 OUT_OF_SCOPE_SENTINEL = "OUT_OF_SCOPE"
 SECRET_ENV_NAMES = ("PM_DATABASE_URL", "PM_AGENT_LLM_API_KEY", "API_SERVER_KEY")
 
