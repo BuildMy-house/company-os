@@ -225,3 +225,15 @@ def test_hook_swallows_exceptions(wired, monkeypatch):
     mod.on_api_request_error(**ev())  # must not raise
     assert calls["steward"] == []
     assert mod._FAILURES.get("on_api_request_error") == 1
+
+
+def test_pick_replacement_uses_pricing_not_suffix(mod):
+    models = [
+        # retired-but-listed: suffix says free, price says paid
+        {"id": "x/old:free", "context_length": 9999999, "description": "agentic coding",
+         "pricing": {"prompt": "0.5", "completion": "1"}},
+        # zero-priced without the suffix
+        {"id": "inclusionai/ling-3.1-flash", "context_length": 131072, "description": "assistant",
+         "pricing": {"prompt": "0", "completion": "0"}},
+    ]
+    assert mod._pick_replacement(models, "gone")[0] == "inclusionai/ling-3.1-flash"

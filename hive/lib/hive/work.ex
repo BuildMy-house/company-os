@@ -5,6 +5,7 @@ defmodule Hive.Work do
 
   @channel "hive_work"
   @tiers ~w(cheap standard power)
+  @default_tier "cheap"
   @default_scoring %{"confidence_weight" => 1.0, "benefit_weight" => 1.0, "cost_weight" => 1.0}
 
   def start_link(_), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
@@ -40,6 +41,9 @@ defmodule Hive.Work do
 
   def allocate(work_ref, lease_seconds \\ 900),
     do: allocate_after_expiry_recovery(work_ref, lease_seconds)
+
+  @doc "Read-only cost ledger: per-agent summary plus the most recent allocation rows."
+  def cost_ledger(opts \\ []), do: GenServer.call(__MODULE__, {:cost_ledger, opts})
 
   def scoring, do: GenServer.call(__MODULE__, :scoring)
   def set_scoring(config), do: GenServer.call(__MODULE__, {:set_scoring, config})
@@ -92,7 +96,17 @@ defmodule Hive.Work do
     case System.get_env("COMPANY_DATABASE_URL") do
       nil ->
         {:ok,
-         %{memory: %{work: %{}, agents: %{}, bids: %{}, events: [], scoring: @default_scoring}}}
+         %{
+           memory: %{
+             work: %{},
+             agents: %{},
+             bids: %{},
+             events: [],
+             scoring: @default_scoring,
+             ledger: [],
+             available_since: %{}
+           }
+         }}
 
       url ->
         opts = db_opts(url)
@@ -236,6 +250,36 @@ defmodule Hive.Work do
           []
         )
 
+        Postgrex.query!(
+          db,
+          """
+          CREATE TABLE IF NOT EXISTS company.hive_cost_ledger (
+            ledger_id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL,
+            slug TEXT,
+            attempt INTEGER NOT NULL,
+            agent_id TEXT NOT NULL,
+            estimated_cost DOUBLE PRECISION,
+            cost_factor DOUBLE PRECISION,
+            tier TEXT,
+            agent_tier TEXT,
+            selection TEXT,
+            allocated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            outcome TEXT NOT NULL DEFAULT 'allocated',
+            outcome_at TIMESTAMPTZ,
+            runtime_seconds DOUBLE PRECISION,
+            UNIQUE (work_id, attempt)
+          )
+          """,
+          []
+        )
+
+        Postgrex.query!(
+          db,
+          "CREATE INDEX IF NOT EXISTS hive_cost_ledger_agent_idx ON company.hive_cost_ledger (agent_id, allocated_at)",
+          []
+        )
+
         {:ok, %{db: db, scoring: load_scoring(db)}}
     end
   end
@@ -276,6 +320,7 @@ defmodule Hive.Work do
             {:reply, {:ok, item},
              state
              |> put_in([:memory, :work, id], item)
+             |> put_in([:memory, :available_since, id], DateTime.utc_now())
              |> update_in([:memory, :events], &[event | &1])}
 
           {item, _existing_id} ->
@@ -540,6 +585,7 @@ defmodule Hive.Work do
           |> List.first()
         end)
 
+      touch_agent(db, agent_id)
       {:reply, {:ok, result}, state}
     else
       {:error, :not_found} -> {:reply, {:error, :work_not_found}, state}
@@ -548,41 +594,13 @@ defmodule Hive.Work do
   end
 
   def handle_call({:ranked_bids, work_id, limit}, _from, %{memory: memory} = state) do
-    bids =
-      memory.bids
-      |> Enum.filter(fn {{id, _agent}, _bid} -> id == work_id end)
-      |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid, memory.scoring)) end)
-      |> Enum.sort(&rank_order/2)
-      |> Enum.take(limit)
-
-    {:reply, {:ok, bids}, state}
+    %{ordered: ordered} = rank_memory(memory, work_id)
+    {:reply, {:ok, Enum.take(ordered, limit)}, state}
   end
 
   def handle_call({:ranked_bids, work_id, limit}, _from, %{db: db, scoring: scoring} = state) do
-    result =
-      Postgrex.query!(
-        db,
-        """
-        SELECT bid_id, work_id, agent_id, interested, confidence, approach,
-          estimated_cost, expected_benefit, risk, proposal, created_at,
-          CASE WHEN interested THEN
-            POWER(GREATEST(confidence, 0.0001), $2) * POWER(GREATEST(expected_benefit, 0.0001), $3) /
-            POWER(GREATEST(estimated_cost, 0.01), $4)
-          ELSE 0 END AS score
-        FROM company.hive_work_bids WHERE work_id = $1
-        ORDER BY score DESC, created_at DESC
-        LIMIT $5
-        """,
-        [
-          work_id,
-          scoring["confidence_weight"],
-          scoring["benefit_weight"],
-          scoring["cost_weight"],
-          limit
-        ]
-      )
-
-    {:reply, {:ok, rows(result)}, state}
+    %{ordered: ordered} = rank_db(db, work_id, scoring)
+    {:reply, {:ok, Enum.take(ordered, limit)}, state}
   end
 
   def handle_call(:scoring, _from, %{memory: memory} = state),
@@ -615,22 +633,19 @@ defmodule Hive.Work do
   end
 
   def handle_call({:allocate, work_id, lease_seconds}, _from, %{memory: memory} = state) do
-    winner =
-      memory.bids
-      |> Enum.filter(fn {{id, _agent}, bid} -> id == work_id and bid["interested"] end)
-      |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid, memory.scoring)) end)
-      |> Enum.sort(&rank_order/2)
-      |> List.first()
+    ranking = rank_memory(memory, work_id)
+    now = DateTime.utc_now()
 
     with %{state: "available"} = work <- memory.work[work_id],
-         %{"agent_id" => agent_id} <- winner do
+         %{"agent_id" => agent_id} = winner <- ranking.winner,
+         :open <- memory_bid_window(memory, work_id, ranking, now) do
       attempt = (work.attempt || 0) + 1
 
       allocated =
         Map.merge(work, %{
           state: "claimed",
           claimed_by: agent_id,
-          lease_expires_at: DateTime.add(DateTime.utc_now(), lease_seconds, :second),
+          lease_expires_at: DateTime.add(now, lease_seconds, :second),
           attempt: attempt
         })
 
@@ -638,24 +653,35 @@ defmodule Hive.Work do
         event(
           "work.allocated",
           work_id,
-          %{
-            "agent_id" => agent_id,
-            "score" => score(winner, memory.scoring),
-            "slug" => work["slug"]
-          },
+          allocation_payload(winner, ranking, work["slug"]),
           attempt
         )
 
       started =
         event("work.started", work_id, %{"agent_id" => agent_id, "slug" => work["slug"]}, attempt)
 
+      ledger_row =
+        Hive.Ledger.new_row(
+          work_id,
+          work["slug"],
+          attempt,
+          agent_id,
+          winner,
+          memory.agents[agent_id],
+          get_in(work, [:payload, "tier"]) || "standard",
+          ranking.mode,
+          now
+        )
+
       next = put_in(state.memory.work[work_id], allocated)
       next = update_in(next.memory.events, &[started, allocation | &1])
+      next = update_in(next.memory.ledger, &(&1 ++ [ledger_row]))
       notify_event_subscribers(allocation)
       notify_event_subscribers(started)
       {:reply, {:ok, Map.put(allocated, :allocated_to, agent_id)}, next}
     else
       nil -> {:reply, {:error, :work_not_found}, state}
+      {:wait, seconds} -> {:reply, {:deferred, seconds}, state}
       %{state: _} -> {:reply, {:error, :no_bids}, state}
       _ -> {:reply, {:error, :no_bids}, state}
     end
@@ -664,58 +690,68 @@ defmodule Hive.Work do
   def handle_call({:allocate, work_id, lease_seconds}, _from, %{db: db, scoring: scoring} = state) do
     result =
       transaction!(db, fn tx ->
-        winner =
-          Postgrex.query!(
-            tx,
-            "SELECT agent_id, POWER(GREATEST(confidence, 0.0001), $2) * POWER(GREATEST(expected_benefit, 0.0001), $3) / POWER(GREATEST(estimated_cost, 0.01), $4) AS score FROM company.hive_work_bids WHERE work_id = $1 AND interested ORDER BY score DESC, created_at DESC LIMIT 1",
-            [
-              work_id,
-              scoring["confidence_weight"],
-              scoring["benefit_weight"],
-              scoring["cost_weight"]
-            ]
-          )
-          |> rows()
-          |> List.first()
+        ranking = rank_db(tx, work_id, scoring)
 
-        case winner do
+        case ranking.winner do
           nil ->
             {:error, :no_bids}
 
-          %{"agent_id" => agent_id, "score" => score} ->
-            updated =
-              Postgrex.query!(
-                tx,
-                "UPDATE company.hive_work_items SET state = 'claimed', claimed_by = $2, lease_expires_at = now() + ($3 || ' seconds')::interval, attempt = attempt + 1, updated_at = now() WHERE id = $1 AND state = 'available' RETURNING id, payload, state, claimed_by, lease_expires_at, attempt, last_failure",
-                [work_id, agent_id, Integer.to_string(lease_seconds)]
-              )
+          %{"agent_id" => agent_id} = winner ->
+            case db_bid_window(tx, work_id, ranking) do
+              {:wait, seconds} ->
+                {:deferred, seconds}
 
-            case rows(updated) do
-              [item] ->
-                slug = get_in(item, ["payload", "slug"])
-
-                allocation =
-                  event(
-                    "work.allocated",
-                    work_id,
-                    %{"agent_id" => agent_id, "score" => score, "slug" => slug},
-                    item["attempt"]
+              :open ->
+                updated =
+                  Postgrex.query!(
+                    tx,
+                    "UPDATE company.hive_work_items SET state = 'claimed', claimed_by = $2, lease_expires_at = now() + ($3 || ' seconds')::interval, attempt = attempt + 1, updated_at = now() WHERE id = $1 AND state = 'available' RETURNING id, payload, state, claimed_by, lease_expires_at, attempt, last_failure",
+                    [work_id, agent_id, Integer.to_string(lease_seconds)]
                   )
 
-                started =
-                  event(
-                    "work.started",
-                    work_id,
-                    %{"agent_id" => agent_id, "slug" => slug},
-                    item["attempt"]
-                  )
+                case rows(updated) do
+                  [item] ->
+                    slug = get_in(item, ["payload", "slug"])
 
-                persist_event(tx, allocation)
-                persist_event(tx, started)
-                {:ok, Map.put(item, "allocated_to", agent_id), allocation, started}
+                    allocation =
+                      event(
+                        "work.allocated",
+                        work_id,
+                        allocation_payload(winner, ranking, slug),
+                        item["attempt"]
+                      )
 
-              _ ->
-                {:error, :unavailable}
+                    started =
+                      event(
+                        "work.started",
+                        work_id,
+                        %{"agent_id" => agent_id, "slug" => slug},
+                        item["attempt"]
+                      )
+
+                    persist_event(tx, allocation)
+                    persist_event(tx, started)
+
+                    insert_ledger(
+                      tx,
+                      Hive.Ledger.new_row(
+                        work_id,
+                        slug,
+                        item["attempt"],
+                        agent_id,
+                        winner,
+                        ranking.agents[agent_id],
+                        get_in(item, ["payload", "tier"]) || "standard",
+                        ranking.mode,
+                        DateTime.utc_now()
+                      )
+                    )
+
+                    {:ok, Map.put(item, "allocated_to", agent_id), allocation, started}
+
+                  _ ->
+                    {:error, :unavailable}
+                end
             end
         end
       end)
@@ -729,6 +765,25 @@ defmodule Hive.Work do
       error ->
         {:reply, error, state}
     end
+  end
+
+  def handle_call({:cost_ledger, opts}, _from, %{memory: memory} = state) do
+    rows = Enum.sort_by(memory.ledger, & &1["allocated_at"], {:desc, DateTime})
+    {:reply, {:ok, ledger_report(rows, opts)}, state}
+  end
+
+  def handle_call({:cost_ledger, opts}, _from, %{db: db} = state) do
+    days = max(1, Keyword.get(opts, :days, 30))
+
+    rows =
+      Postgrex.query!(
+        db,
+        "SELECT ledger_id, work_id, slug, attempt, agent_id, estimated_cost, cost_factor, tier, agent_tier, selection, allocated_at, outcome, outcome_at, runtime_seconds FROM company.hive_cost_ledger WHERE allocated_at >= now() - ($1 || ' days')::interval ORDER BY allocated_at DESC",
+        [Integer.to_string(days)]
+      )
+      |> rows()
+
+    {:reply, {:ok, ledger_report(rows, opts)}, state}
   end
 
   def handle_call({:subscribe, pid, agent_id}, _from, state) do
@@ -803,9 +858,16 @@ defmodule Hive.Work do
         event("work.started", id, %{"agent_id" => agent_id, "slug" => item["slug"]}, attempt)
 
       next =
-        if expired_owner,
-          do: put_in(state.memory.bids, Map.delete(state.memory.bids, {id, expired_owner})),
-          else: state
+        if expired_owner do
+          state
+          |> put_in([:memory, :bids], Map.delete(state.memory.bids, {id, expired_owner}))
+          |> update_in(
+            [:memory, :ledger],
+            &Hive.Ledger.close(&1, id, item.attempt || 0, expired_owner, "lease_expired", now)
+          )
+        else
+          state
+        end
 
       next =
         next
@@ -863,6 +925,7 @@ defmodule Hive.Work do
               )
 
               persist_event(tx, failed_event)
+              close_ledger(tx, id, attempt, expired_owner, "lease_expired")
               {failed_event, payload}
 
             _ ->
@@ -962,6 +1025,10 @@ defmodule Hive.Work do
           state
           |> put_in([:memory, :work, id], completed)
           |> update_in([:memory, :events], &[event | &1])
+          |> update_in(
+            [:memory, :ledger],
+            &Hive.Ledger.close(&1, id, item.attempt || 0, agent_id, final_state, DateTime.utc_now())
+          )
 
         {:reply, {:ok, completed}, next}
 
@@ -1019,6 +1086,7 @@ defmodule Hive.Work do
               )
 
             persist_event(tx, completion_event)
+            close_ledger(tx, id, item["attempt"], agent_id, final_state)
             {:ok, item, completion_event}
 
           _ ->
@@ -1088,11 +1156,17 @@ defmodule Hive.Work do
         [id, agent_id, Integer.to_string(lease_seconds)]
       )
 
-    {:reply,
-     case rows(result) do
-       [item] -> {:ok, item}
-       _ -> {:error, :not_owner}
-     end, state}
+    reply =
+      case rows(result) do
+        [item] ->
+          touch_agent(db, agent_id)
+          {:ok, item}
+
+        _ ->
+          {:error, :not_owner}
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call({:ack_event, _event_id, _consumer_id}, _from, %{memory: _memory} = state),
@@ -1241,11 +1315,184 @@ defmodule Hive.Work do
     end
   end
 
-  defp rank_order(a, b) do
-    case {a["score"], b["score"]} do
-      {score, score} -> DateTime.compare(a["created_at"], b["created_at"]) == :gt
-      {a_score, b_score} -> a_score > b_score
-    end
+  defp ledger_report(rows, opts) do
+    limit = min(max(Keyword.get(opts, :limit, 20), 1), 200)
+
+    Hive.Ledger.summarize(rows)
+    |> Map.put("recent", Enum.take(rows, limit))
+    |> Map.put("selection", Hive.Selection.config() |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end))
+  end
+
+  defp allocation_payload(winner, ranking, slug) do
+    %{
+      "agent_id" => winner["agent_id"],
+      "score" => winner["score"],
+      "slug" => slug,
+      "selection" => ranking.mode,
+      "effective_cost" => winner["estimated_cost"]
+    }
+  end
+
+  defp live_agent_ids do
+    :ets.tab2list(:hive_subscribers)
+    |> Enum.flat_map(fn
+      {:work, _pid, agent_id} -> [agent_id]
+      _ -> []
+    end)
+    |> Enum.uniq()
+  end
+
+  defp rank_memory(memory, work_id) do
+    cfg = Hive.Selection.config()
+    now = DateTime.utc_now()
+
+    bids =
+      memory.bids
+      |> Enum.filter(fn {{id, _agent}, _bid} -> id == work_id end)
+      |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid, memory.scoring)) end)
+
+    ctx = Hive.Selection.context(memory.events, memory.agents, work_id, live_agent_ids(), now, cfg)
+    Hive.Selection.rank(bids, ctx, cfg) |> Map.put(:agents, memory.agents) |> Map.put(:bids, bids)
+  end
+
+  defp rank_db(db, work_id, scoring) do
+    cfg = Hive.Selection.config()
+    now = DateTime.utc_now()
+
+    bids =
+      Postgrex.query!(
+        db,
+        """
+        SELECT bid_id, work_id, agent_id, interested, confidence, approach,
+          estimated_cost, expected_benefit, risk, proposal, created_at,
+          CASE WHEN interested THEN
+            POWER(GREATEST(confidence, 0.0001), $2) * POWER(GREATEST(expected_benefit, 0.0001), $3) /
+            POWER(GREATEST(estimated_cost, 0.01), $4)
+          ELSE 0 END AS score
+        FROM company.hive_work_bids WHERE work_id = $1
+        """,
+        [
+          work_id,
+          scoring["confidence_weight"],
+          scoring["benefit_weight"],
+          scoring["cost_weight"]
+        ]
+      )
+      |> rows()
+
+    agent_ids = Enum.map(bids, & &1["agent_id"])
+
+    agents =
+      Postgrex.query!(
+        db,
+        "SELECT id, endpoint, capabilities, last_seen_at FROM company.hive_agents WHERE id = ANY($1)",
+        [agent_ids]
+      )
+      |> rows()
+      |> Map.new(&{&1["id"], &1})
+
+    # Payload predicates stay out of the SQL on purpose: decode_row/1 decodes the jsonb
+    # whether it was stored as an object or as a JSON string, and Selection filters in Elixir.
+    events =
+      Postgrex.query!(
+        db,
+        """
+        SELECT topic, task_id, payload, occurred_at FROM company.hive_events
+        WHERE (topic IN ('engineering.failed', 'engineering.completed') AND occurred_at >= $2)
+           OR (topic = 'engineering.failed' AND task_id = $1)
+        """,
+        [work_id, DateTime.add(now, -cfg.strike_window_seconds, :second)]
+      )
+      |> rows()
+
+    ctx = Hive.Selection.context(events, agents, work_id, live_agent_ids(), now, cfg)
+    Hive.Selection.rank(bids, ctx, cfg) |> Map.put(:agents, agents) |> Map.put(:bids, bids)
+  end
+
+  # Allocation waits while a connected pool worker (registered with a tier) has not
+  # bid yet, up to `bid_window_seconds` after the work became available.
+  defp expected_bidders(registered) do
+    live_agent_ids()
+    |> Enum.filter(fn id -> get_in(registered, [id, "capabilities", "tier"]) != nil end)
+  end
+
+  defp memory_bid_window(memory, work_id, ranking, now) do
+    cfg = Hive.Selection.config()
+    bidders = Enum.map(ranking.bids, & &1["agent_id"])
+
+    Hive.Selection.bid_window(
+      memory.available_since[work_id],
+      expected_bidders(memory.agents),
+      bidders,
+      now,
+      cfg
+    )
+  end
+
+  defp db_bid_window(db, work_id, ranking) do
+    cfg = Hive.Selection.config()
+    live = live_agent_ids()
+
+    registered =
+      Postgrex.query!(
+        db,
+        "SELECT id, capabilities FROM company.hive_agents WHERE id = ANY($1)",
+        [live]
+      )
+      |> rows()
+      |> Map.new(&{&1["id"], &1})
+
+    since =
+      case Postgrex.query!(
+             db,
+             "SELECT updated_at FROM company.hive_work_items WHERE id = $1 AND state = 'available'",
+             [work_id]
+           ).rows do
+        [[updated_at]] -> updated_at
+        _ -> nil
+      end
+
+    Hive.Selection.bid_window(
+      since,
+      expected_bidders(registered),
+      Enum.map(ranking.bids, & &1["agent_id"]),
+      DateTime.utc_now(),
+      cfg
+    )
+  end
+
+  defp insert_ledger(db, row) do
+    Postgrex.query!(
+      db,
+      "INSERT INTO company.hive_cost_ledger (ledger_id, work_id, slug, attempt, agent_id, estimated_cost, cost_factor, tier, agent_tier, selection, allocated_at, outcome) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'allocated') ON CONFLICT (work_id, attempt) DO NOTHING",
+      [
+        row["ledger_id"],
+        row["work_id"],
+        row["slug"],
+        row["attempt"],
+        row["agent_id"],
+        row["estimated_cost"],
+        row["cost_factor"],
+        row["tier"],
+        row["agent_tier"],
+        row["selection"],
+        row["allocated_at"]
+      ]
+    )
+  end
+
+  defp close_ledger(db, work_id, attempt, agent_id, outcome) do
+    Postgrex.query!(
+      db,
+      "UPDATE company.hive_cost_ledger SET outcome = $4, outcome_at = now(), runtime_seconds = EXTRACT(EPOCH FROM (now() - allocated_at)) WHERE work_id = $1 AND attempt = $2 AND agent_id = $3 AND outcome = 'allocated'",
+      [work_id, attempt, agent_id, outcome]
+    )
+  end
+
+  defp touch_agent(db, agent_id) do
+    Postgrex.query!(db, "UPDATE company.hive_agents SET last_seen_at = now() WHERE id = $1", [
+      agent_id
+    ])
   end
 
   defp random_id, do: Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
@@ -1303,6 +1550,15 @@ defmodule Hive.Work do
         Map.delete(acc, {id, item.claimed_by})
       end)
 
+    ledger =
+      Enum.reduce(expired, memory.ledger, fn {id, item}, acc ->
+        outcome = if retry_state(item.attempt || 0) == "escalated", do: "escalated", else: "lease_expired"
+        Hive.Ledger.close(acc, id, item.attempt || 0, item.claimed_by, outcome, now)
+      end)
+
+    available_since =
+      Enum.reduce(expired, memory.available_since, &Map.put(&2, elem(&1, 0), now))
+
     items =
       work
       |> Map.values()
@@ -1318,6 +1574,8 @@ defmodule Hive.Work do
       memory
       | work: work,
         bids: bids,
+        ledger: ledger,
+        available_since: available_since,
         events: Enum.reverse(failure_events) ++ memory.events
     }
 
@@ -1398,12 +1656,11 @@ defmodule Hive.Work do
     if is_binary(title) and is_binary(slug) and Regex.match?(~r/^[a-z0-9]+(?:-[a-z0-9]+)*$/, slug) do
       payload = %{"parts" => parts, "title" => String.trim(title), "slug" => slug}
 
-      # Worker tiering (hive/README.md "Worker tiers"): only a known tier is stored;
-      # absent/unknown means "standard" to workers, so existing queued items are unaffected.
-      case metadata["tier"] do
-        tier when tier in @tiers -> {:ok, Map.put(payload, "tier", tier)}
-        _ -> {:ok, payload}
-      end
+      # Worker tiering (hive/README.md "Worker tiers"): a known tier is stored as given;
+      # a missing or unknown tier defaults to "cheap" so the cheapest capable pool gets
+      # first refusal. Items queued before this default carry no tier and stay "standard".
+      tier = if metadata["tier"] in @tiers, do: metadata["tier"], else: @default_tier
+      {:ok, Map.put(payload, "tier", tier)}
     else
       {:error, :invalid_slug}
     end
@@ -1532,6 +1789,14 @@ defmodule Hive.Work do
         [id, agent_id]
       )
 
+      close_ledger(
+        tx,
+        id,
+        attempt,
+        agent_id,
+        if(next_state == "escalated", do: "escalated", else: "lease_expired")
+      )
+
       Postgrex.query!(
         tx,
         "UPDATE company.hive_work_items SET state = $3, claimed_by = NULL, lease_expires_at = NULL, last_failure = $2::jsonb, updated_at = now() WHERE id = $1 AND state = 'claimed' AND lease_expires_at < now()",
@@ -1555,7 +1820,7 @@ defmodule Hive.Work do
 
   defp decode_row(row) do
     decoded =
-      Enum.reduce(["payload", "last_failure", "result"], row, fn key, acc ->
+      Enum.reduce(["payload", "last_failure", "result", "capabilities", "proposal"], row, fn key, acc ->
         case Map.get(acc, key) do
           value when is_binary(value) -> Map.put(acc, key, Jason.decode!(value))
           _ -> acc

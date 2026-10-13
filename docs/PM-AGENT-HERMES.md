@@ -139,10 +139,35 @@ The in-cluster engineering agent should, via the hive:
    exactly `PM_DATABASE_URL` (the `pm_agent_writer` DSN, existing role) and
    `PM_AGENT_LLM_API_KEY` (a new key dedicated to pm-agent with a hard spend cap;
    the manifest uses the Nous inference API `https://inference-api.nousresearch.com/v1`
-   and model `meituan/longcat-2.0:free`, matching the Hermes runtime default;
+   and an automatically chosen FREE model (see "Model selection" below);
    to change provider, edit `hermes-config.yaml` and the NetworkPolicy together).
 2. Ensure the Infisical machine identity behind `infisical-auth` can read
    `/pm-agent` and the operator is allowed to create Secrets in `company-ops`.
 3. Merge PR #15 (writer UPDATE grant) before rollout: `record_message` and
    `upsert_signal` use UPDATE, so without it chat logging fails.
 4. Approve and merge this PR; approve the rollout via the engineering agent.
+
+## Model selection (automatic, free-only)
+
+Nous retires `:free` models without notice and its `/v1/models` listing keeps
+showing retired ones (`meituan/longcat-2.0:free` answered 404 while listed as
+free), so `company_ops/model_resolver.py` (via `pm-agent/resolve_model.py`) probes instead of trusting the list.
+
+- At boot `entrypoint.sh` runs the resolver: fetch `/v1/models`, keep models
+  that are free (prompt and completion price 0), advertise `tools`, have
+  context >= 100k, are not within 3 days of `expiration_date`, and are not
+  domain-specialised (`-fin`, `-sante`) or `stealth/*`. Order by
+  `company_ops/model-preferences.json` (preferred ids first, then context length),
+  send a 1-token chat completion to each, take the first HTTP 200, and render it
+  into `$HERMES_HOME/config.yaml` (the baked `hermes-config.yaml` is only the
+  default). The last working model is kept in `/run/pm-agent/resolved-model.json`
+  and reused if every fresh probe fails.
+- If nothing works the container exits non-zero (visible in k8s). A paid
+  fallback (cheapest paid model with tools) happens only if `PM_AGENT_ALLOW_PAID=true`.
+- `agent.py` runs a watchdog thread: every 6h, and when an LLM call fails with a
+  404/model-unavailable style error (5 min cooldown), it runs
+  `resolve_model.py --check`. If the resolved model differs from the rendered
+  one, the process exits (code 75), `entrypoint.sh` stops Hermes, and k8s
+  restarts the pod, which re-resolves. Restart-on-change was chosen over
+  hot-reloading Hermes as the simpler, more robust option.
+- To prefer a different model edit `company_ops/model-preferences.json`; stale ids are skipped.

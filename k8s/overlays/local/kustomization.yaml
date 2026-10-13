@@ -1,0 +1,46 @@
+# Local-dev overlay for kind/k3d: hive + pm-agent + throwaway Postgres in
+# namespace local-dev. Images come from the local registry (kind: localhost:5001)
+# or `kind load docker-image`. Create the Secret first (see docs/DEV-COMPOSABILITY.md):
+#   kubectl -n local-dev create secret generic local-secrets --from-literal=...
+#
+# Gate: FORBID_LITERALS="buildmyhouse company-ops localhost:30500 homely" \
+#   SKIP_BASELINE=1 scripts/verify-kustomize-render.sh k8s/overlays/local
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: local-dev
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - ../../base/hive
+  - ../../base/pm-agent
+
+images:
+  - name: localhost:30500/company-os-hive
+    newName: localhost:5001/local-hive
+    newTag: dev
+  - name: localhost:30500/company-os-pm-agent
+    newName: localhost:5001/local-pm-agent
+    newTag: dev
+
+patches:
+  - target: {kind: Deployment, name: hive-coordinator}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/envFrom/0/secretRef/name
+        value: local-secrets
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: HIVE_NAME, value: "Local Hive"}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: HIVE_DESCRIPTION, value: "Local development hive"}
+  - target: {kind: Deployment, name: pm-agent-gateway}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/valueFrom/secretKeyRef/name
+        value: local-secrets

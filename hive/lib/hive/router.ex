@@ -199,7 +199,34 @@ defmodule Hive.Router do
       {:error, :work_not_found} -> json(conn, %{"error" => "work not found"}, 404)
       {:error, :no_bids} -> json(conn, %{"error" => "no interested bids"}, 409)
       {:error, :unavailable} -> json(conn, %{"error" => "work unavailable"}, 409)
+      # Bid window still open: a connected pool worker has not bid yet. Not an error:
+      # the caller retries after `retry_after_seconds` instead of locking in the first bid.
+      {:deferred, seconds} ->
+        json(
+          conn,
+          %{
+            "state" => "available",
+            "deferred" => true,
+            "reason" => "bid_window_open",
+            "retry_after_seconds" => seconds
+          },
+          202
+        )
     end
+  end
+
+  # Read-only cost ledger: per-agent allocations, failures, runtime and total estimated
+  # cost, plus the most recent allocation rows. `?days=` (default 30), `?limit=` (default 20).
+  get "/ledger" do
+    int = fn key, default ->
+      case Integer.parse(conn.params[key] || "") do
+        {value, ""} -> value
+        _ -> default
+      end
+    end
+
+    {:ok, report} = Hive.Work.cost_ledger(days: int.("days", 30), limit: int.("limit", 20))
+    json(conn, report)
   end
 
   get "/work/subscribe" do

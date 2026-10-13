@@ -116,7 +116,7 @@ test("initialize sends instructions and tool descriptions carry next-tool hints"
   const tools = listed.result.tools;
   assert.deepEqual(
     tools.map((tool) => tool.name).sort(),
-    ["hive_agents", "hive_allocate", "hive_available_work", "hive_bid", "hive_complete", "hive_diagnostics", "hive_events", "hive_heartbeat", "hive_next_work", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"],
+    ["hive_agents", "hive_allocate", "hive_available_work", "hive_bid", "hive_complete", "hive_cost_ledger", "hive_diagnostics", "hive_events", "hive_heartbeat", "hive_next_work", "hive_status", "hive_submit", "hive_wait", "hive_work_bids"],
   );
   for (const tool of tools) {
     assert.ok(tool.description.length > 40, `${tool.name} description lacks lifecycle guidance`);
@@ -140,6 +140,10 @@ test("manager Hive tools prompt workers with the manager's own identity", async 
       response.end(JSON.stringify({ task_id: "task_123", prompted_agent_ids: ["worker-a"], already_bid_agent_ids: [] }));
     } else if (request.url === "/work/human-readable-task/bids?limit=100") {
       response.end(JSON.stringify({ work_id: "task_123", bids: [] }));
+    } else if (request.url === "/work/task_94119861ecab1150/bids?limit=100") {
+      response.end(JSON.stringify({ work_id: "task_94119861ecab1150", bids: [] }));
+    } else if (request.url === "/ledger?days=7&limit=5") {
+      response.end(JSON.stringify({ agents: [], totals: {}, recent: [] }));
     } else {
       response.end("{}");
     }
@@ -184,6 +188,22 @@ test("manager Hive tools prompt workers with the manager's own identity", async 
   assert.deepEqual(JSON.parse(prompted.result.content[0].text).prompted_agent_ids, ["worker-a"]);
   const request = requests.find(({ url }) => url === "/work/human-readable-task/prompt");
   assert.deepEqual(request.body, { requester_id: "manager-self" });
+
+  // Regression: the manager schema used work_slug while the handler read work_id, so
+  // every manager hive_work_bids call hit /work/undefined/bids ("work not found").
+  assert.equal(names.filter((name) => name === "hive_work_bids").length, 1, "hive_work_bids must be listed once");
+  for (const [id, args] of [[4, { work_slug: "human-readable-task" }], [5, { work_id: "human-readable-task" }], [6, { task_id: "task_94119861ecab1150" }]]) {
+    const response = await call(id, "tools/call", { name: "hive_work_bids", arguments: args });
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+  }
+  assert.ok(requests.some(({ url }) => url === "/work/task_94119861ecab1150/bids?limit=100"));
+  assert.equal(requests.some(({ url }) => url.includes("/work/undefined/")), false);
+  const missing = await call(7, "tools/call", { name: "hive_work_bids", arguments: {} });
+  assert.ok(missing.error, "hive_work_bids without any work reference must fail fast");
+
+  assert.ok(names.includes("hive_cost_ledger"));
+  const ledger = await call(8, "tools/call", { name: "hive_cost_ledger", arguments: { days: 7, limit: 5 } });
+  assert.deepEqual(JSON.parse(ledger.result.content[0].text), { agents: [], totals: {}, recent: [] });
 });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

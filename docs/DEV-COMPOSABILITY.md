@@ -22,3 +22,24 @@ Targets (repo root `Makefile`):
   fails on the first error, prints an OK count.
 - `make test` — `python3 -m pytest -q tests --ignore=tests/test_backup.py`.
 - `make check` — `build-all` + `diff-prod` + `gate-example` + `test`.
+
+## Local kind/k3d overlay (`k8s/overlays/local`)
+
+Hive + pm-agent + a throwaway Postgres (emptyDir, trust auth) in namespace
+`local-dev`, with neutral names, gated by `make gate-local`.
+
+```bash
+kind create cluster                                  # or: k3d cluster create
+docker build -f hive/Dockerfile -t localhost:5001/local-hive:dev .
+docker build -f pm-agent/Dockerfile -t localhost:5001/local-pm-agent:dev .
+kind load docker-image localhost:5001/local-hive:dev localhost:5001/local-pm-agent:dev
+kubectl create namespace local-dev
+kubectl -n local-dev create secret generic local-secrets --from-literal=PLACEHOLDER=1  # add the keys your build needs
+make KUSTOMIZE=kustomize local-up                    # refuses non-kind-*/k3d-* contexts
+make local-down
+```
+
+Not done, future ticket: an in-memory hive fallback. Hive is a durable-event
+coordinator backed by Postgres, so that is a code change in `hive/` with its own
+consistency story and tests, not a manifest change. The overlay above avoids it
+by giving hive a disposable real database.
