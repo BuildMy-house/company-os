@@ -63,27 +63,40 @@ control.
 
 ## Worker tiers
 
-Submitters add `tier: cheap|standard|power` to the `hive_submit` metadata. The
-coordinator stores a known tier on the work payload (`payload.tier`); anything
-else is dropped and workers treat a missing tier as `standard`. Each worker
-pool declares `AGENT_TIER` (`cheap` for OpenCode, `power` for Claude) and
+Submitters may add `tier: cheap|standard|power` to the `hive_submit` metadata.
+A work item submitted **without a known tier now defaults to `cheap`** (the
+coordinator stores `payload.tier = "cheap"`; unknown values such as `gpu` also
+become `cheap`). Explicit tiers are stored unchanged, so pass `tier: power` for
+work that genuinely needs the Claude pool. Items queued before this default
+carry no tier and are treated as `standard` by workers. Each worker pool
+declares `AGENT_TIER` (`cheap` for OpenCode, `power` for Claude) and
 `AGENT_COST_FACTOR` (true relative cost: Claude 1, GLM Flash 0.1, MiMo free
 0.05) in its Deployment env; `hive-member-mcp.js` publishes them in
-`capabilities` at registration. The ranking formula is unchanged
-(`confidence * benefit / cost`): the worker multiplies its estimated cost by
+`capabilities` at registration. The worker multiplies its estimated cost by
 `AGENT_COST_FACTOR` and by `2^|task tier - pool tier|` for non-`standard`
-tasks (`engineering-manager-mcp.js`, `tierAffinityMultiplier`). The
-`confidence >= 0.5` fit gate is untouched, so tier shifts preference only and
-never forces an unqualified pool onto a task. A non-matching pool waits
-`HIVE_TIER_GRACE_MS` (default 30000) before assessing and skips if the item was
-already claimed. Before `hive_allocate` a worker checks `hive_work_bids` and
-only allocates when its own bid ranks first, because allocation leases the item
-to the top bidder, not the caller.
+tasks (`engineering-manager-mcp.js`, `tierAffinityMultiplier`); a non-matching
+pool also waits `HIVE_TIER_GRACE_MS` (default 30000) before assessing and
+skips if the item was already claimed.
+
+Allocation picks the **cheapest bidder that can deliver**, not the best
+`confidence * benefit / cost` score (see `docs/HIVE-ARCHITECTURE.md`,
+"Allocation and cost"): eligible means interested, `confidence >=
+HIVE_MIN_CONFIDENCE` (0.5), recently seen, not repeatedly `lease_expired`
+(`HIVE_LEASE_EXPIRED_STRIKES`, default 2, cleared by a completion) and not the
+agent whose lease on this item just expired. The lowest effective cost
+(`estimated_cost`, already scaled by the worker) wins, then score, then earliest
+bid; with no eligible bid the old score ranking applies. `allocate` returns
+`202 {deferred: true}` for up to `HIVE_BID_WINDOW_SECONDS` (60) while a connected
+pool worker has not bid. `HIVE_SELECTION_MODE=score` restores the old ranking.
+Every allocation and its outcome is recorded in `company.hive_cost_ledger`; read
+the per-agent summary with `GET /ledger` or the `hive_cost_ledger` MCP tool.
+A worker checks `hive_work_bids` and only allocates when its own bid is selected,
+because allocation leases the item to the selected bidder, not the caller.
 
 ### Already-queued items
 
 Items queued before this scheme have no `tier`, so they are `standard`: the
-cost factor alone makes cheaper pools win comparable bids, and no migration is
+cheapest-eligible rule still prefers the cheaper pool's bid, and no migration is
 needed. To steer an existing item, a manager can
 set `payload.tier` directly (`UPDATE company.hive_work_items SET payload =
 payload || '{"tier":"cheap"}' WHERE slug...` via an authorized DB path) or
