@@ -14,6 +14,9 @@ model:
   # meituan/longcat-2.5-preview:free answers 200 with a 1,048,576-token
   # context. It is a preview build, so expect it to be retired the same way;
   # the glm-5.3-flash fallback below keeps Hermes serving when that happens.
+  # Baked default only: scripts/entrypoint.sh renders the live-probed free
+  # model over this line at every boot (hermes/resolve_model.py), and a 6h /
+  # on-failure watcher restarts the pod when the best free model changes.
   default: meituan/longcat-2.5-preview:free
   provider: custom:nous
 

@@ -1,5 +1,5 @@
-# Hermes runtime configuration for pm-agent. Copied to $HERMES_HOME/config.yaml
-# by pm-agent/entrypoint.sh. Deliberately NOT derived from hermes/config.yaml:
+# Hermes runtime configuration for pm-agent. Rendered to $HERMES_HOME/config.yaml
+# by pm-agent/entrypoint.sh (model.default replaced by resolve_model.py). Deliberately NOT derived from hermes/config.yaml:
 # nothing here is inherited from Hermes (the CEO agent), and every capability
 # is opt-in. Review docs/PM-AGENT-HERMES.md before widening anything.
 agent:
@@ -24,7 +24,9 @@ agent:
     - todo
 
 model:
-  default: meituan/longcat-2.0:free
+  # Baked default only: entrypoint.sh renders the live-probed free model over
+  # this line at boot (pm-agent/resolve_model.py).
+  default: inclusionai/ling-3.1-flash
   provider: custom:pm_llm
 
 custom_providers:

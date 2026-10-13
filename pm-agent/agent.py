@@ -24,7 +24,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -141,6 +143,8 @@ class ChatService:
                 raw = self.llm(guard.wrap_untrusted(clean))
             except (OSError, ValueError, KeyError, IndexError, urllib.error.URLError):
                 log.exception("hermes runtime call failed")
+                if looks_like_model_unavailable(sys.exc_info()[1] or Exception()):
+                    request_re_resolve()
                 self.store.record_message(
                     conversation_id, app_user_id, "assistant", "[runtime error]"
                 )
@@ -209,6 +213,52 @@ def make_handler(service: ChatService) -> type[BaseHTTPRequestHandler]:
     return ChatHandler
 
 
+RE_RESOLVE_INTERVAL_SECONDS = 6 * 3600
+RE_RESOLVE_COOLDOWN_SECONDS = 300
+EXIT_MODEL_CHANGED = 75
+_resolve_event = threading.Event()
+
+
+def request_re_resolve() -> None:
+    """Wake the model watchdog (called when the LLM reports a dead model)."""
+    _resolve_event.set()
+
+
+def model_watchdog() -> None:
+    """Every 6h, or on a model-unavailable error, re-run resolve_model.py --check.
+
+    If the best working model changed (or the current one died), exit the
+    process: entrypoint.sh's `wait -n` then stops Hermes and the container
+    exits, k8s restarts the pod, and the entrypoint re-resolves and re-renders
+    the config. Restart-on-change is simpler and more robust than hot-reloading
+    Hermes. A resolver failure (nothing works) is logged and retried later.
+    """
+    import resolve_model  # lazy: only the watchdog needs it
+    last = 0.0
+    while True:
+        triggered = _resolve_event.wait(timeout=RE_RESOLVE_INTERVAL_SECONDS)
+        if triggered and time.monotonic() - last < RE_RESOLVE_COOLDOWN_SECONDS:
+            _resolve_event.clear()
+            continue
+        _resolve_event.clear()
+        last = time.monotonic()
+        rc = resolve_model.main(["--check"])
+        if rc == EXIT_MODEL_CHANGED:
+            log.info(json.dumps({"event": "model_changed_restarting"}))
+            logging.shutdown()
+            os._exit(EXIT_MODEL_CHANGED)
+        if rc != 0:
+            log.error(json.dumps({"event": "model_recheck_failed", "rc": rc}))
+
+
+def looks_like_model_unavailable(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    code = getattr(exc, "code", None)
+    return code in (404, 410, 500, 502) or any(
+        k in text for k in ("no longer free", "not found", "404", "model_not_found")
+    )
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     store = PmStore(os.environ.get("PM_DATABASE_URL"))
@@ -228,6 +278,8 @@ def main() -> None:
         secrets_to_hide=secrets_to_hide,
     )
     stop = hive_presence.start(hive_url)
+    if os.environ.get("PM_AGENT_LLM_API_KEY"):
+        threading.Thread(target=model_watchdog, name="model-watchdog", daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", port), make_handler(service))
     log.info(json.dumps({"event": "listening", "port": port}))
     try:
