@@ -8,7 +8,9 @@ WORKDIR /opt/mcp-gateway
 COPY mcp-gateway/package.json mcp-gateway/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
-COPY scripts/mcp-gateway.js scripts/hive-member-mcp.js scripts/container-manager-mcp.js ./scripts/
+# builder-manager-mcp.js mints GitHub App tokens via its sibling github-app-token.js
+# (execFile on the same script dir), so both must ship for the builder child to run.
+COPY scripts/mcp-gateway.js scripts/mcp-gateway-keys.js scripts/hive-member-mcp.js scripts/container-manager-mcp.js scripts/builder-manager-mcp.js scripts/github-app-token.js ./scripts/
 
 USER node
 ENV NODE_ENV=production PORT=8080

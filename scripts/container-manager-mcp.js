@@ -14,8 +14,11 @@ import readline from "node:readline";
 const namespace = "company-ops";
 const host = process.env.KUBERNETES_SERVICE_HOST;
 const port = process.env.KUBERNETES_SERVICE_PORT || "443";
-const tokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token";
-const caPath = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
+// Overridable so the MCP-gateway pod can point this child at the scoped
+// mcp-gateway-deployer token instead of the pod's default company-ops SA
+// token; defaults are unchanged so Hermes's existing launch is identical.
+const tokenPath = process.env.CONTAINER_MANAGER_TOKEN_PATH || "/var/run/secrets/kubernetes.io/serviceaccount/token";
+const caPath = process.env.CONTAINER_MANAGER_CA_PATH || "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
 const base = `https://${host}:${port}`;
 
 // Read the ServiceAccount token/CA fresh on every request rather than once at
