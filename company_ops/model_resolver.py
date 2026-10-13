@@ -23,6 +23,9 @@ Env (generic names; wrappers map their own defaults):
   RESOLVER_PREFS          preferences JSON (preferred ids, exclusions)
   RESOLVER_ALLOW_PAID     "true" permits a paid fallback (PM_AGENT_ALLOW_PAID too)
   RESOLVER_TAGS           comma list sent as `tags` (Nous requires them)
+  RESOLVER_EXTRA_BODY     JSON object merged into every probe request, so the probe
+                          sends what the runtime sends (e.g. pm-agent's reasoning
+                          effort) and a model that rejects it is skipped
 
 Usage: model_resolver.py [--check]   (--check exits 75 if the model changed)
 The API key is never logged.
@@ -133,13 +136,18 @@ def fetch_models(base_url: str = DEFAULT_BASE_URL) -> list[dict[str, Any]]:
 
 
 def probe(model_id: str, api_key: str, base_url: str = DEFAULT_BASE_URL,
-          tags: list[str] | None = None) -> bool:
-    """True iff a 1-token chat completion returns HTTP 200. Never logs the key."""
+          tags: list[str] | None = None, extra_body: dict[str, Any] | None = None) -> bool:
+    """True iff a 1-token chat completion returns HTTP 200. Never logs the key.
+
+    ``extra_body`` is merged in last so the probe sends the same extra request
+    fields as the runtime (e.g. reasoning effort).
+    """
     body = {
         "model": model_id,
         "messages": [{"role": "user", "content": "ping"}],
         "max_tokens": 1,
         "tags": tags or DEFAULT_TAGS,
+        **(extra_body or {}),
     }
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/chat/completions",
@@ -236,6 +244,14 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_NO_MODEL
     base_url = env.get("RESOLVER_BASE_URL", DEFAULT_BASE_URL)
     tags = [t for t in env.get("RESOLVER_TAGS", "").split(",") if t] or DEFAULT_TAGS
+    try:
+        extra_body = json.loads(env.get("RESOLVER_EXTRA_BODY") or "{}")
+    except ValueError:
+        log.error("RESOLVER_EXTRA_BODY is not valid JSON")
+        return EXIT_NO_MODEL
+    if not isinstance(extra_body, dict):
+        log.error("RESOLVER_EXTRA_BODY must be a JSON object")
+        return EXIT_NO_MODEL
     config_path = Path(env["RESOLVER_CONFIG_PATH"])
     state_dir = Path(env.get("RESOLVER_STATE_DIR", "/run/pm-agent"))
     allow_paid = "true" in (env.get("RESOLVER_ALLOW_PAID", "").lower(),
@@ -245,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         model, reason = resolve(
             api_key, state_dir, allow_paid=allow_paid, prefs=prefs,
             fetch=lambda: fetch_models(base_url),
-            probe_fn=lambda mid, k: probe(mid, k, base_url, tags),
+            probe_fn=lambda mid, k: probe(mid, k, base_url, tags, extra_body),
         )
     except NoModelError as e:
         log.error("model resolution failed: %s", e)

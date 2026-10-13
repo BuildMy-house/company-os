@@ -3,7 +3,8 @@
 Two tools, both bound server-side to the in-flight request:
 
 - find_similar_signal(topic): read-only dedupe lookup (PmStore).
-- file_feedback_work(topic, summary): the gated filing path. Dedupe ->
+- file_feedback_work(topic, summary, + optional structured report fields):
+  the gated filing path. Dedupe ->
   escalation threshold -> rate limits -> length caps and "user-reported
   (untrusted)" marking -> company_ops.hive_client.file_feedback_work.
 
@@ -113,7 +114,10 @@ class PmTools:
                 result = self.find_similar_signal(arguments.get("topic"))
             else:
                 result = self.file_feedback(
-                    ctx, arguments.get("topic"), arguments.get("summary")
+                    ctx,
+                    arguments.get("topic"),
+                    arguments.get("summary"),
+                    {k: arguments.get(k) for k in ("kind", *guard.DETAIL_FIELD_CAPS)},
                 )
         except ValueError as exc:
             result = {"error": str(exc)}
@@ -153,7 +157,13 @@ class PmTools:
             "escalation_threshold": ESCALATION_THRESHOLD,
         }
 
-    def file_feedback(self, ctx: dict[str, Any], topic: Any, summary: Any) -> dict[str, Any]:
+    def file_feedback(
+        self,
+        ctx: dict[str, Any],
+        topic: Any,
+        summary: Any,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         key = _topic(topic)
         if not isinstance(summary, str) or not summary.strip():
             raise ValueError("summary is required")
@@ -182,7 +192,7 @@ class PmTools:
             return {"outcome": "rate_limited"}
 
         title = guard.untrusted_title(key)
-        description = guard.untrusted_description(app_user_id, summary, quote)
+        description = guard.untrusted_description(app_user_id, summary, quote, details)
         metadata = {
             "source": "pm-agent",
             "app_user_id": guard.cap(app_user_id, guard.MAX_USER_ID_CHARS),

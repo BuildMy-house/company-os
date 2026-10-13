@@ -93,17 +93,88 @@ kubelet probes come from the node and are not subject to pod policies.
    layer.
 3. **Rate limits are in memory.** They reset on restart and assume one replica
    (`replicas: 1`, `Recreate`). A restart loop could briefly widen the budget.
-4. **One exchange at a time.** The request-context design serialises chats in
-   a pod; throughput is bounded by LLM latency (90 s timeout). Fine for v1
-   volumes; revisit before scaling out.
-5. **No chat history is passed to the model.** Each turn is stateless, which
-   limits cross-turn injection and cross-user leakage, at the cost of
-   conversational continuity. Full history is persisted in `pm_conversations`.
+4. **One exchange at a time, others queue.** The request-context design
+   serialises chats in a pod, so `chat_queue.py` puts an in-memory FIFO queue
+   in front of a single worker thread (the only writer of the context file).
+   Idle: `POST /chat` answers inline as before (`{reply}`, 55 s inline budget,
+   under the app proxy's 60 s). Busy: it returns at once `200
+   {status:"queued", ticket, position, reply}` and the client polls `GET
+   /chat/status?ticket=&app_user_id=` -> `{status:"queued",position}` |
+   `{status:"processing"}` | `{status:"done",reply}` | `{status:"expired"}`.
+   Limits: one live ticket per user (a second message returns the existing
+   place, or `status:"processing"` if the earlier one is running), max 5
+   waiting (beyond that `200 {status:"busy",reply}`), queued tickets expire
+   after 5 min or after 90 s without polling, results are kept 120 s. Ticket
+   ids are random tokens and status checks verify `app_user_id`; foreign or
+   unknown tickets look like `expired`. The queue is in memory: a restart
+   drops it (clients see `expired`). Queue length and wait/run times are
+   logged as JSON `chat_queue` events (no message content). Throughput is
+   still bounded by LLM latency; revisit before scaling out.
+5. **Bounded own-user history only.** The model sees at most the last 6
+   messages (300 chars each, 1500 total) of the CURRENT user's own
+   conversation, inside a separate nonce-delimited `PRIOR_CONVERSATION
+   (untrusted data)` block, so it can ask one follow-up question at a time.
+   The store query is scoped by conversation id AND app_user_id (never another
+   user's messages); tool rows, `[runtime error]` and refusal turns are
+   skipped; a history read failure degrades to no history. History is as
+   untrusted as the current message (the SOUL says so). Full history is
+   persisted in `pm_conversations`.
 6. **Unverified against a live Hermes image.** The toolset names in
    `disabled_toolsets`, `platform_toolsets: {api_server: [pm_tools]}`, and
    `tools.include` follow the Hermes docs and the existing `hermes/config.yaml`
    but were not run here. The build-time `command -v hermes` check and the
    hand-off checks below cover this.
+
+## Conversation quality, forms, and isolation
+
+**Forms.** `file_feedback_work` takes optional structured fields, all capped in
+`guard.py` and rendered by `guard.untrusted_description` into a fixed,
+still-untrusted Hive template. `kind=bug`: what_happened, expected, steps,
+area, frequency, severity, environment, workaround. `kind=feature`: goal,
+problem, who_when, workaround, importance, example, area. Callers passing only
+topic+summary are unchanged. SOUL.md tells the model to ask one short question
+at a time (max 3 follow-ups), file as soon as there is enough, accept "I don't
+know", and never ask for personal data, links or files.
+
+**64k-token context cap.** Hermes enforces a 64k minimum window
+(`MINIMUM_CONTEXT_LENGTH`; a smaller `model.context_length` makes agent init
+raise and every chat return 500), so `pm-agent/hermes-config.yaml` sets
+`model.context_length: 64000` as the cap. `compression.threshold_tokens:
+48000` makes compaction fire before the window fills (Hermes clamps its
+trigger down to this). The front door also enforces
+`guard.MAX_PROMPT_CHARS` (100,000 chars, at most 50,000 tokens at a
+conservative 2 chars/token) for persona + tool allowance + prompt, dropping
+the oldest history first. The resolver floor (`MIN_CONTEXT = 100_000`) is
+unchanged and above 64k, so the configured window never exceeds a picked
+model's real one.
+
+**Fresh context per conversation.** `PmStore.get_or_create_conversation` opens
+a NEW conversation row (new id) when the user's last one ended: 30 minutes
+idle, or a filing outcome (filed_new, already_known, escalated,
+recorded_unfiled) was returned and 2+ minutes have passed. History passed to
+the model is read per conversation id and user, so it never spans
+conversations or users. On the Hermes side nothing persists between requests:
+the api_server `/v1/chat/completions` path is stateless (we never send
+`X-Hermes-Session-Id`, so each request is its own session), memory, user
+profile, memory/skill nudges, the background review fork, the skills curator
+and the session_search/skills toolsets are disabled, and
+`sessions.retention_days: 1` prunes the session store (state.db). While the
+front door is idle (no request for 5 minutes, chat queue empty with no exchange running, no active context file),
+`pm-agent/state_wipe.py` also deletes `sessions/ memories/ skills/ cron/
+checkpoints/` under `$HERMES_HOME` (entrypoint.sh sets it to
+`/home/pmagent/.hermes`); config.yaml, SOUL.md and the open state.db are not
+touched. Residual: state.db rows of recent sessions exist for up to a day
+but are never read back into any prompt.
+
+**Live eval (not run in CI).** `tests/pm_agent_live_eval.py` drives scripted
+conversations (greeting, thanks/goodbye, vague bug, complete bug, feature,
+off-topic, injection) through the real front door and Hermes and prints
+PASS/FAIL, per-turn latency and prompt size against the 50 s / 64k-token
+budgets. Run it where the front door is reachable, e.g. in the pod:
+`PM_AGENT_URL=http://127.0.0.1:4200 python3 tests/pm_agent_live_eval.py`
+(optionally `PM_DATABASE_URL` to verify filings from `pm_conversations`, and
+`PM_AGENT_EVAL_ONLY=greeting,feature`). It files real (untrusted-marked) Hive
+items for the filing scenarios.
 
 ## Build and rollout hand-off (not done from this session)
 

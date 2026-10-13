@@ -127,5 +127,85 @@ class RenderTests(unittest.TestCase):
             rm.render_config("model: {}\n", "x")
 
 
+class ReasoningProbeTests(unittest.TestCase):
+    def _probe_body(self, **kw):
+        import io
+        import json
+        import urllib.request
+        from unittest import mock
+
+        seen = {}
+
+        def fake_urlopen(req, timeout=None):
+            seen["body"] = json.loads(req.data)
+            resp = io.BytesIO(b"{}")
+            resp.status = 200
+            resp.__enter__ = lambda self: self
+            resp.__exit__ = lambda *a: None
+            return resp
+
+        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+            rm.probe("m", "k", **kw)
+        return seen["body"]
+
+    def test_probe_sends_extra_body(self):
+        body = self._probe_body(extra_body=resolve_model.REASONING_EXTRA_BODY)
+        self.assertEqual(body["reasoning_effort"], "low")
+        self.assertEqual(body["max_tokens"], 1)
+        self.assertIn("tags", body)
+
+    def test_probe_without_extra_body_is_unchanged(self):
+        self.assertNotIn("reasoning_effort", self._probe_body())
+
+    def test_rejected_reasoning_effort_skips_model(self):
+        # probe False (HTTP 400 on the effort) => next candidate wins.
+        tmp = Path(tempfile.mkdtemp())
+        models = [model("a"), model("b")]
+        mid, _ = rm.resolve("k", tmp, prefs=PREFS, fetch=lambda: models, probe_fn=lambda m, k: m == "a")
+        self.assertEqual(mid, "a")
+
+    def test_wrapper_passes_reasoning_to_probe_via_env(self):
+        import os
+        from unittest import mock
+
+        captured = {}
+        with mock.patch.dict(os.environ, {"PM_AGENT_LLM_API_KEY": "k", "HERMES_HOME": str(Path(tempfile.mkdtemp()))}, clear=True), \
+                mock.patch.object(rm, "fetch_models", lambda base: [model("a")]), \
+                mock.patch.object(rm, "probe", lambda mid, k, base, tags, extra=None: captured.setdefault("extra", extra) or True), \
+                mock.patch.dict(os.environ, {"RESOLVER_BAKED_CONFIG": str(PM_AGENT_DIR / "hermes-config.yaml"),
+                                             "RESOLVER_STATE_DIR": tempfile.mkdtemp()}):
+            self.assertEqual(resolve_model.main([]), 0)
+        self.assertEqual(captured["extra"], resolve_model.REASONING_EXTRA_BODY)
+
+    def test_hermes_config_reasoning_effort_matches_probe(self):
+        import yaml
+
+        cfg = yaml.safe_load((PM_AGENT_DIR / "hermes-config.yaml").read_text())
+        self.assertEqual({"reasoning_effort": cfg["agent"]["reasoning_effort"]}, resolve_model.REASONING_EXTRA_BODY)
+        self.assertIn("tags", cfg["custom_providers"][0]["extra_body"])  # Nous 400s without tags
+
+    def test_no_conflicting_reasoning_forms(self):
+        # Regression: Nous 400s ("reasoningeffort" and "reasoning.effort" both
+        # provided) when the runtime's top-level reasoning_effort meets a nested
+        # extra_body.reasoning.
+        import yaml
+
+        cfg = yaml.safe_load((PM_AGENT_DIR / "hermes-config.yaml").read_text())
+        self.assertNotIn("reasoning", cfg["custom_providers"][0]["extra_body"])
+        body = self._probe_body(extra_body=resolve_model.REASONING_EXTRA_BODY)
+        self.assertFalse("reasoning" in body and "reasoning_effort" in body)
+        self.assertNotIn("reasoning", body)
+
+    def test_timeout_budget_is_nested(self):
+        import yaml
+        import agent  # noqa: PLC0415
+
+        cfg = yaml.safe_load((PM_AGENT_DIR / "hermes-config.yaml").read_text())
+        # app proxy (chat.ts) is 60s; front door must answer before it, and a
+        # single tool call must fit inside the front door's budget.
+        self.assertLess(agent.LLM_TIMEOUT_SECONDS, 60)
+        self.assertLess(cfg["mcp_servers"]["pm_tools"]["timeout"], agent.LLM_TIMEOUT_SECONDS)
+
+
 if __name__ == "__main__":
     unittest.main()

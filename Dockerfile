@@ -39,6 +39,40 @@ RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --s
   && mkdir -p /root/.hermes /opt/data \
   && command -v hermes
 
+# Hindsight memory provider (Hermes plugin `hindsight`; Hermes memory.provider
+# selects it in hermes/config.yaml). Baked at build time, never via
+# `hermes plugins install` at runtime: that clones from GitHub into
+# $HERMES_HOME/plugins, i.e. the /opt/data PVC, and would need egress + a git
+# clone on every fresh volume.
+#  - Plugin source is the exact commit pinned in this Hermes release's reviewed
+#    plugin catalog (plugin-catalog/hindsight.yaml, v1.2.1); sparse-fetched so
+#    the 170 MB monorepo is not downloaded. Bump together with the base digest.
+#  - Only hindsight-client is installed (local_external mode talks HTTP to the
+#    hindsight Deployment). hindsight-embed (the plugin's other declared dep) is
+#    only imported for local_embedded, which refuses to run as root and would
+#    put ~1 GB of embedding models inside the 2Gi hermes pod, so it is omitted.
+#    Pinned to 0.10.3: the plugin requires hindsight-client>=0.10.1,<1 and
+#    0.10.3 is the version of the hindsight server image in k8s/base/hindsight.
+#  - The hermes venv ships without pip; bootstrap it, install, then remove it.
+ARG HINDSIGHT_PLUGIN_SHA=d56c4acdf59c41957613d399094cdf8c489b060c
+RUN set -eux; \
+  PY=/opt/hermes/.venv/bin/python; \
+  $PY -m ensurepip >/dev/null; \
+  $PY -m pip install --no-cache-dir "hindsight-client==0.10.3"; \
+  $PY -m pip uninstall -y pip; \
+  d=/tmp/hindsight-src; rm -rf "$d"; mkdir "$d"; cd "$d"; \
+  git init -q; \
+  git remote add origin https://github.com/vectorize-io/hindsight; \
+  git config core.sparseCheckout true; \
+  echo "/hindsight-integrations/hermes/" > .git/info/sparse-checkout; \
+  git fetch -q --depth 1 --filter=blob:none origin "$HINDSIGHT_PLUGIN_SHA"; \
+  git checkout -q FETCH_HEAD; \
+  test "$(git rev-parse HEAD)" = "$HINDSIGHT_PLUGIN_SHA"; \
+  dest=/opt/hermes/plugins/memory/hindsight; rm -rf "$dest"; mkdir -p "$dest"; \
+  cp hindsight-integrations/hermes/*.py hindsight-integrations/hermes/plugin.yaml "$dest"/; \
+  rm -rf "$d"; \
+  PYTHONPATH=/opt/hermes $PY -c "import hindsight_client, plugins.memory.hindsight"
+
 COPY . /opt/company-ops/
 RUN chmod 755 /opt/company-ops/scripts/hive-member-mcp.js
 COPY hermes/config.yaml /opt/data/config.yaml
