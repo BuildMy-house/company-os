@@ -37,6 +37,7 @@ from typing import Any
 import chat_queue
 import guard
 import hive_presence
+import state_wipe
 import tools as pm_tools
 from company_ops.pm_store import PmStore
 
@@ -145,6 +146,30 @@ class ChatService:
     def close(self) -> None:
         self.queue.close()
 
+    def _history(self, conversation_id: str, app_user_id: str) -> list[tuple[str, str]]:
+        """This user's own recent turns (oldest first), refusals/errors skipped.
+
+        Read through the user-scoped store call, so another user's messages
+        can never be returned. Failure degrades to no history, never an error.
+        """
+        try:
+            rows = self.store.recent_messages(
+                conversation_id, app_user_id, guard.HISTORY_MAX_MESSAGES * 4
+            )
+        except Exception:  # noqa: BLE001 - history is best-effort context
+            log.exception("failed to load conversation history")
+            return []
+        turns: list[tuple[str, str]] = []
+        for role, content in rows:
+            if role not in ("user", "assistant") or not isinstance(content, str):
+                continue
+            if role == "assistant" and (
+                content == "[runtime error]" or content == guard.REFUSAL
+            ):
+                continue
+            turns.append((role, content))
+        return turns[-guard.HISTORY_MAX_MESSAGES :]
+
     def handle(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         app_user_id = payload.get("app_user_id")
         message = payload.get("message")
@@ -162,6 +187,7 @@ class ChatService:
         if not self.chat_limiter.allow(app_user_id):
             return 429, {"error": "rate limited", "reply": guard.RATE_LIMITED_REPLY}
 
+        state_wipe.touch_activity()
         clean = guard.normalize_user_text(message)
         if not clean:
             return 400, {"error": "message is required"}
@@ -194,10 +220,13 @@ class ChatService:
         """Run one exchange. Called only from the queue's worker thread."""
         app_user_id, clean = ticket.user, ticket.message
         conversation_id = self.store.get_or_create_conversation(app_user_id)
+        # History is read inside the worker-run exchange, before this turn is
+        # recorded, scoped to this user's own current conversation.
+        history = self._history(conversation_id, app_user_id)
         self.store.record_message(conversation_id, app_user_id, "user", clean)
         pm_tools.write_context(self.context_path, app_user_id, conversation_id, clean)
         try:
-            raw = self.llm(guard.wrap_untrusted(clean))
+            raw = self.llm(guard.wrap_untrusted(clean, history))
         except (OSError, ValueError, KeyError, IndexError, urllib.error.URLError):
             log.exception("hermes runtime call failed")
             if looks_like_model_unavailable(sys.exc_info()[1] or Exception()):
@@ -341,6 +370,13 @@ def main() -> None:
         secrets_to_hide=secrets_to_hide,
     )
     stop = hive_presence.start(hive_url)
+    threading.Thread(
+        target=state_wipe.run_when_idle,
+        args=(os.environ.get("HERMES_HOME", "/home/pmagent/.hermes"), service.context_path, stop),
+        kwargs={"is_idle": service.queue.is_idle},
+        name="state-wipe",
+        daemon=True,
+    ).start()
     if os.environ.get("PM_AGENT_LLM_API_KEY"):
         threading.Thread(target=model_watchdog, name="model-watchdog", daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", port), make_handler(service))

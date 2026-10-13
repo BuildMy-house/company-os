@@ -33,6 +33,11 @@ model:
   # this line at boot (pm-agent/resolve_model.py).
   default: inclusionai/ling-3.1-flash
   provider: custom:pm_llm
+  # Hard 50k-token cap on the model context (Hermes model.context_length, "caps
+  # the detected value"; cli-config.yaml.example). The front door also
+  # enforces a prompt-size budget (guard.MAX_PROMPT_CHARS). resolve_model.py
+  # still only picks models with a window >= 100k, so the cap always applies.
+  context_length: 50000
 
 custom_providers:
   # Nous inference API, same provider as the Hermes runtime default. One
@@ -54,6 +59,35 @@ plugins:
 memory:
   memory_enabled: false
   user_profile_enabled: false
+  nudge_interval: 0
+
+# Nothing is learned or carried between conversations or users: no skill
+# creation nudges, no background memory/skill review fork, no skills curator.
+# (/v1/chat/completions is stateless and we never send X-Hermes-Session-Id, so
+# every request is its own session; the front door passes the user's own
+# history in the prompt.) Keys verified against NousResearch/hermes-agent
+# cli-config.yaml.example and docs/user-guide/features/curator.md.
+skills:
+  creation_nudge_interval: 0
+curator:
+  enabled: false
+auxiliary:
+  background_review:
+    enabled: false
+
+# Compact well before the 50k cap: threshold_tokens fires at the LOWER of the
+# ratio threshold (floored at 0.75 x 50k for small windows) and this absolute
+# count.
+compression:
+  enabled: true
+  threshold_tokens: 30000
+
+# Hermes keeps a session store (state.db) of ended sessions; prune aggressively.
+# agent.py's idle wiper additionally clears sessions/memories dirs
+# (pm-agent/state_wipe.py).
+sessions:
+  auto_prune: true
+  retention_days: 1
 
 terminal:
   backend: local

@@ -12,6 +12,37 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# A conversation ends (the next message starts a NEW row, so model-visible
+# history never spans conversations) after this much inactivity, or once a
+# feedback filing outcome was returned and a gap has passed.
+CONVERSATION_IDLE_SECONDS = 30 * 60
+FILED_GAP_SECONDS = 120
+FILING_OUTCOMES = ("filed_new", "already_known", "escalated", "recorded_unfiled")
+
+
+def conversation_ended(messages: list, idle_seconds: float) -> bool:
+    """True when the next message must open a fresh conversation."""
+    if idle_seconds >= CONVERSATION_IDLE_SECONDS:
+        return True
+    if idle_seconds < FILED_GAP_SECONDS:
+        return False
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") != "tool":
+            continue
+        try:
+            entry = json.loads(str(m.get("content")))
+        except ValueError:
+            continue
+        if (
+            isinstance(entry, dict)
+            and entry.get("tool") == "file_feedback_work"
+            and isinstance(entry.get("result"), dict)
+            and entry["result"].get("outcome") in FILING_OUTCOMES
+        ):
+            return True
+    return False
+
+
 class PmStore:
     def __init__(self, dsn: str | None = None) -> None:
         if dsn is None:
@@ -27,14 +58,18 @@ class PmStore:
 
     def get_or_create_conversation(self, app_user_id: str) -> str:
         cur = self.conn.execute(
-            "SELECT id FROM company.pm_conversations "
+            "SELECT id, messages, "
+            "       extract(epoch FROM (now() - last_message_at)) AS idle_s "
+            "FROM company.pm_conversations "
             "WHERE app_user_id = %s "
             "ORDER BY started_at DESC "
             "LIMIT 1",
             (app_user_id,),
         )
         row = cur.fetchone()
-        if row is not None:
+        if row is not None and not conversation_ended(
+            row["messages"] or [], float(row["idle_s"] or 0)
+        ):
             return str(row["id"])
         cur = self.conn.execute(
             "INSERT INTO company.pm_conversations (app_user_id) "
@@ -66,6 +101,28 @@ class PmStore:
                 f"{app_user_id!r}"
             )
         return conversation_id
+
+    def recent_messages(
+        self, conversation_id: str, app_user_id: str, limit: int
+    ) -> list[tuple[str, str]]:
+        """Last `limit` (role, content) messages of this user's conversation.
+
+        Scoped by BOTH conversation id and app_user_id, so it can only ever
+        return the requesting user's own conversation. Oldest first.
+        """
+        cur = self.conn.execute(
+            "SELECT messages FROM company.pm_conversations "
+            "WHERE id = %s AND app_user_id = %s",
+            (conversation_id, app_user_id),
+        )
+        row = cur.fetchone()
+        messages = (row or {}).get("messages") or []
+        out = [
+            (str(m.get("role")), str(m.get("content")))
+            for m in messages
+            if isinstance(m, dict)
+        ]
+        return out[-limit:] if limit > 0 else []
 
     def find_similar_signal(self, normalized_topic: str) -> dict[str, object] | None:
         cur = self.conn.execute(

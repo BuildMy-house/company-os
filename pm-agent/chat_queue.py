@@ -152,6 +152,11 @@ class ChatQueue:
         with self._cond:
             return len(self._pending)
 
+    def is_idle(self) -> bool:
+        """No queued tickets and no exchange running."""
+        with self._cond:
+            return not self._pending and self._active is None
+
     # -- internals ---------------------------------------------------------
 
     def _position(self, ticket: Ticket) -> int:
