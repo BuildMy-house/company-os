@@ -97,3 +97,13 @@ body). Pick one:
 - `scripts/opencode-plugins/axiom-usage.js` — ships full usage records to
   the same dataset.
 - `hive/lib/hive/telemetry.ex` — Elixir-side emitter, out of scope here.
+
+## Where the 258 columns come from
+
+Counted from `['bmh-company'] | getschema` (2026-10-14): 107 `attributes.*`
+plus `resource.*`, `scope.*`, `telemetry.*` and `tokens.*` come from Claude
+Code's own OTLP export (`scripts/engineering-entrypoint.sh`); 76 `args.*`
+come from the manager's flattened `tool_call` args (fixed by the sanitizer
+above). All 18 allowlisted fields were confirmed present in that schema.
+The OTLP export ignores `AXIOM_DATASET`; set `AXIOM_OTEL_DATASET` to send it
+to its own dataset (default stays `bmh-company`).

@@ -49,8 +49,10 @@ if [ -n "${AXIOM_TOKEN:-}" ]; then
   # api.axiom.co domain — ingest/OTLP against the wrong domain 400s (or is
   # silently dropped by exporters that swallow errors), confirmed 2026-09-18
   # while debugging the axiom_usage Hermes plugin's own identical bug.
+  # Claude Code's OTLP export adds ~107 attributes.* columns that grow without bound;
+  # set AXIOM_OTEL_DATASET to give it its own dataset instead of filling bmh-company (256-field cap).
   export OTEL_EXPORTER_OTLP_ENDPOINT=https://eu-central-1.aws.edge.axiom.co
-  export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${AXIOM_TOKEN},X-Axiom-Dataset=bmh-company"
+  export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${AXIOM_TOKEN},X-Axiom-Dataset=${AXIOM_OTEL_DATASET:-bmh-company}"
   export OTEL_RESOURCE_ATTRIBUTES="service.name=${AXIOM_SERVICE_NAME:-${AGENT_FLAVOR:-agent}-code},deployment.environment.name=${DEPLOYMENT_ENVIRONMENT:-production},role=${AGENT_ROLE:-manager}"
   # Ship full prompt/response text, not just usage counters — same
   # content-visible decision (2026-09-18) applied to the Hermes/OpenCode
