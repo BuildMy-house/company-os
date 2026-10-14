@@ -158,7 +158,7 @@ let upstreamCancelTool = null;
 // Conservative allowlist of long-standing scalar fields (plus the base fields
 // emitTelemetry always sets). NOT verified against the live dataset schema —
 // check `['bmh-company'] | getschema` before extending it. Axiom rejects a whole event if it introduces ANY
-// new column (dataset is at its 257-column limit), so every other key — new
+// new column (dataset is over its 256-field limit: 258/256 in the Axiom UI), so every other key — new
 // fields like attempt/args/purpose or any non-scalar — folds into `extra`.
 export const TELEMETRY_FIELD_ALLOWLIST = Object.freeze([
   "_time", "service", "environment", "role",

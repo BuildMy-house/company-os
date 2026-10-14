@@ -6,8 +6,9 @@
 adding 'attempt' to dataset fields would exceed the column limit of 257
 ```
 
-Axiom HTTP 400 from `POST /v1/ingest/bmh-company`. The dataset already has
-258 fields, so **any event that introduces a new field is rejected as a
+Axiom HTTP 400 from `POST /v1/ingest/bmh-company`. The Axiom UI shows the
+dataset at **258/256 fields** (limit 256; the error text above is Axiom's
+own wording and quotes 257), so **any event that introduces a new field is rejected as a
 whole** — the event is dropped entirely, including the failure events meant
 to explain what went wrong. One new key can silently stop an entire event
 family from ever landing.
