@@ -155,16 +155,40 @@ let nextId = 1_000_000;
 // cancel/stop/kill tool we use it to reap timed-out assessment runs).
 let upstreamCancelTool = null;
 
-function emitTelemetry(event) {
+const redactSecrets = (value) => String(value || "")
+  .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+  .replace(/https?:\/\/[^\s"'<>]+/gi, "[url]");
+
+// One log line per distinct (status+body) per minute: a retry loop hitting the
+// same Axiom rejection must not flood stderr, but a NEW reason must surface.
+const ingestRejectionLoggedAt = new Map();
+
+export function shouldLogIngestRejection(key, now, state) {
+  const last = state.get(key);
+  if (last !== undefined && now - last < 60_000) return false;
+  state.set(key, now);
+  if (state.size > 100) {
+    for (const [entry, at] of state) if (now - at >= 60_000) state.delete(entry);
+  }
+  return true;
+}
+
+export function emitTelemetry(event) {
   if (!process.env.AXIOM_TOKEN) return;
-  fetch(`https://eu-central-1.aws.edge.axiom.co/v1/ingest/${process.env.AXIOM_DATASET || "bmh-company"}`, {
+  return fetch(`https://eu-central-1.aws.edge.axiom.co/v1/ingest/${process.env.AXIOM_DATASET || "bmh-company"}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.AXIOM_TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify([{ _time: new Date().toISOString(), service: process.env.AXIOM_SERVICE_NAME || "engineering-manager", environment: process.env.DEPLOYMENT_ENVIRONMENT || "local", role: "manager", ...event }]),
-  }).then((response) => {
+  }).then(async (response) => {
     // fetch resolves on 4xx/5xx; without this a rejected ingest (bad token,
-    // oversized payload) silently drops the event.
-    if (!response.ok) console.error(`telemetry ingest rejected: HTTP ${response.status} (event=${event?.event} state=${event?.state})`);
+    // dataset column limit) silently drops the event — including the very
+    // failure events meant to explain a broken hive subscription.
+    if (response.ok) return;
+    let body = "";
+    try { body = await response.text(); } catch {}
+    body = redactSecrets(body).slice(0, 300);
+    if (!shouldLogIngestRejection(`${response.status}:${body}`, Date.now(), ingestRejectionLoggedAt)) return;
+    console.error(`telemetry ingest rejected: HTTP ${response.status} (event=${event?.event} state=${event?.state}) body=${JSON.stringify(body)}`);
   }).catch((error) => console.error(`telemetry ingest failed: ${error?.message} (event=${event?.event} state=${event?.state})`));
 }
 
@@ -463,6 +487,11 @@ export function errorTelemetry(error) {
     http_status: details?.http_status || details?.status || error?.status || null,
     error_stage: details?.stage || null,
   };
+}
+
+export function formatSubscriptionFailure(error, attempt, delayMs) {
+  const { error: message, error_name: name, error_code: code, error_cause: cause, http_status: status, error_stage: stage } = errorTelemetry(error);
+  return `hive subscription failure: attempt=${attempt} delay_ms=${delayMs} name=${JSON.stringify(name)} message=${JSON.stringify(message)} code=${JSON.stringify(code)} cause=${JSON.stringify(cause)} http_status=${JSON.stringify(status ?? null)} stage=${JSON.stringify(stage ?? null)}`;
 }
 
 export async function completeWithRetry(hiveCallDep, args, { maxAttempts = 8, wait = delay, random = Math.random, onFailure = () => {} } = {}) {
@@ -1029,6 +1058,7 @@ async function subscribeHive() {
   } catch (error) {
     hiveRetryAttempt += 1;
     const delayMs = retryDelayMs(hiveRetryAttempt);
+    console.error(formatSubscriptionFailure(error, hiveRetryAttempt, delayMs));
     emitTelemetry({ event: "hive_subscription", state: "failed", agent_id: agentId, attempt: hiveRetryAttempt, duration_ms: Date.now() - startedAt, ...errorTelemetry(error) });
     emitTelemetry({ event: "hive_subscription", state: "reconnecting", agent_id: agentId, attempt: hiveRetryAttempt, delay_ms: delayMs });
     setTimeout(subscribeHive, delayMs);

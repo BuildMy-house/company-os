@@ -21,6 +21,9 @@ import {
   tierAffinityMultiplier,
   taskTierOf,
   normalizeTier,
+  formatSubscriptionFailure,
+  shouldLogIngestRejection,
+  emitTelemetry,
 } from "./engineering-manager-mcp.js";
 
 // Checks execute at top level when this file is loaded, so `node --test`
@@ -783,6 +786,60 @@ check("runHiveWork gives up on a bid window that never closes instead of looping
 });
 
 const failures = [];
+
+check("formatSubscriptionFailure is one line with safe fields and no secrets", () => {
+  const error = Object.assign(new Error("connect failed: Bearer tok-secret-987 to https://hive.example.com/work"), { code: "ECONNRESET", status: 502 });
+  error.cause = new Error("socket closed unexpectedly");
+  const line = formatSubscriptionFailure(error, 3, 4_000);
+  assert.equal(line.split("\n").length, 1);
+  for (const field of ["attempt=3", "delay_ms=4000", "name=", "message=", "code=", "cause=", "http_status=", "stage="]) {
+    assert.ok(line.includes(field), `missing ${field} in ${line}`);
+  }
+  assert.ok(!line.includes("tok-secret-987"), "token must be redacted");
+  assert.ok(!line.includes("https://"), "url must be redacted");
+});
+
+check("shouldLogIngestRejection allows first, suppresses repeats for 60s, per key", () => {
+  const state = new Map();
+  assert.equal(shouldLogIngestRejection("400:same", 1_000, state), true);
+  assert.equal(shouldLogIngestRejection("400:same", 60_999, state), false);
+  assert.equal(shouldLogIngestRejection("400:same", 61_000, state), true);
+  assert.equal(shouldLogIngestRejection("401:same", 61_001, state), true);
+});
+
+check("emitTelemetry logs one redacted, truncated rejection body", async () => {
+  const token = "axiom-token-secret-1";
+  const previousToken = process.env.AXIOM_TOKEN;
+  const previousFetch = globalThis.fetch;
+  const previousError = console.error;
+  const lines = [];
+  process.env.AXIOM_TOKEN = token;
+  console.error = (...args) => lines.push(args.join(" "));
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 400,
+    text: async () => `adding 'attempt' to dataset fields would exceed the column limit of 257; auth Bearer ${token} at https://eu-central-1.aws.edge.axiom.co/v1/ingest/bmh-company ${"x".repeat(600)}`,
+  });
+  try {
+    await emitTelemetry({ event: "ingest_reject_probe", state: "failed" });
+    await emitTelemetry({ event: "ingest_reject_probe", state: "failed" });
+  } finally {
+    if (previousToken === undefined) delete process.env.AXIOM_TOKEN;
+    else process.env.AXIOM_TOKEN = previousToken;
+    globalThis.fetch = previousFetch;
+    console.error = previousError;
+  }
+  assert.equal(lines.length, 1, `expected one rejection line, got ${JSON.stringify(lines)}`);
+  const line = lines[0];
+  assert.match(line, /telemetry ingest rejected: HTTP 400 \(event=ingest_reject_probe state=failed\) body=/);
+  assert.ok(!line.includes(token), "token must be redacted");
+  assert.ok(!line.includes("https://eu-central-1"), "url must be redacted");
+  assert.ok(line.includes("Bearer [redacted]"));
+  const body = line.match(/ body=(".*")$/)?.[1];
+  assert.ok(body, `missing body in ${line}`);
+  assert.ok(JSON.parse(body).length <= 300, "body must be truncated to 300 chars");
+});
+
 for (const [name, fn] of checks) {
   try {
     await fn();
