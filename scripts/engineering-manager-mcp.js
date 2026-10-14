@@ -21,11 +21,21 @@ const upstream = isMain
   })
   : null;
 
+// ai-cli routes by model prefix: an OpenCode model without "oc-" silently runs
+// on Claude and fails. Refuse to start rather than decline every task later.
+export function validateRunner(agent, model) {
+  if (agent === "opencode" && model !== "opencode" && !model?.startsWith("oc-")) {
+    throw new Error(`RUNNER_MODEL "${model}" is invalid for RUNNER_AGENT=opencode: ai-cli would route it to Claude. Use oc-<provider>/<model>, e.g. oc-opencode/mimo-v2.6-flash-free.`);
+  }
+  return model;
+}
+const RUNNER_AGENT = process.env.RUNNER_AGENT || (process.env.AGENT_FLAVOR === "opencode" ? "opencode" : "claude");
+
 const MANAGER = {
   flavor: process.env.AGENT_FLAVOR || "claude",
   role: process.env.AGENT_ROLE || "manager",
-  agent: process.env.RUNNER_AGENT || (process.env.AGENT_FLAVOR === "opencode" ? "opencode" : "claude"),
-  model: process.env.RUNNER_MODEL || (process.env.AGENT_FLAVOR === "opencode" ? "oc-opencode/mimo-v2.6-flash-free" : "sonnet"),
+  agent: RUNNER_AGENT,
+  model: validateRunner(RUNNER_AGENT, process.env.RUNNER_MODEL || (process.env.AGENT_FLAVOR === "opencode" ? "oc-opencode/mimo-v2.6-flash-free" : "sonnet")),
   reasoning_effort: process.env.RUNNER_REASONING || "medium",
   auto_compact: "200k",
 };
@@ -732,11 +742,17 @@ async function runPromptToCompletion(prompt, context) {
   if (reply.error || started?.status !== "started" || !Number.isInteger(started.pid)) {
     throw new Error(reply.error?.message || "engineering runner did not return a process id");
   }
+  if (started.agent && started.agent !== MANAGER.agent) {
+    throw new Error(`ai-cli ran agent "${started.agent}" but RUNNER_AGENT is "${MANAGER.agent}" (model "${MANAGER.model}")`);
+  }
   const deadline = Date.now() + FIT_ASSESSMENT_TIMEOUT_MS;
   for (;;) {
     await delay(2000);
     const payload = toolPayload(await boundedUpstream("get_result", { pid: started.pid, verbose: true }, context));
-    if (payload?.status === "failed" || payload?.status === "killed") throw new Error(`assessment run ${payload.status}`);
+    if (payload?.status === "failed" || payload?.status === "killed") {
+      const detail = payload.agentOutput?.message ?? payload.error;
+      throw new Error(`assessment run ${payload.status}${detail ? `: ${String(detail).slice(0, 300)}` : ""}`);
+    }
     if (payload?.status === "completed") return outputText(payload);
     if (Date.now() >= deadline) {
       if (upstreamCancelTool) await upstreamCall(upstreamCancelTool, { pid: started.pid }, context).catch(() => {});

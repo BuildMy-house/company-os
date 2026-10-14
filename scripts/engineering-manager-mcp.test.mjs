@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import {
+  validateRunner,
   buildFitPrompt,
   parseAssessment,
   isValidAssessment,
@@ -918,3 +919,8 @@ if (failures.length > 0) {
   throw new Error(`${failures.length}/${checks.length} checks failed: ${failures.join(" | ")}`);
 }
 console.log(`# ${checks.length}/${checks.length} checks passed`);
+
+assert.equal(validateRunner("opencode", "oc-opencode/mimo-v2.6-flash-free"), "oc-opencode/mimo-v2.6-flash-free");
+assert.equal(validateRunner("opencode", "opencode"), "opencode");
+assert.equal(validateRunner("claude", "sonnet"), "sonnet");
+assert.throws(() => validateRunner("opencode", "opencode/mimo-v2.6-flash-free"), /would route it to Claude/);
