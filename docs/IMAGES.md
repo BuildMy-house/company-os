@@ -83,5 +83,5 @@ stays identical; neutral overrides live in the example overlays.
 
 | Workload | Repo | Live (2026-10-13) | Status |
 |---|---|---|---|
-| engineering-opencode-direct | `company-os-engineering:hive-complete-1e5f382@sha256:26f13cb2ccf0e6d80089a2b384f37b67d2aeb2498af418f0738d1b84ad0cbf10` | `company-os-engineering:engineering-6b7dcfe5244d@sha256:4762d2c23118e491bf2d0de3191d6c32e9fc59faeb2354442640900b6ae7a873` | repo is ahead: pending rollout via in-cluster agent |
+| engineering-opencode-direct | `company-os-engineering:hive-complete-1e5f382@sha256:26f13cb2ccf0e6d80089a2b384f37b67d2aeb2498af418f0738d1b84ad0cbf10` | `company-os-engineering:hive-complete-1e5f382@sha256:26f13cb2ccf0e6d80089a2b384f37b67d2aeb2498af418f0738d1b84ad0cbf10` (verified 2026-10-14; matches repo) | in sync: no pending rollout |
 | hermes-gateway | `company-os@sha256:89b92c0be5cc05aa23d10043c89a5dcb3de6a925783f33321952985d8d761b4b` | `company-os:hermes-6b7dcfe5244d@sha256:e9c3462c4ee90cf33c6b62e05fea3fa92fdc3d76c6e41185d5a27f268b4263a2` | live is ahead: applying the repo would roll it back; sync proposed on branch `feat/sync-hermes-gateway-live-image` (not merged, changes the prod render). The two backup CronJobs keep the `89b92c0b…` digest (live matches). |

@@ -295,7 +295,7 @@ async function waitForWork(timeoutSeconds = 900) {
       signal: controller.signal,
       headers: { accept: "text/event-stream" },
     });
-    if (!response.ok || !response.body) throw new Error(`Hive work stream returned ${response.status}`);
+    if (!response.ok || !response.body) throw Object.assign(new Error(`Hive work stream returned ${response.status}`), { status: response.status });
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.includes("text/event-stream")) throw new Error(`unexpected work stream content-type: ${contentType}`);
     reportSubscription("connected", { duration_ms: Date.now() - startedAt, stream: "work" });
@@ -304,7 +304,11 @@ async function waitForWork(timeoutSeconds = 900) {
     let buffer = "";
     while (true) {
       const { value, done } = await reader.read();
-      if (done) throw new Error("Hive work stream closed");
+      if (done) {
+        // Our own timeout aborts the stream — idle, not a failure.
+        if (controller.signal.aborted) return null;
+        throw new Error("Hive work stream closed");
+      }
       buffer += decoder.decode(value, { stream: true });
       const frames = buffer.split("\n\n");
       buffer = frames.pop() || "";
@@ -313,6 +317,12 @@ async function waitForWork(timeoutSeconds = 900) {
         if (data) return JSON.parse(data);
       }
     }
+  } catch (error) {
+    if (controller.signal.aborted) return null;
+    const details = safeErrorDetails(error, "hive_next_work");
+    console.error(`[hive-member] hive_next_work failed: ${JSON.stringify(details)}`);
+    reportSubscription("failed", details);
+    throw error;
   } finally {
     clearTimeout(timer);
   }
