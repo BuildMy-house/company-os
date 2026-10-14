@@ -4,3 +4,4 @@ kind: Kustomization
 resources:
   - postgres-backup.yaml
   - hermes-data-backup.yaml
+  - hindsight-data-backup.yaml

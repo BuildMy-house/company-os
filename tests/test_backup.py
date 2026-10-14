@@ -248,6 +248,57 @@ class RunHermesBackupTests(unittest.TestCase):
         )
 
 
+class RunHindsightBackupTests(unittest.TestCase):
+    def test_archive_dir_skips_excluded_top_level_entries(self):
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as out:
+            for sub in ("installation", "instances"):
+                os.makedirs(os.path.join(src, sub))
+                with open(os.path.join(src, sub, "f"), "w") as fh:
+                    fh.write(sub)
+            path = backup.archive_dir(
+                src, os.path.join(out, "a.tar.gz"), backup.HINDSIGHT_EXCLUDE
+            )
+            with tarfile.open(path) as tar:
+                names = tar.getnames()
+        self.assertIn("instances/f", names)
+        self.assertFalse([n for n in names if n.startswith("installation")])
+
+    def test_success_uploads_under_hindsight_prefix_excluding_binaries(self):
+        with tempfile.TemporaryDirectory() as data_dir, \
+             tempfile.TemporaryDirectory() as work_dir:
+            with mock.patch.dict(os.environ, _REQUIRED_ENV, clear=True), \
+                 mock.patch("company_ops.backup.archive_dir") as archive, \
+                 mock.patch("company_ops.backup.upload_to_r2") as upload, \
+                 mock.patch("company_ops.backup.enforce_retention",
+                            return_value=[]) as retention, \
+                 mock.patch("company_ops.backup.os.path.getsize", return_value=99), \
+                 mock.patch("company_ops.backup.os.remove"):
+                summary = backup.run_hindsight_backup(
+                    data_dir, work_dir=work_dir, keep_last=3
+                )
+        self.assertEqual(archive.call_args[0][2], backup.HINDSIGHT_EXCLUDE)
+        self.assertTrue(upload.call_args[0][2].startswith("hindsight-data-backups/"))
+        self.assertEqual(retention.call_args[0][1:3], ("hindsight-data-backups/", 3))
+        self.assertRegex(
+            summary["uploaded_key"],
+            r"^hindsight-data-backups/hindsight-data-\d{8}-\d{6}\.tar\.gz$",
+        )
+
+    def test_raises_when_data_dir_missing(self):
+        with mock.patch.dict(os.environ, _REQUIRED_ENV, clear=True):
+            with self.assertRaises(ValueError) as ctx:
+                backup.run_hindsight_backup("/nonexistent/hindsight")
+        self.assertIn("hindsight data dir", str(ctx.exception))
+
+    def test_prefixes_do_not_nest(self):
+        prefixes = [backup.BACKUP_PREFIX, backup.HERMES_BACKUP_PREFIX,
+                    backup.HINDSIGHT_BACKUP_PREFIX]
+        for a in prefixes:
+            for b in prefixes:
+                if a != b:
+                    self.assertFalse(b.startswith(a))
+
+
 class RunRestoreTests(unittest.TestCase):
     def test_restore_plain_sql(self):
         with mock.patch("company_ops.backup.subprocess.run") as run_mock:

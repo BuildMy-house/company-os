@@ -3,7 +3,8 @@
 Also archives the hermes-data PVC contents (Hermes state/memory/sessions)
 as a tar.gz under a distinct top-level prefix. Run directly via
 ``python -m company_ops.backup`` (postgres) or with ``--hermes-data DIR``
-(hermes-data archive), or import ``run_backup``/``run_hermes_backup``.
+(hermes-data archive), ``--hindsight-data DIR`` (Hindsight pg0 archive), or
+import ``run_backup``/``run_hermes_backup``/``run_hindsight_backup``.
 """
 
 from __future__ import annotations
@@ -23,6 +24,10 @@ BACKUP_PREFIX = "backups/"
 # Must stay top-level: enforce_retention on "backups/" lists all nested keys,
 # so a nested prefix would get deleted by the postgres retention pass.
 HERMES_BACKUP_PREFIX = "hermes-data-backups/"
+HINDSIGHT_BACKUP_PREFIX = "hindsight-data-backups/"
+# pg0 (Hindsight's embedded postgres) keeps re-downloadable server binaries in
+# installation/; only instances/ (the data directory) holds state worth saving.
+HINDSIGHT_EXCLUDE = frozenset({"installation"})
 
 
 def run_pg_dump(dsn: str, dump_path: str, schemas: list[str] = SCHEMAS) -> None:
@@ -73,14 +78,17 @@ def compress_file(path: str) -> str:
     return gz_path
 
 
-def archive_dir(data_dir: str, archive_path: str) -> str:
+def archive_dir(data_dir: str, archive_path: str, exclude: frozenset[str] = frozenset()) -> str:
     """Create a gzipped tar of data_dir at archive_path (stdlib tarfile).
 
     Returns the archive path. Relative entry names (no leading '/') so a
-    restore unpacks into the target directory directly.
+    restore unpacks into the target directory directly. Top-level entry names
+    in ``exclude`` are skipped.
     """
     with tarfile.open(archive_path, "w:gz") as tar:
         for entry in sorted(Path(data_dir).iterdir()):
+            if entry.name in exclude:
+                continue
             tar.add(entry, arcname=entry.name)
     return archive_path
 
@@ -189,20 +197,18 @@ def run_backup(
     }
 
 
-def run_hermes_backup(
+def _run_dir_backup(
     data_dir: str,
-    r2_endpoint: str | None = None,
-    r2_bucket: str | None = None,
-    r2_access_key_id: str | None = None,
-    r2_secret_access_key: str | None = None,
-    keep_last: int | None = None,
-    work_dir: str | None = None,
+    label: str,
+    prefix: str,
+    exclude: frozenset[str],
+    r2_endpoint: str | None,
+    r2_bucket: str | None,
+    r2_access_key_id: str | None,
+    r2_secret_access_key: str | None,
+    keep_last: int | None,
+    work_dir: str | None,
 ) -> dict:
-    """Archive data_dir as tar.gz and upload under HERMES_BACKUP_PREFIX.
-
-    Same env vars / keep_last default as run_backup (retention policy
-    matches the postgres backups: R2_BACKUP_KEEP_LAST, default 7).
-    """
     r2_endpoint = _require(r2_endpoint, "R2_ENDPOINT")
     r2_bucket = _require(r2_bucket, "R2_BUCKET")
     access_key_id = _require(r2_access_key_id, "R2_ACCESS_KEY_ID")
@@ -212,19 +218,19 @@ def run_hermes_backup(
     if keep_last < 0:
         raise ValueError("keep_last must be >= 0")
     if not Path(data_dir).is_dir():
-        raise ValueError(f"hermes data dir does not exist: {data_dir}")
+        raise ValueError(f"{label} data dir does not exist: {data_dir}")
 
     work_dir_path = Path(work_dir or tempfile.gettempdir())
     work_dir_path.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    filename = f"hermes-data-{stamp}.tar.gz"
+    filename = f"{label}-data-{stamp}.tar.gz"
     archive_path = work_dir_path / filename
 
-    archive_dir(data_dir, str(archive_path))
-    key = f"{HERMES_BACKUP_PREFIX}{filename}"
+    archive_dir(data_dir, str(archive_path), exclude)
+    key = f"{prefix}{filename}"
     upload_to_r2(str(archive_path), r2_bucket, key, r2_endpoint, access_key_id, secret_access_key)
     deleted_keys = enforce_retention(
-        r2_bucket, HERMES_BACKUP_PREFIX, keep_last, r2_endpoint, access_key_id, secret_access_key
+        r2_bucket, prefix, keep_last, r2_endpoint, access_key_id, secret_access_key
     )
 
     bytes_uploaded = os.path.getsize(archive_path)
@@ -234,6 +240,34 @@ def run_hermes_backup(
         "deleted_keys": deleted_keys,
         "bytes_uploaded": bytes_uploaded,
     }
+
+
+def run_hermes_backup(data_dir: str, **kwargs) -> dict:
+    """Archive data_dir as tar.gz and upload under HERMES_BACKUP_PREFIX.
+
+    Same env vars / keep_last default as run_backup (retention policy
+    matches the postgres backups: R2_BACKUP_KEEP_LAST, default 7).
+    """
+    return _run_dir_backup(data_dir, "hermes", HERMES_BACKUP_PREFIX, frozenset(), **_dir_args(kwargs))
+
+
+def run_hindsight_backup(data_dir: str, **kwargs) -> dict:
+    """Archive the Hindsight pg0 dir (minus binaries) under HINDSIGHT_BACKUP_PREFIX.
+
+    The copy is crash-consistent (taken while postgres runs); restoring it
+    replays WAL like a normal crash recovery.
+    """
+    return _run_dir_backup(
+        data_dir, "hindsight", HINDSIGHT_BACKUP_PREFIX, HINDSIGHT_EXCLUDE, **_dir_args(kwargs)
+    )
+
+
+def _dir_args(kwargs: dict) -> dict:
+    names = ("r2_endpoint", "r2_bucket", "r2_access_key_id", "r2_secret_access_key", "keep_last", "work_dir")
+    unknown = set(kwargs) - set(names)
+    if unknown:
+        raise TypeError(f"unexpected arguments: {sorted(unknown)}")
+    return {n: kwargs.get(n) for n in names}
 
 
 if __name__ == "__main__":
@@ -246,8 +280,15 @@ if __name__ == "__main__":
         metavar="DIR",
         help="archive this directory instead of running the postgres dump",
     )
+    parser.add_argument(
+        "--hindsight-data",
+        metavar="DIR",
+        help="archive the Hindsight pg0 directory (excluding binaries) instead",
+    )
     args = parser.parse_args()
-    if args.hermes_data:
+    if args.hindsight_data:
+        print(json.dumps(run_hindsight_backup(args.hindsight_data), default=str))
+    elif args.hermes_data:
         print(json.dumps(run_hermes_backup(args.hermes_data), default=str))
     else:
         print(json.dumps(run_backup(), default=str))
