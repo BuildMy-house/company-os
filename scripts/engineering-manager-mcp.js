@@ -21,11 +21,16 @@ const upstream = isMain
   })
   : null;
 
+// ai-cli routes by model prefix: an OpenCode model without "oc-" silently runs
+// on Claude and fails, so every fit assessment would decline.
+export const runnerModel = (agent, model) => (agent === "opencode" && model && model !== "opencode" && !model.startsWith("oc-") ? `oc-${model}` : model);
+const RUNNER_AGENT = process.env.RUNNER_AGENT || (process.env.AGENT_FLAVOR === "opencode" ? "opencode" : "claude");
+
 const MANAGER = {
   flavor: process.env.AGENT_FLAVOR || "claude",
   role: process.env.AGENT_ROLE || "manager",
-  agent: process.env.RUNNER_AGENT || (process.env.AGENT_FLAVOR === "opencode" ? "opencode" : "claude"),
-  model: process.env.RUNNER_MODEL || (process.env.AGENT_FLAVOR === "opencode" ? "oc-opencode/mimo-v2.6-flash-free" : "sonnet"),
+  agent: RUNNER_AGENT,
+  model: runnerModel(RUNNER_AGENT, process.env.RUNNER_MODEL || (process.env.AGENT_FLAVOR === "opencode" ? "oc-opencode/mimo-v2.6-flash-free" : "sonnet")),
   reasoning_effort: process.env.RUNNER_REASONING || "medium",
   auto_compact: "200k",
 };
