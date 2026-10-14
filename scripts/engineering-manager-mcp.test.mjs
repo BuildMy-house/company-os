@@ -24,6 +24,8 @@ import {
   formatSubscriptionFailure,
   shouldLogIngestRejection,
   emitTelemetry,
+  TELEMETRY_FIELD_ALLOWLIST,
+  sanitizeTelemetryEvent,
 } from "./engineering-manager-mcp.js";
 
 // Checks execute at top level when this file is loaded, so `node --test`
@@ -838,6 +840,69 @@ check("emitTelemetry logs one redacted, truncated rejection body", async () => {
   const body = line.match(/ body=(".*")$/)?.[1];
   assert.ok(body, `missing body in ${line}`);
   assert.ok(JSON.parse(body).length <= 300, "body must be truncated to 300 chars");
+});
+
+check("sanitizeTelemetryEvent passes allowlisted scalars unchanged", () => {
+  const input = { event: "hive_work", state: "allocated", task_id: "t1", agent_id: "a1", duration_ms: 42, error: null, provider: "zai-coding-plan", pid: 1234 };
+  assert.deepEqual(sanitizeTelemetryEvent(input), input);
+});
+
+check("sanitizeTelemetryEvent folds objects and unknown keys into extra", () => {
+  const out = sanitizeTelemetryEvent({
+    event: "tool_call",
+    state: "completed",
+    args: { prompt: "build it", nested: { deep: 1 } },
+    attempt: 3,
+    http_status: 500,
+    severity: "warning",
+    purpose: "task_fit",
+  });
+  assert.deepEqual(Object.keys(out).sort(), ["event", "extra", "state"]);
+  const extra = JSON.parse(out.extra);
+  assert.equal(typeof extra.args, "string");
+  assert.equal(JSON.parse(extra.args).nested.deep, 1);
+  assert.equal(extra.attempt, 3);
+  assert.equal(extra.http_status, 500);
+  assert.equal(extra.severity, "warning");
+  assert.equal(extra.purpose, "task_fit");
+});
+
+check("sanitizeTelemetryEvent emits no key outside allowlist plus extra", () => {
+  const out = sanitizeTelemetryEvent({
+    event: "hive_subscription",
+    state: "failed",
+    attempt: 2,
+    delay_ms: 500,
+    name: "TypeError",
+    message: "boom",
+    stream: "work",
+    task_tier: "balanced",
+    pool_tier: "high-volume",
+    consecutive_failures: 4,
+    top_bidder: "agent-b",
+    runner_agent: "claude",
+    code: "ETIMEDOUT",
+    cause: "socket reset",
+    stage: "task_fit",
+    error_stage: "complete",
+    error_name: "Error",
+    error_code: "ECONNRESET",
+    error_cause: "upstream 500",
+    reason: "worker_unhealthy",
+  });
+  for (const key of Object.keys(out)) {
+    assert.ok(key === "extra" || TELEMETRY_FIELD_ALLOWLIST.includes(key), `key ${key} is outside the allowlist`);
+  }
+  assert.ok(out.extra, "all unknown fields must land in extra");
+  assert.equal(JSON.parse(out.extra).delay_ms, 500);
+});
+
+check("sanitizeTelemetryEvent truncates long strings and bounds extra", () => {
+  const out = sanitizeTelemetryEvent({ event: "x".repeat(5_000), reason: "y".repeat(5_000), result: { huge: "z".repeat(5_000) } });
+  assert.equal(out.event.length, 1_000);
+  assert.ok(out.result.length <= 500, "non-scalar allowlisted values are stringified and capped at 500");
+  assert.ok(out.extra.length <= 500, `extra must be at most 500 chars, got ${out.extra.length}`);
+  assert.ok(out.extra.includes('"reason"'), "extra keeps the truncated reason content");
 });
 
 for (const [name, fn] of checks) {

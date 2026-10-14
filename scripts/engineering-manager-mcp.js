@@ -155,6 +155,29 @@ let nextId = 1_000_000;
 // cancel/stop/kill tool we use it to reap timed-out assessment runs).
 let upstreamCancelTool = null;
 
+// Scalar fields verified present as bmh-company columns (plus the base fields
+// emitTelemetry always sets). Axiom rejects a whole event if it introduces ANY
+// new column (dataset is at its 257-column limit), so every other key — new
+// fields like attempt/args/purpose or any non-scalar — folds into `extra`.
+export const TELEMETRY_FIELD_ALLOWLIST = Object.freeze([
+  "_time", "service", "environment", "role",
+  "event", "state", "task_id", "agent_id", "call_id", "tool", "tool_name",
+  "duration_ms", "error", "pid", "result", "provider", "model", "claimed_by",
+]);
+const TELEMETRY_FIELD_SET = new Set(TELEMETRY_FIELD_ALLOWLIST);
+
+export function sanitizeTelemetryEvent(event) {
+  const out = {};
+  const extra = {};
+  for (const [key, value] of Object.entries(event || {})) {
+    const scalar = value !== null && typeof value === "object" ? JSON.stringify(value).slice(0, 500) : value;
+    if (TELEMETRY_FIELD_SET.has(key)) out[key] = typeof scalar === "string" ? scalar.slice(0, 1000) : scalar;
+    else extra[key] = scalar;
+  }
+  if (Object.keys(extra).length > 0) out.extra = JSON.stringify(extra).slice(0, 500);
+  return out;
+}
+
 const redactSecrets = (value) => String(value || "")
   .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
   .replace(/https?:\/\/[^\s"'<>]+/gi, "[url]");
@@ -178,7 +201,7 @@ export function emitTelemetry(event) {
   return fetch(`https://eu-central-1.aws.edge.axiom.co/v1/ingest/${process.env.AXIOM_DATASET || "bmh-company"}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.AXIOM_TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify([{ _time: new Date().toISOString(), service: process.env.AXIOM_SERVICE_NAME || "engineering-manager", environment: process.env.DEPLOYMENT_ENVIRONMENT || "local", role: "manager", ...event }]),
+    body: JSON.stringify([{ _time: new Date().toISOString(), service: process.env.AXIOM_SERVICE_NAME || "engineering-manager", environment: process.env.DEPLOYMENT_ENVIRONMENT || "local", role: "manager", ...sanitizeTelemetryEvent(event) }]),
   }).then(async (response) => {
     // fetch resolves on 4xx/5xx; without this a rejected ingest (bad token,
     // dataset column limit) silently drops the event — including the very
