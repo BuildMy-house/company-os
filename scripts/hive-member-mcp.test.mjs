@@ -319,6 +319,134 @@ test("hive_complete validates feedback client-side and forwards to Steward", asy
   assert.equal(hive.completeHits, 2);
 });
 
+test("hive_next_work failure logs a safe line and reports subscription failed", async (t) => {
+  const server = createServer((request, response) => {
+    if (request.method === "POST" && request.url === "/agents/register") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+      return;
+    }
+    if (request.url?.startsWith("/work/subscribe?")) {
+      response.writeHead(500, { "content-type": "text/plain" });
+      response.end("hive coordinator restarting");
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const address = server.address();
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${address.port}`, HIVE_AGENT_ID: "work-failure-test" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  t.after(() => child.kill());
+
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const notifications = [];
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    if (message.method === "notifications/message") { notifications.push(message.params.data); return; }
+    const waiter = waiters.get(message.id);
+    if (!waiter) return;
+    waiters.delete(message.id);
+    waiter(message);
+  });
+  const call = (id, method, params = {}) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      waiters.delete(id);
+      reject(new Error(`timed out waiting for ${method}`));
+    }, 5_000);
+    waiters.set(id, (message) => { clearTimeout(timer); resolve(message); });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  });
+  const waitFor = async (fn) => {
+    for (let i = 0; i < 100 && !fn(); i += 1) await sleep(20);
+  };
+
+  await call(1, "initialize", { protocolVersion: "2025-03-26" });
+  const response = await call(2, "tools/call", { name: "hive_next_work", arguments: { timeout_seconds: 5 } });
+  assert.ok(response.error, "hive_next_work must surface the stream failure");
+  const reply = JSON.parse(response.error.message);
+  assert.equal(reply.stage, "hive_next_work");
+  assert.equal(reply.http_status, 500);
+
+  const failed = notifications.find((data) => data.state === "failed");
+  assert.ok(failed, `no failed subscription notification, got ${JSON.stringify(notifications)}`);
+  assert.equal(failed.event, "hive_subscription");
+  assert.equal(failed.agent_id, "work-failure-test");
+  assert.equal(failed.stage, "hive_next_work");
+  assert.equal(failed.message, "Hive work stream returned 500");
+
+  await waitFor(() => stderr.includes("[hive-member] hive_next_work failed: {"));
+  const logged = stderr.match(/\[hive-member\] hive_next_work failed: (.+)/)?.[1];
+  assert.ok(logged, `missing stderr line: ${stderr}`);
+  const details = JSON.parse(logged);
+  assert.equal(details.stage, "hive_next_work");
+  assert.equal(details.http_status, 500);
+  assert.equal(logged.split("\n").length, 1, "stderr failure line must be single-line JSON");
+});
+
+test("hive_next_work returns null on long-poll timeout without a failed report", async (t) => {
+  const server = createServer((request, response) => {
+    if (request.method === "POST" && request.url === "/agents/register") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+      return;
+    }
+    if (request.url?.startsWith("/work/subscribe?")) {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": connected\n\n");
+      return; // stream stays open; the client's own timeout must end it cleanly
+    }
+    response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const address = server.address();
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${address.port}`, HIVE_AGENT_ID: "work-timeout-test" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+
+  const notifications = [];
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    if (message.method === "notifications/message") { notifications.push(message.params.data); return; }
+    const waiter = waiters.get(message.id);
+    if (!waiter) return;
+    waiters.delete(message.id);
+    waiter(message);
+  });
+  const call = (id, method, params = {}) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      waiters.delete(id);
+      reject(new Error(`timed out waiting for ${method}`));
+    }, 5_000);
+    waiters.set(id, (message) => { clearTimeout(timer); resolve(message); });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  });
+
+  await call(1, "initialize", { protocolVersion: "2025-03-26" });
+  const response = await call(2, "tools/call", { name: "hive_next_work", arguments: { timeout_seconds: 1 } });
+  assert.equal(response.error, undefined, JSON.stringify(response.error));
+  assert.equal(JSON.parse(response.result.content[0].text), null, "timeout must return null, not an error");
+  assert.ok(notifications.some((data) => data.state === "connected"));
+  assert.equal(notifications.some((data) => data.state === "failed"), false, "timeout is idle, not a failure");
+});
+
 test("HIVE_REGISTER=false never calls /agents/register, default still registers", async (t) => {
   async function registrations(env) {
     const paths = [];

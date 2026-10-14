@@ -21,6 +21,11 @@ import {
   tierAffinityMultiplier,
   taskTierOf,
   normalizeTier,
+  formatSubscriptionFailure,
+  shouldLogIngestRejection,
+  emitTelemetry,
+  TELEMETRY_FIELD_ALLOWLIST,
+  sanitizeTelemetryEvent,
 } from "./engineering-manager-mcp.js";
 
 // Checks execute at top level when this file is loaded, so `node --test`
@@ -783,6 +788,123 @@ check("runHiveWork gives up on a bid window that never closes instead of looping
 });
 
 const failures = [];
+
+check("formatSubscriptionFailure is one line with safe fields and no secrets", () => {
+  const error = Object.assign(new Error("connect failed: Bearer tok-secret-987 to https://hive.example.com/work"), { code: "ECONNRESET", status: 502 });
+  error.cause = new Error("socket closed unexpectedly");
+  const line = formatSubscriptionFailure(error, 3, 4_000);
+  assert.equal(line.split("\n").length, 1);
+  for (const field of ["attempt=3", "delay_ms=4000", "name=", "message=", "code=", "cause=", "http_status=", "stage="]) {
+    assert.ok(line.includes(field), `missing ${field} in ${line}`);
+  }
+  assert.ok(!line.includes("tok-secret-987"), "token must be redacted");
+  assert.ok(!line.includes("https://"), "url must be redacted");
+});
+
+check("shouldLogIngestRejection allows first, suppresses repeats for 60s, per key", () => {
+  const state = new Map();
+  assert.equal(shouldLogIngestRejection("400:same", 1_000, state), true);
+  assert.equal(shouldLogIngestRejection("400:same", 60_999, state), false);
+  assert.equal(shouldLogIngestRejection("400:same", 61_000, state), true);
+  assert.equal(shouldLogIngestRejection("401:same", 61_001, state), true);
+});
+
+check("emitTelemetry logs one redacted, truncated rejection body", async () => {
+  const token = "axiom-token-secret-1";
+  const previousToken = process.env.AXIOM_TOKEN;
+  const previousFetch = globalThis.fetch;
+  const previousError = console.error;
+  const lines = [];
+  process.env.AXIOM_TOKEN = token;
+  console.error = (...args) => lines.push(args.join(" "));
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 400,
+    text: async () => `adding 'attempt' to dataset fields would exceed the column limit of 257; auth Bearer ${token} at https://eu-central-1.aws.edge.axiom.co/v1/ingest/bmh-company ${"x".repeat(600)}`,
+  });
+  try {
+    await emitTelemetry({ event: "ingest_reject_probe", state: "failed" });
+    await emitTelemetry({ event: "ingest_reject_probe", state: "failed" });
+  } finally {
+    if (previousToken === undefined) delete process.env.AXIOM_TOKEN;
+    else process.env.AXIOM_TOKEN = previousToken;
+    globalThis.fetch = previousFetch;
+    console.error = previousError;
+  }
+  assert.equal(lines.length, 1, `expected one rejection line, got ${JSON.stringify(lines)}`);
+  const line = lines[0];
+  assert.match(line, /telemetry ingest rejected: HTTP 400 \(event=ingest_reject_probe state=failed\) body=/);
+  assert.ok(!line.includes(token), "token must be redacted");
+  assert.ok(!line.includes("https://eu-central-1"), "url must be redacted");
+  assert.ok(line.includes("Bearer [redacted]"));
+  const body = line.match(/ body=(".*")$/)?.[1];
+  assert.ok(body, `missing body in ${line}`);
+  assert.ok(JSON.parse(body).length <= 300, "body must be truncated to 300 chars");
+});
+
+check("sanitizeTelemetryEvent passes allowlisted scalars unchanged", () => {
+  const input = { event: "hive_work", state: "allocated", task_id: "t1", agent_id: "a1", duration_ms: 42, error: null, provider: "zai-coding-plan", pid: 1234 };
+  assert.deepEqual(sanitizeTelemetryEvent(input), input);
+});
+
+check("sanitizeTelemetryEvent folds objects and unknown keys into extra", () => {
+  const out = sanitizeTelemetryEvent({
+    event: "tool_call",
+    state: "completed",
+    args: { prompt: "build it", nested: { deep: 1 } },
+    attempt: 3,
+    http_status: 500,
+    severity: "warning",
+    purpose: "task_fit",
+  });
+  assert.deepEqual(Object.keys(out).sort(), ["event", "extra", "state"]);
+  const extra = JSON.parse(out.extra);
+  assert.equal(typeof extra.args, "string");
+  assert.equal(JSON.parse(extra.args).nested.deep, 1);
+  assert.equal(extra.attempt, 3);
+  assert.equal(extra.http_status, 500);
+  assert.equal(extra.severity, "warning");
+  assert.equal(extra.purpose, "task_fit");
+});
+
+check("sanitizeTelemetryEvent emits no key outside allowlist plus extra", () => {
+  const out = sanitizeTelemetryEvent({
+    event: "hive_subscription",
+    state: "failed",
+    attempt: 2,
+    delay_ms: 500,
+    name: "TypeError",
+    message: "boom",
+    stream: "work",
+    task_tier: "balanced",
+    pool_tier: "high-volume",
+    consecutive_failures: 4,
+    top_bidder: "agent-b",
+    runner_agent: "claude",
+    code: "ETIMEDOUT",
+    cause: "socket reset",
+    stage: "task_fit",
+    error_stage: "complete",
+    error_name: "Error",
+    error_code: "ECONNRESET",
+    error_cause: "upstream 500",
+    reason: "worker_unhealthy",
+  });
+  for (const key of Object.keys(out)) {
+    assert.ok(key === "extra" || TELEMETRY_FIELD_ALLOWLIST.includes(key), `key ${key} is outside the allowlist`);
+  }
+  assert.ok(out.extra, "all unknown fields must land in extra");
+  assert.equal(JSON.parse(out.extra).delay_ms, 500);
+});
+
+check("sanitizeTelemetryEvent truncates long strings and bounds extra", () => {
+  const out = sanitizeTelemetryEvent({ event: "x".repeat(5_000), reason: "y".repeat(5_000), result: { huge: "z".repeat(5_000) } });
+  assert.equal(out.event.length, 1_000);
+  assert.ok(out.result.length <= 500, "non-scalar allowlisted values are stringified and capped at 500");
+  assert.ok(out.extra.length <= 500, `extra must be at most 500 chars, got ${out.extra.length}`);
+  assert.ok(out.extra.includes('"reason"'), "extra keeps the truncated reason content");
+});
+
 for (const [name, fn] of checks) {
   try {
     await fn();
