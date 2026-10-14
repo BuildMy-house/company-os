@@ -52,8 +52,9 @@ node --test scripts/engineering-manager-mcp.test.mjs scripts/hive-member-mcp.tes
 `TELEMETRY_FIELD_ALLOWLIST` (exported): `_time`, `service`, `environment`,
 `role`, `event`, `state`, `task_id`, `agent_id`, `call_id`, `tool`,
 `tool_name`, `duration_ms`, `error`, `pid`, `result`, `provider`, `model`,
-`claimed_by`. Every entry was verified to exist as a column of the current
-dataset — only these keys may be emitted directly.
+`claimed_by`. The list is a conservative guess at long-standing columns and has NOT been
+verified against the live dataset schema (run `['bmh-company'] | getschema`
+before extending it). Only these keys may be emitted directly.
 
 ## Fields moved to `extra`
 
