@@ -66,6 +66,89 @@ defmodule Hive.ReaperTest do
     assert state_of(work) == "claimed"
   end
 
+  describe "re-offering unbid work" do
+    setup do
+      Application.put_env(:hive, :reoffer_after_seconds, 1)
+      Application.put_env(:hive, :max_reoffers, 2)
+
+      on_exit(fn ->
+        Application.delete_env(:hive, :reoffer_after_seconds)
+        Application.delete_env(:hive, :max_reoffers)
+      end)
+    end
+
+    test "relaxes tier, adds incentive, clears declines and escalates when spent" do
+      id = create_task!("reoffer-unbid", %{"tier" => "power"})
+      decline!(id, "picky")
+      Process.sleep(1100)
+
+      assert id in reaped(:reoffered)
+      payload = payload_of(id)
+      assert payload["tier"] == "standard"
+      assert payload["reoffers"] == 1
+      assert payload["incentive"] == 1.5
+
+      {:ok, events} = Hive.Work.events(id)
+      reoffer = Enum.find(events, &(&1["topic"] == "work.reoffered"))
+      assert reoffer["payload"]["tier_from"] == "power"
+      assert reoffer["payload"]["tier_to"] == "standard"
+
+      # the decline was cleared, so the same worker can look again
+      assert {:ok, available} = Hive.Work.available_for("picky", 100)
+      assert Enum.any?(available, fn item -> (item[:id] || item["id"]) == id end)
+
+      # not stale again straight away
+      refute id in reaped(:reoffered)
+
+      Process.sleep(1100)
+      assert id in reaped(:reoffered)
+      assert payload_of(id)["tier"] == "cheap"
+      assert payload_of(id)["incentive"] == 2.0
+
+      Process.sleep(1100)
+      assert id in reaped(:escalated)
+      {:ok, work} = Hive.Work.get(id)
+      assert state_of(work) == "escalated"
+
+      {:ok, events} = Hive.Work.events(id)
+      escalated = Enum.find(events, &(&1["topic"] == "work.escalated"))
+      assert escalated["payload"]["reason"] == "no_bids_after_reoffers"
+    end
+
+    test "work with an interested bid is left alone" do
+      id = create_task!("reoffer-wanted", %{"tier" => "power"})
+      bid!(id, "keen")
+      Process.sleep(1100)
+
+      refute id in reaped(:reoffered)
+      assert payload_of(id)["tier"] == "power"
+
+      # claim it so it does not linger in the shared available list
+      assert allocate!(id, 60)["claimed_by"] == "keen"
+    end
+  end
+
+  defp reaped(key) do
+    {:ok, summary} = Hive.Work.reap()
+    Map.fetch!(summary, key)
+  end
+
+  defp payload_of(id) do
+    {:ok, work} = Hive.Work.get(id)
+    work[:payload] || work["payload"]
+  end
+
+  defp decline!(id, agent) do
+    post_json("/work/#{id}/bids", %{
+      "agent_id" => agent,
+      "interested" => false,
+      "confidence" => 0.1,
+      "approach" => "no",
+      "estimated_cost" => 1,
+      "expected_benefit" => 0
+    })
+  end
+
   defp state_of(work), do: work[:state] || work["state"]
 
   defp post_json(path, body) do
@@ -74,12 +157,12 @@ defmodule Hive.ReaperTest do
     |> Hive.Router.call(@opts)
   end
 
-  defp create_task!(text) do
+  defp create_task!(text, metadata \\ %{}) do
     post_json("/", %{
       "jsonrpc" => "2.0",
       "id" => 1,
       "method" => "message/send",
-      "params" => %{"message" => %{"parts" => [%{"text" => text}]}}
+      "params" => %{"message" => %{"parts" => [%{"text" => text}], "metadata" => metadata}}
     })
     |> Map.fetch!(:resp_body)
     |> Jason.decode!()

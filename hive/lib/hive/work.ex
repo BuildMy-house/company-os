@@ -396,12 +396,14 @@ defmodule Hive.Work do
   def handle_call(:reap, _from, %{memory: _memory} = state) do
     before = length(state.memory.events)
     {_items, state} = available_memory(state, 0, nil)
+    state = reoffer_memory(state)
     new_events = Enum.take(state.memory.events, length(state.memory.events) - before)
+    settle_recovery(Enum.filter(new_events, &(&1["topic"] in ["work.reoffered"])))
     {:reply, {:ok, reap_summary(new_events)}, state}
   end
 
   def handle_call(:reap, _from, %{db: db} = state) do
-    events = transaction!(db, &recover_expired_db/1)
+    events = transaction!(db, &recover_expired_db/1) ++ transaction!(db, &reoffer_db/1)
     settle_recovery(events)
     {:reply, {:ok, reap_summary(events)}, state}
   end
@@ -1027,7 +1029,14 @@ defmodule Hive.Work do
           |> update_in([:memory, :events], &[event | &1])
           |> update_in(
             [:memory, :ledger],
-            &Hive.Ledger.close(&1, id, item.attempt || 0, agent_id, final_state, DateTime.utc_now())
+            &Hive.Ledger.close(
+              &1,
+              id,
+              item.attempt || 0,
+              agent_id,
+              final_state,
+              DateTime.utc_now()
+            )
           )
 
         {:reply, {:ok, completed}, next}
@@ -1320,7 +1329,10 @@ defmodule Hive.Work do
 
     Hive.Ledger.summarize(rows)
     |> Map.put("recent", Enum.take(rows, limit))
-    |> Map.put("selection", Hive.Selection.config() |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end))
+    |> Map.put(
+      "selection",
+      Hive.Selection.config() |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
+    )
   end
 
   defp allocation_payload(winner, ranking, slug) do
@@ -1351,7 +1363,9 @@ defmodule Hive.Work do
       |> Enum.filter(fn {{id, _agent}, _bid} -> id == work_id end)
       |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid, memory.scoring)) end)
 
-    ctx = Hive.Selection.context(memory.events, memory.agents, work_id, live_agent_ids(), now, cfg)
+    ctx =
+      Hive.Selection.context(memory.events, memory.agents, work_id, live_agent_ids(), now, cfg)
+
     Hive.Selection.rank(bids, ctx, cfg) |> Map.put(:agents, memory.agents) |> Map.put(:bids, bids)
   end
 
@@ -1552,7 +1566,9 @@ defmodule Hive.Work do
 
     ledger =
       Enum.reduce(expired, memory.ledger, fn {id, item}, acc ->
-        outcome = if retry_state(item.attempt || 0) == "escalated", do: "escalated", else: "lease_expired"
+        outcome =
+          if retry_state(item.attempt || 0) == "escalated", do: "escalated", else: "lease_expired"
+
         Hive.Ledger.close(acc, id, item.attempt || 0, item.claimed_by, outcome, now)
       end)
 
@@ -1739,6 +1755,8 @@ defmodule Hive.Work do
           events,
         do: notify_subscribers(id)
 
+    for %{"topic" => "work.reoffered", "task_id" => id} <- events, do: notify_subscribers(id)
+
     :ok
   end
 
@@ -1753,8 +1771,102 @@ defmodule Hive.Work do
           } <- events,
           do: id
         ),
-      escalated: for(%{"topic" => "work.escalated", "task_id" => id} <- events, do: id)
+      escalated: for(%{"topic" => "work.escalated", "task_id" => id} <- events, do: id),
+      reoffered: for(%{"topic" => "work.reoffered", "task_id" => id} <- events, do: id)
     }
+  end
+
+  defp reoffer_memory(%{memory: memory} = state) do
+    if Hive.Reoffer.enabled?() do
+      now = DateTime.utc_now()
+      cutoff = DateTime.add(now, -Hive.Reoffer.after_seconds(), :second)
+
+      stale =
+        for {id, item} <- memory.work,
+            item.state == "available",
+            since = memory.available_since[id],
+            DateTime.compare(since, cutoff) == :lt,
+            not Enum.any?(memory.bids, fn {{work_id, _agent}, bid} ->
+              work_id == id and bid["interested"] == true
+            end),
+            do: {id, item}
+
+      memory =
+        Enum.reduce(stale, memory, fn {id, item}, mem ->
+          attempt = item.attempt || 0
+          bids = mem.bids |> Enum.reject(fn {{work_id, _}, _} -> work_id == id end) |> Map.new()
+
+          case Hive.Reoffer.plan(item.payload) do
+            {:reoffer, payload, details} ->
+              %{
+                mem
+                | work: Map.put(mem.work, id, %{item | payload: payload}),
+                  bids: bids,
+                  available_since: Map.put(mem.available_since, id, now),
+                  events: [event("work.reoffered", id, details, attempt) | mem.events]
+              }
+
+            {:escalate, details} ->
+              %{
+                mem
+                | work: Map.put(mem.work, id, %{item | state: "escalated"}),
+                  bids: bids,
+                  events: [event("work.escalated", id, details, attempt) | mem.events]
+              }
+          end
+        end)
+
+      %{state | memory: memory}
+    else
+      state
+    end
+  end
+
+  defp reoffer_db(tx) do
+    if Hive.Reoffer.enabled?() do
+      stale =
+        Postgrex.query!(
+          tx,
+          """
+          SELECT id, attempt, payload FROM company.hive_work_items w
+          WHERE state = 'available' AND updated_at < now() - ($1 || ' seconds')::interval
+            AND NOT EXISTS (SELECT 1 FROM company.hive_work_bids b WHERE b.work_id = w.id AND b.interested)
+          FOR UPDATE
+          """,
+          [Integer.to_string(Hive.Reoffer.after_seconds())]
+        )
+        |> rows()
+
+      Enum.map(stale, fn %{"id" => id, "attempt" => attempt, "payload" => payload} ->
+        Postgrex.query!(tx, "DELETE FROM company.hive_work_bids WHERE work_id = $1", [id])
+
+        event =
+          case Hive.Reoffer.plan(payload) do
+            {:reoffer, updated, details} ->
+              Postgrex.query!(
+                tx,
+                "UPDATE company.hive_work_items SET payload = $2::jsonb, updated_at = now() WHERE id = $1",
+                [id, Jason.encode!(updated)]
+              )
+
+              event("work.reoffered", id, details, attempt)
+
+            {:escalate, details} ->
+              Postgrex.query!(
+                tx,
+                "UPDATE company.hive_work_items SET state = 'escalated', updated_at = now() WHERE id = $1",
+                [id]
+              )
+
+              event("work.escalated", id, details, attempt)
+          end
+
+        persist_event(tx, event)
+        event
+      end)
+    else
+      []
+    end
   end
 
   defp recover_expired_db(tx) do
@@ -1820,7 +1932,8 @@ defmodule Hive.Work do
 
   defp decode_row(row) do
     decoded =
-      Enum.reduce(["payload", "last_failure", "result", "capabilities", "proposal"], row, fn key, acc ->
+      Enum.reduce(["payload", "last_failure", "result", "capabilities", "proposal"], row, fn key,
+                                                                                             acc ->
         case Map.get(acc, key) do
           value when is_binary(value) -> Map.put(acc, key, Jason.decode!(value))
           _ -> acc
