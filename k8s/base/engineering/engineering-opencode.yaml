@@ -22,7 +22,7 @@ spec:
         runAsNonRoot: true
       containers:
         - name: engineering-opencode
-          image: localhost:30500/company-os-engineering:runner-guard-b24cae3@sha256:33285f0ec1347a4f30b02576c4c693dfb9051e7b9018cafd1f4f269c3348f215
+          image: localhost:30500/company-os-engineering:ticket-std-714c938@sha256:24d6efe3f75630b250045e482af3dbf20156d42dddf70b58c6ab7c46a73f27ed
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

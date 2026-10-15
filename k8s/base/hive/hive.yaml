@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: hive-coordinator
-          image: localhost:30500/company-os-hive:expected-cost-c56f95c@sha256:539eba9adada2a7efc8e1b1ab94423cc920b05b881747c0d7ce78ce5d8246fd0
+          image: localhost:30500/company-os-hive:ticket-std-714c938@sha256:c2b02124d15983e52906586d40a5b19366da205bbd0770520c7bcc7121787d1a
           imagePullPolicy: Always
           ports:
             - containerPort: 4100
