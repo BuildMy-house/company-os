@@ -2,7 +2,7 @@
 # into its OWN Secret, publisher-secrets, in company-ops. Every key in the folder is
 # copied, so the folder must contain exactly the keys below (manual
 # invariant; no test can see Infisical):
-#   GITHUB_TOKEN            fine-grained PAT, ONE repo (the blog repo), contents:write + pull_requests:write
+#   GITHUB_TOKEN            fine-grained PAT, exactly the 3 site repos (website, hermees-diary, observer-website), contents:write + pull_requests:write
 #   REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD   publish account
 #   PUBLISHER_DATABASE_URL  DSN for publisher_reader (SELECT only on marketing)
 #   HINDSIGHT_API_KEY       shared Hindsight key (bank separation is by name only)

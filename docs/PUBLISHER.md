@@ -80,16 +80,21 @@ git runner and a local bare remote).
 
 1. Create the Infisical keys (project 8806c2b0-73d2-4bea-8537-5b874c5ff592): `/publisher`,
    `/marketing-ingest`, and `MARKETING_INGEST_PASSWORD`, `PUBLISHER_READER_PASSWORD` in `/hermes`
-   (key lists: `docs/SECRETS-INFISICAL.md`).
+   (key lists: `docs/SECRETS-INFISICAL.md`). `GITHUB_TOKEN` is a fine-grained PAT limited to the three
+   site repos (`website`, `hermees-diary`, `observer-website`), contents write and pull requests write.
 2. Apply `sql/marketing_schema.sql` to `homely_company`.
 3. Run `scripts/provision-db-roles.sh`.
-4. Build the engineering base (opencode flavor), then the publisher image
-   (`PUBLISHER_BASE_IMAGE=... scripts/build-push-images.sh --only publisher`); bump the digests in
-   `k8s/base/publisher/publisher.yaml` and `k8s/base/marketing-ingest/marketing-ingest.yaml`.
+4. Build the engineering base (opencode flavor), then the publisher image (builder
+   `builder_build_and_push`, or `PUBLISHER_BASE_IMAGE=... scripts/build-push-images.sh --only publisher`),
+   then `scripts/pin-publisher-image.sh <registry>/company-os-publisher@sha256:<digest>` to pin all three
+   image lines (publisher + sidecar in `publisher.yaml`, the CronJob in `marketing-ingest.yaml`); commit the bump.
 5. Apply by hand: `k8s/base/publisher-secrets-sync`, `k8s/base/marketing-ingest`, `k8s/base/publisher`.
    They are deliberately NOT in the buildmy-prod overlay.
-6. Set `reddit.allowedSubreddits` in the ConfigMap.
-7. Create the three-repo fine-grained GitHub token and enable branch protection on `main` in each repo.
+6. Set `reddit.allowedSubreddits` in the ConfigMap (and the same value in `publisher/config/publisher.json`;
+   a test keeps them identical).
+7. Enable branch protection on `main` in each of the three site repos, before the token is created or used
+   (require a PR, one approval, and the `check` status; no force pushes; see the PR for the exact `gh api` call).
+   Use a non-admin token owner, or enforce rules for admins, otherwise an admin-owned PAT can bypass them.
 
 ## Known limits
 
