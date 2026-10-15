@@ -42,11 +42,27 @@ this. The real control: a fine-grained token scoped to exactly those three repos
 write) AND branch protection on `main` in each. All three repos are public and `main` is currently
 unprotected on all three (checked 2026-10-15 via the GitHub API).
 
-## Website findings
+## Site repos, build and deploy paths
 
-The blog is in `hermees-diary` (`src/content/blog/YYYY-MM-DD-slug.md`). The `website` repo has no
-blog, and its CI has no deploy job although `docs/DEPLOY.md` claims Cloudflare Workers. The repo,
-content dir and front matter are config-driven (`publisher/config/publisher.json`, ConfigMap `publisher-config`).
+The pod can clone, fast-forward, branch, verify and open PRs on exactly three repos
+(`publisher repo list|sync|branch|verify|pr`, `publisher blog pr`). Clone and PR calls use `GITHUB_TOKEN`
+(publisher-secrets) via the credential helper for github.com over HTTPS; pushes only go to `blog/<slug>`.
+The repo list, base branch, verify commands and deploy notes are config-driven
+(`publisher/config/publisher.json`, ConfigMap `publisher-config`; a test keeps them identical).
+All three: Node 22 in CI, `.github/workflows/ci.yml` runs `npm ci`, `lint`, `check`, `build` on every push and PR,
+and NONE has a deploy job. `verify` runs exactly those four.
+
+| Repo | Stack / output | What the docs say about deploy | Reality found |
+|---|---|---|---|
+| `website` | Astro 7, `static` | `docs/DEPLOY.md`: wrangler Workers upload on push to main plus a manual `promote` job behind a `production` environment. `DEPLOYMENT.md`: server output with `@astrojs/cloudflare`. | CI has no deploy or promote job and `astro.config.mjs` is `static`. The two docs disagree with each other and with CI. The live update path is unverified. |
+| `hermees-diary` | Astro 4, `static` | `DEPLOYMENT.md`: Cloudflare Workers, deployed by GitHub Actions on push. | No deploy job. The Dockerfile only runs the dev server. This is where the blog lives (`src/content/blog/YYYY-MM-DD-slug.md`). Unverified. |
+| `observer-website` | Astro 4, `server` + `@astrojs/node`, Postgres read-only | `DEPLOYMENT.md`: self-hosted Node or Docker. | No deploy job, no manifest in company-os. Unverified. |
+
+The `website` repo has no blog. Its `/diary` sitemap paths are a hand-kept `diaryPaths` list in
+`astro.config.mjs`, so a merged blog post needs a separate `website` PR adding its path.
+Merging to `main` on any of them is a human decision: it may or may not publish, and nobody has confirmed which.
+The agent never touches those repos' `main`. Clone, push and PR against real GitHub are unverified (tests use a mocked
+git runner and a local bare remote).
 
 ## Data sources
 

@@ -16,13 +16,13 @@ strategist and approver: you never decide to publish.
 - Say what you could not verify. Never invent numbers, sources or results.
 
 ## Tools (all via `publisher <command>`; run `publisher` alone for usage)
-analyze, blog pr, reddit post, substack draft|list|publish, ingest, db, db-queries,
+analyze, blog pr, repo list|sync|branch|verify|pr, reddit post, substack draft|list|publish, ingest, db, db-queries,
 memory retain|recall. A command that says "unavailable in this pod" lacks its credential:
 report that, do not work around it.
 
 ## Skills
 brand-voice, blog-post-structure, seo-analysis, pre-publish-checklist, reddit-rules,
-substack-format, analytics-reading, report-handback, memory-practice (in the skills directory).
+substack-format, analytics-reading, site-edits, report-handback, memory-practice (in the skills directory).
 Memory topic files: /workspace/memory.
 
 ## Hand-back

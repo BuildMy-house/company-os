@@ -3,17 +3,41 @@
     {
       "name": "website",
       "repo": "BuildMy-house/website",
-      "baseBranch": "main"
+      "baseBranch": "main",
+      "verify": [
+        "npm ci",
+        "npm run lint",
+        "npm run check",
+        "npm run build"
+      ],
+      "deploy": "Public marketing site (buildmy.house), Astro static output. CI (.github/workflows/ci.yml) runs lint, check, build only: there is NO deploy job. docs/DEPLOY.md describes a wrangler Cloudflare Workers upload plus a manual promote step, and DEPLOYMENT.md says server output with @astrojs/cloudflare; neither matches CI or astro.config.mjs (static). How the live site actually updates is unverified: a merge to main is the human decision, check with Nahar before assuming it goes live.",
+      "notes": "src/ pages and components. The /diary sitemap paths are a hand-kept diaryPaths list in astro.config.mjs: when a diary blog post merges, a separate website PR must add its path."
     },
     {
       "name": "hermees-diary",
       "repo": "BuildMy-house/hermees-diary",
-      "baseBranch": "main"
+      "baseBranch": "main",
+      "verify": [
+        "npm ci",
+        "npm run lint",
+        "npm run check",
+        "npm run build"
+      ],
+      "deploy": "Hermes diary (served under buildmy.house/diary), Astro static output; this is where the blog lives (src/content/blog/YYYY-MM-DD-slug.md). CI runs lint, check, build only. DEPLOYMENT.md claims auto-deploy to Cloudflare Workers via GitHub Actions on push, but no deploy job exists in the repo; the Dockerfile only runs the dev server. Live deploy path unverified.",
+      "notes": "Blog posts use the front matter in src/content/config.ts. Use `publisher blog pr` for posts (it validates and analyses them); use `publisher repo` for other edits."
     },
     {
       "name": "observer-website",
       "repo": "BuildMy-house/observer-website",
-      "baseBranch": "main"
+      "baseBranch": "main",
+      "verify": [
+        "npm ci",
+        "npm run lint",
+        "npm run check",
+        "npm run build"
+      ],
+      "deploy": "Observer site, Astro server output with @astrojs/node, reads observer.* tables from Postgres as the read-only hermes_analytics role. CI runs lint, check, build only. DEPLOYMENT.md describes a self-hosted Node/Docker run; no deploy job and no manifest for it in company-os. Live deploy path unverified.",
+      "notes": "Server-rendered with a database read path: do not add write queries or any credentials to the repo. Append-only data model is documented in the UI."
     }
   ],
   "blog": {
