@@ -107,6 +107,17 @@ data:
       }
     }
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: publisher-state
+  namespace: company-ops
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 256Mi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -131,6 +142,7 @@ spec:
         runAsUser: 1001
         runAsGroup: 1001
         runAsNonRoot: true
+        fsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -261,10 +273,11 @@ spec:
           emptyDir: {}
         - name: workspace
           emptyDir: {}
-        # Holds the publish ledger. An emptyDir resets on pod restart, which also resets the
-        # daily caps and approval_ref reuse memory; use a PVC if that matters (docs/PUBLISHER.md).
+        # Holds the publish ledger (daily caps, approval_ref reuse). On a PVC so a pod restart
+        # does not reset them. Recreate strategy + ReadWriteOnce: one pod at a time.
         - name: state
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: publisher-state
         - name: ready
           emptyDir:
             medium: Memory

@@ -19,7 +19,7 @@ test("every configured repo is allowlisted, has a base, verify commands and depl
 test("the ConfigMap in publisher.yaml carries exactly config/publisher.json", () => {
   const y = readFileSync(new URL("../../k8s/base/publisher/publisher.yaml", import.meta.url), "utf8");
   const a = y.indexOf("  publisher.json: |\n") + "  publisher.json: |\n".length;
-  const b = y.indexOf("\n---\napiVersion: apps/v1");
+  const b = y.indexOf("\n---\n", a);
   const block = y.slice(a, b).split("\n").map((l) => l.slice(4)).join("\n");
   assert.deepEqual(JSON.parse(block), cfg);
   assert.match(y, /PUBLISHER_ALLOWED_REMOTES\n\s+value: https:\/\/github.com\/BuildMy-house\/website,https:\/\/github.com\/BuildMy-house\/hermees-diary,https:\/\/github.com\/BuildMy-house\/observer-website\n/);

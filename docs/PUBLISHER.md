@@ -93,7 +93,8 @@ git runner and a local bare remote).
 
 ## Known limits
 
-- Ledger (daily caps, approval_ref reuse) is an emptyDir and resets on restart; use a PVC.
+- The ledger (daily caps, approval_ref reuse) lives on PVC `publisher-state` (256Mi, default StorageClass, `fsGroup: 1001`); the checkouts under /workspace stay on an emptyDir and are re-cloned after a restart.
+- Hive registration declares tools once at startup. After changing `AGENT_TOOLS`, the ready markers or the sidecar (e.g. fixing a credential), restart the pod: `kubectl -n company-ops rollout restart deploy/publisher`. A hive-coordinator that predates PR #54 ignores `requires_tools`.
 - Substack drafts are plain paragraphs; Markdown to ProseMirror conversion is a follow-up.
 - `CREATE TABLE IF NOT EXISTS` does not alter an existing `ingest_runs` CHECK (schema not applied anywhere yet).
 - NetworkPolicy egress is public 443 minus private ranges (no FQDN matching).
