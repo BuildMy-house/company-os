@@ -1676,7 +1676,13 @@ defmodule Hive.Work do
       # a missing or unknown tier defaults to "cheap" so the cheapest capable pool gets
       # first refusal. Items queued before this default carry no tier and stay "standard".
       tier = if metadata["tier"] in @tiers, do: metadata["tier"], else: @default_tier
-      {:ok, Map.put(payload, "tier", tier)}
+
+      payload =
+        metadata
+        |> Map.take(["type", "points", "base_points"])
+        |> Map.merge(Map.put(payload, "tier", tier))
+
+      {:ok, payload}
     else
       {:error, :invalid_slug}
     end

@@ -9,6 +9,13 @@ Hermes and Steward ACS.
 - Keep secrets in environment variables, never in committed files.
 - Preserve unrelated work from other agents.
 
+## Ticket standard
+
+Work submitted to Hive (`hive_submit`) must follow `docs/TICKET-STANDARD.md`:
+`type`, Fibonacci `points`, `goal`, `acceptance_criteria` and `scope`. Bugs that need
+diagnosis or touch production score higher. Points set the worker tier. Malformed
+tickets are rejected.
+
 ## Compact Instructions
 
 When compacting or summarizing this conversation (Claude `/compact`, OpenCode

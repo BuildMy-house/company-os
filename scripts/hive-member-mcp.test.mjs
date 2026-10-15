@@ -124,7 +124,8 @@ test("initialize sends instructions and tool descriptions carry next-tool hints"
   }
   const byName = new Map(tools.map((tool) => [tool.name, tool.description]));
   assert.equal(byName.get("hive_diagnostics"), "Check DNS, TCP, the Hive HTTP health route, and the worker SSE subscription from this container (opens and immediately closes an unclaimed stream; no work is consumed). Call this first when hive_wait or hive_next_work error or time out unexpectedly.");
-  assert.equal(byName.get("hive_submit"), "Submit work to Hive and return its durable task id. After submitting, block on hive_wait(task_id) for the outcome — never poll hive_status.");
+  assert.match(byName.get("hive_submit"), /^Submit work to Hive and return its durable task id\. Tickets must follow docs\/TICKET-STANDARD\.md/);
+  assert.match(byName.get("hive_submit"), /block on hive_wait\(task_id\) for the outcome — never poll hive_status\.$/);
 });
 
 test("manager Hive tools prompt workers with the manager's own identity", async (t) => {
@@ -469,4 +470,60 @@ test("HIVE_REGISTER=false never calls /agents/register, default still registers"
   }
   assert.equal(await registrations({ HIVE_REGISTER: "false" }), 0);
   assert.equal(await registrations({}), 1);
+});
+
+test("hive_submit enforces the ticket standard and derives tier from points", async (t) => {
+  const submitted = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    if (request.method === "POST" && request.url === "/") submitted.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"result":{"id":"task_test"}}');
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "ticket-test", HIVE_REGISTER: "false" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    waiters.get(message.id)?.(message);
+    waiters.delete(message.id);
+  });
+  let nextId = 1;
+  const submit = (args) => new Promise((resolve) => {
+    const id = nextId++;
+    waiters.set(id, resolve);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "hive_submit", arguments: args } })}\n`);
+  });
+  const ticket = { type: "feature", points: 3, goal: "Add the thing.", acceptance_criteria: ["tests pass"], scope: "repo app, src/ only" };
+
+  const missing = await submit({ message: "do it", metadata: { tier: "cheap" } });
+  assert.match(missing.error.message, /TICKET-STANDARD/);
+  assert.match(missing.error.message, /metadata\.points/);
+  assert.equal(submitted.length, 0, "a malformed ticket never reaches Hive");
+
+  const tooBig = await submit({ message: "do it", metadata: { ...ticket, type: "bug", points: 13, bug_modifiers: ["needs_diagnosis"] } });
+  assert.match(tooBig.error.message, /split/);
+
+  await submit({ message: "do it", metadata: ticket });
+  assert.equal(submitted[0].params.metadata.tier, "cheap");
+  assert.equal(submitted[0].params.metadata.points, 3);
+  assert.match(submitted[0].params.message.parts[0].text, /Acceptance criteria:\n- tests pass/);
+
+  await submit({ message: "fix it", metadata: { ...ticket, type: "bug", points: 3, bug_modifiers: ["needs_diagnosis", "touches_production"] } });
+  assert.equal(submitted[1].params.metadata.points, 6);
+  assert.equal(submitted[1].params.metadata.base_points, 3);
+  assert.equal(submitted[1].params.metadata.tier, "power");
+
+  await submit({ message: "five", metadata: { ...ticket, points: 5 } });
+  assert.equal(submitted[2].params.metadata.tier, "standard");
 });
