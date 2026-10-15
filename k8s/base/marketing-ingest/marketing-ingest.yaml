@@ -1,0 +1,60 @@
+# Daily marketing-analytics ingester (company_ops/marketing_ingest.py).
+# Deterministic, no LLM. Writes the `marketing` schema as role marketing_ingest.
+#
+# NOT in the buildmy-prod overlay on purpose: it needs Secret
+# `marketing-ingest-secrets`, which a human creates first (see docs/PUBLISHER.md).
+# Apply once by hand after that: kubectl apply -k k8s/base/marketing-ingest
+#
+# Secret `marketing-ingest-secrets` keys (names only; values are never in git).
+# Every credential below is read-only; any source whose keys are absent is
+# recorded as `skipped` in marketing.ingest_runs, not an error.
+#   MARKETING_INGEST_DATABASE_URL  required; DSN for role marketing_ingest
+#                                  (value of that key in Infisical, written by
+#                                  scripts/provision-db-roles.sh's dsn_key)
+#   GOOGLE_CLIENT_ID               GA4 + Search Console OAuth client
+#   GOOGLE_CLIENT_SECRET
+#   GOOGLE_REFRESH_TOKEN           consented with scopes analytics.readonly and
+#                                  webmasters.readonly only
+#   GA4_PROPERTY_ID                numeric GA4 property id (not secret, kept here for simplicity)
+#   GSC_SITE_URL                   e.g. sc-domain:buildmy.house
+#   REDDIT_CLIENT_ID               script app; used for read calls only
+#   REDDIT_CLIENT_SECRET
+#   REDDIT_USERNAME
+#   REDDIT_PASSWORD
+#   SUBSTACK_PUBLICATION_URL       public RSS inventory only (no Substack stats API exists)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: marketing-ingest
+  namespace: company-ops
+spec:
+  # Backups run at 03:00 / 03:30 / 03:45 UTC; stay clear of them.
+  schedule: "15 4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          containers:
+            - name: ingest
+              # Same pin as postgres-backup. It predates company_ops.marketing_ingest:
+              # a human bumps this digest to the rebuilt company-os image
+              # (docs/IMAGES.md) before the first run.
+              image: localhost:30500/company-os@sha256:6b458067b7a71bdb98fece7462953ecad3530599772dddac0f7f8d4ceabc1280
+              imagePullPolicy: Always
+              command: ["/opt/company-ops-venv/bin/python", "-m", "company_ops.marketing_ingest"]
+              envFrom:
+                - secretRef:
+                    name: marketing-ingest-secrets
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
