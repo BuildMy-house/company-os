@@ -95,6 +95,14 @@ class IngestTests(unittest.TestCase):
         self.assertTrue(sc.write_ready(env, connect=lambda *a, **k: Conn()))
         self.assertTrue(os.path.exists(path))
         self.assertFalse(sc.write_ready({}, connect=lambda *a, **k: Conn()))
+        # substack marker only with a complete cookie env
+        sub = tempfile.mktemp()
+        sc.write_ready({**env, "SUBSTACK_READY_FILE": sub}, connect=lambda *a, **k: Conn())
+        self.assertFalse(os.path.exists(sub))
+        full = {**env, "SUBSTACK_READY_FILE": sub, "SUBSTACK_PUBLICATION_URL": "u",
+                "SUBSTACK_SESSION_TOKEN": "t", "SUBSTACK_USER_ID": "1"}
+        sc.write_ready(full, connect=lambda *a, **k: Conn())
+        self.assertTrue(os.path.exists(sub))
 
 
 class HttpTests(unittest.TestCase):

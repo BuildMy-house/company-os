@@ -14,8 +14,9 @@ Endpoints (JSON in, JSON out, loopback only):
   GET  /health
 
 Readiness: after the DB connection and Substack env are checked, a marker file
-(MARKETING_INGEST_READY_FILE) is written. The main container declares the
-``marketing-ingest`` tool only if that file exists.
+(MARKETING_INGEST_READY_FILE) is written, and SUBSTACK_READY_FILE too when the
+Substack env is complete. The main container declares ``marketing-ingest`` /
+``substack-publish`` only if those files exist.
 
 Limit: approval_ref is checked for presence and format only. Hive does not
 expose payload metadata to the pod, so authenticity cannot be verified here.
@@ -128,6 +129,11 @@ def write_ready(env: dict, connect=None) -> bool:
         return False
     with open(path, "w") as f:
         f.write(datetime.now(UTC).isoformat())
+    # Separate marker: substack-publish is declared only if the cookie env is complete too.
+    sub = env.get("SUBSTACK_READY_FILE")
+    if sub and all(env.get(n) for n in substack_bridge.SUBSTACK_ENV):
+        with open(sub, "w") as f:
+            f.write(datetime.now(UTC).isoformat())
     return True
 
 

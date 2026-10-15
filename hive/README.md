@@ -151,7 +151,7 @@ with `COMPANY_DATABASE_URL` set to it; the guard fails the job otherwise.
 
 Agents may register `capabilities.tools` (list of names such as `browser`, `hindsight`,
 `kubectl-deploy`, `image-build`, `hermes-data`, `postgres-admin`, `github-pr`, `reddit-publish`, `substack-publish`,
-`marketing-db-read`). Work whose payload has
+`marketing-db-read`, `marketing-ingest`). Work whose payload has
 `requires_tools` only goes to agents declaring all of them: others are annotated
 `ineligible_reasons: ["missing_tools"]` in `GET /work/:id/bids` and can never win or be
 the score fallback. With no capable execute-mode agent registered, the work is not
