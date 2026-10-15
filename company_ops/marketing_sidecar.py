@@ -65,7 +65,8 @@ class Ledger:
             f.write(json.dumps(entry) + "\n")
 
     def check_publish(self, ref: str, cap: int, now: datetime) -> None:
-        entries = self.entries()
+        # The file is shared with the node CLI's Reddit entries: only count our own channel.
+        entries = [e for e in self.entries() if e.get("channel", "substack") == "substack"]
         if any(e.get("approval_ref") == ref for e in entries):
             raise Refused("approval_ref was already used for a publish")
         today = now.date().isoformat()
@@ -89,7 +90,7 @@ def handle_substack(body: dict, env: dict, ledger: Ledger, call=None, now: datet
         cap = int(env.get("PUBLISHER_SUBSTACK_DAILY_CAP", "1"))
         ledger.check_publish(ref, cap, now)
         result = call(tool, args)
-        ledger.append({"ts": now.isoformat(), "approval_ref": ref, "tool": tool,
+        ledger.append({"ts": now.isoformat(), "channel": "substack", "approval_ref": ref, "tool": tool,
                        "draft_id": args.get("draft_id")})
         return result
     return call(tool, args)

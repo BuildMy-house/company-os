@@ -3,17 +3,27 @@
     "repo": "BuildMy-house/hermees-diary",
     "baseBranch": "main",
     "contentDir": "src/content/blog",
-    "categories": ["decisions", "research", "build-log", "product"],
+    "categories": [
+      "decisions",
+      "research",
+      "build-log",
+      "product"
+    ],
     "titleMax": 70,
     "excerptMin": 70,
     "excerptMax": 170
   },
-  "reports": { "repo": "BuildMy-house/hermees-diary", "dir": "reports" },
+  "reports": {
+    "repo": "BuildMy-house/hermees-diary",
+    "dir": "reports"
+  },
   "reddit": {
     "allowedSubreddits": [],
     "dailyPostCap": 1,
     "userAgent": "buildmy-house-publisher/1.0 (by /u/REDDIT_USERNAME)"
   },
-  "substack": { "dailyPublishCap": 1 },
-  "hindsight": { "url": "http://hindsight:8888", "bank": "publisher" }
+  "hindsight": {
+    "url": "http://hindsight:8888",
+    "bank": "publisher"
+  }
 }

@@ -42,6 +42,11 @@ class SubstackGateTests(unittest.TestCase):
         self.go({"tool": "publish_draft", "arguments": {"draft_id": 6}, "approval_ref": REF + "-2"},
                 now=datetime(2026, 10, 16, tzinfo=UTC))
 
+    def test_reddit_entries_in_shared_ledger_do_not_consume_substack_cap(self):
+        self.ledger.append({"ts": NOW.isoformat(), "channel": "reddit", "approval_ref": REF})
+        self.go({"tool": "publish_draft", "arguments": {"draft_id": 5}, "approval_ref": REF})
+        self.assertEqual(len(self.calls), 1)
+
     def test_draft_and_list_need_no_approval(self):
         self.go({"tool": "create_draft_post", "arguments": {"title": "t", "subtitle": "s", "body": "b"}})
         self.go({"tool": "list_posts", "arguments": {}})
