@@ -19,7 +19,7 @@ spec:
             - name: backup
               # Same image as the app + postgres backup (single source of truth:
               # k8s/base/hermes/company-ops.yaml). Contains python + boto3; no shell S3 tooling.
-              image: localhost:30500/company-os@sha256:89b92c0be5cc05aa23d10043c89a5dcb3de6a925783f33321952985d8d761b4b
+              image: localhost:30500/company-os@sha256:6b458067b7a71bdb98fece7462953ecad3530599772dddac0f7f8d4ceabc1280
               imagePullPolicy: Always
               command:
                 - /opt/company-ops-venv/bin/python
