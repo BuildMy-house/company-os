@@ -14,5 +14,8 @@ psql -U postgres -d "$db" -f /opt/sql/company_schema.sql
 echo "==> Applying observer_schema.sql ..."
 psql -U postgres -d "$db" -f /opt/sql/observer_schema.sql
 
+echo "==> Applying marketing_schema.sql ..."
+psql -U postgres -d "$db" -f /opt/sql/marketing_schema.sql
+
 echo "==> Schemas applied. Roles, passwords and grants are reconciled by"
 echo "    scripts/provision-db-roles.sh (manifests in sql/roles.d/)."

@@ -1,4 +1,4 @@
-"""Scheduled pg_dump backup of company+observer schemas to Cloudflare R2.
+"""Scheduled pg_dump backup of company+observer+marketing schemas to Cloudflare R2.
 
 Also archives the hermes-data PVC contents (Hermes state/memory/sessions)
 as a tar.gz under a distinct top-level prefix. Run directly via
@@ -19,7 +19,10 @@ from pathlib import Path
 
 import boto3
 
-SCHEMAS = ["company", "observer"]
+# Every schema here must be readable by the backup role (hermes_analytics,
+# ANALYTICS_DATABASE_URL): add it to that role's sql/roles.d manifest too.
+# tests/test_backup.py checks the two stay in sync.
+SCHEMAS = ["company", "observer", "marketing"]
 BACKUP_PREFIX = "backups/"
 # Must stay top-level: enforce_retention on "backups/" lists all nested keys,
 # so a nested prefix would get deleted by the postgres retention pass.

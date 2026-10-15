@@ -1,0 +1,10 @@
+# Marketing ingester: write on marketing only. No DELETE, no other schema.
+# tables: all => current and future marketing tables (default privileges).
+name: marketing_ingest
+login: true
+password_key: MARKETING_INGEST_PASSWORD
+dsn_key: MARKETING_INGEST_DATABASE_URL
+grants:
+  - schema: marketing
+    tables: all
+    privileges: [SELECT, INSERT, UPDATE]

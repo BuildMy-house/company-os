@@ -71,8 +71,8 @@ fi
 PSQL=(psql --dbname="$DSN" -v ON_ERROR_STOP=1 --quiet)
 
 # Expected tables, parsed from the schema SQL.
-EXPECTED_TABLES="$(grep -hoE 'CREATE TABLE (IF NOT EXISTS )?(company|observer)\.[a-z_]+' \
-  "$REPO_ROOT"/sql/company_schema.sql "$REPO_ROOT"/sql/observer_schema.sql "$REPO_ROOT"/sql/pm_schema.sql \
+EXPECTED_TABLES="$(grep -hoE 'CREATE TABLE (IF NOT EXISTS )?(company|observer|marketing)\.[a-z_]+' \
+  "$REPO_ROOT"/sql/company_schema.sql "$REPO_ROOT"/sql/observer_schema.sql "$REPO_ROOT"/sql/pm_schema.sql "$REPO_ROOT"/sql/marketing_schema.sql \
   | sed -E 's/CREATE TABLE (IF NOT EXISTS )?//' | sort -u)"
 [[ -n "$EXPECTED_TABLES" ]] || { echo "ERROR: no expected tables parsed from sql/" >&2; exit 2; }
 
@@ -92,9 +92,9 @@ print(re.sub(r"/[^/@]*$", "/" + sys.argv[1], sys.argv[2]))
   TARGET_DSN="$SCRATCH_DSN"
 else
   if [[ $DROP_SCHEMAS -eq 1 ]]; then
-    echo "dropping schemas company, observer (cascade)..."
+    echo "dropping schemas company, observer, marketing (cascade)..."
     psql --dbname="$DSN" -v ON_ERROR_STOP=1 --quiet \
-      -c "DROP SCHEMA IF EXISTS company CASCADE" -c "DROP SCHEMA IF EXISTS observer CASCADE"
+      -c "DROP SCHEMA IF EXISTS company CASCADE" -c "DROP SCHEMA IF EXISTS observer CASCADE" -c "DROP SCHEMA IF EXISTS marketing CASCADE"
   fi
   echo "restoring into LIVE database..."
   TARGET_DSN="$DSN"
@@ -130,7 +130,7 @@ with psycopg.connect(dsn) as conn, conn.cursor() as cur:
     cur.execute("""
         SELECT table_schema || '.' || table_name
         FROM information_schema.tables
-        WHERE table_schema IN ('company', 'observer')
+        WHERE table_schema IN ('company', 'observer', 'marketing')
     """)
     actual = {row[0] for row in cur.fetchall()}
 

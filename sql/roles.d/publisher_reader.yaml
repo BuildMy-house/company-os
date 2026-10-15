@@ -1,0 +1,9 @@
+# Publisher agent: read-only on marketing. Cannot see company or observer.
+name: publisher_reader
+login: true
+password_key: PUBLISHER_READER_PASSWORD
+dsn_key: PUBLISHER_DATABASE_URL
+grants:
+  - schema: marketing
+    tables: all
+    privileges: [SELECT]

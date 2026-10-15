@@ -22,9 +22,11 @@ PASSWORDS = {
     "ANALYTICS_PASSWORD": "pwanalytics-0123456789",
     "PM_AGENT_WRITER_PASSWORD": "pwpmagent-0123456789",
     "MCP_GATEWAY_KEYS_PASSWORD": "pwgwkeys-0123456789",
+    "MARKETING_INGEST_PASSWORD": "pwmktingest-0123456789",
+    "PUBLISHER_READER_PASSWORD": "pwpubreader-0123456789",
 }
 ROLES = ["hermes_company", "hermes_observer_writer", "hermes_analytics", "pm_agent_writer",
-         "mcp_gateway_keys"]
+         "mcp_gateway_keys", "marketing_ingest", "publisher_reader"]
 
 
 def clean_env(**extra):
@@ -116,7 +118,7 @@ class ScratchPostgresTests(unittest.TestCase):
         else:
             cls.tearDownClass()
             raise unittest.SkipTest("scratch postgres never became ready")
-        for f in ("company_schema.sql", "observer_schema.sql", "pm_schema.sql", "mcp_gateway_schema.sql"):
+        for f in ("company_schema.sql", "observer_schema.sql", "pm_schema.sql", "mcp_gateway_schema.sql", "marketing_schema.sql"):
             r = subprocess.run(["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-U", "postgres",
                                 "-d", "homely_company", "-f", os.path.join(REPO, "sql", f)],
                                env=cls.env, capture_output=True, text=True)
@@ -144,7 +146,9 @@ class ScratchPostgresTests(unittest.TestCase):
             rc, out, _ = self.sql("select current_user", r, PASSWORDS[
                 {"hermes_company": "COMPANY_PASSWORD", "hermes_observer_writer": "OBSERVER_PASSWORD",
                  "hermes_analytics": "ANALYTICS_PASSWORD", "pm_agent_writer": "PM_AGENT_WRITER_PASSWORD",
-                 "mcp_gateway_keys": "MCP_GATEWAY_KEYS_PASSWORD"}[r]])
+                 "mcp_gateway_keys": "MCP_GATEWAY_KEYS_PASSWORD",
+                 "marketing_ingest": "MARKETING_INGEST_PASSWORD",
+                 "publisher_reader": "PUBLISHER_READER_PASSWORD"}[r]])
             self.assertEqual((rc, out), (0, r))
         pm_pw = PASSWORDS["PM_AGENT_WRITER_PASSWORD"]
         self.assertEqual(self.sql("select count(*) from company.pm_conversations", "pm_agent_writer", pm_pw)[0], 0)
@@ -152,6 +156,22 @@ class ScratchPostgresTests(unittest.TestCase):
         self.assertNotEqual(self.sql("delete from company.pm_conversations", "pm_agent_writer", pm_pw)[0], 0)
         obs = PASSWORDS["OBSERVER_PASSWORD"]
         self.assertNotEqual(self.sql("delete from observer.decisions", "hermes_observer_writer", obs)[0], 0)
+
+    def test_marketing_grants_cover_new_tables(self):
+        """A table created after provisioning must be readable (backup broke once on this)."""
+        self.assertEqual(run([], self.env).returncode, 0)
+        self.assertEqual(self.sql("create table marketing.later_table(x int)")[0], 0)
+        ing, rdr, ana = (PASSWORDS["MARKETING_INGEST_PASSWORD"], PASSWORDS["PUBLISHER_READER_PASSWORD"],
+                         PASSWORDS["ANALYTICS_PASSWORD"])
+        # default privileges apply to tables created by the provisioning owner (postgres)
+        self.assertEqual(self.sql("select count(*) from marketing.later_table", "publisher_reader", rdr)[0], 0)
+        self.assertEqual(self.sql("select count(*) from marketing.later_table", "hermes_analytics", ana)[0], 0)
+        self.assertEqual(self.sql("insert into marketing.later_table values (1)", "marketing_ingest", ing)[0], 0)
+        # publisher_reader is read-only and blind to the other schemas
+        self.assertNotEqual(self.sql("insert into marketing.later_table values (2)", "publisher_reader", rdr)[0], 0)
+        self.assertNotEqual(self.sql("select count(*) from company.plans", "publisher_reader", rdr)[0], 0)
+        self.assertNotEqual(self.sql("select count(*) from company.plans", "marketing_ingest", ing)[0], 0)
+        self.assertNotEqual(self.sql("delete from marketing.ga4_daily", "marketing_ingest", ing)[0], 0)
 
     def test_only_role_does_not_disturb_others(self):
         self.assertEqual(run([], self.env).returncode, 0)
