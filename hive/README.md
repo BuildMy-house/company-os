@@ -63,6 +63,12 @@ control.
 
 ## Worker tiers
 
+Tickets follow `docs/TICKET-STANDARD.md`; `hive_submit` derives `tier` from story points
+(<=3 cheap, 5 standard, >=6 power) and the coordinator stores `points`, `base_points` and
+`type` on the payload. Work nobody bids on is re-offered by the reaper (`Hive.Reoffer`:
+`HIVE_REOFFER_AFTER_SECONDS` default 1800, `HIVE_MAX_REOFFERS` default 3): declines cleared,
+tier lowered a step, `payload.incentive` +0.5, then escalated.
+
 Submitters may add `tier: cheap|standard|power` to the `hive_submit` metadata.
 A work item submitted **without a known tier now defaults to `cheap`** (the
 coordinator stores `payload.tier = "cheap"`; unknown values such as `gpu` also

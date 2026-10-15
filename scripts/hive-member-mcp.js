@@ -68,6 +68,48 @@ async function request(path, options = {}) {
   return body;
 }
 
+// Ticket standard (docs/TICKET-STANDARD.md): every hive_submit carries a type, story
+// points, a goal, acceptance criteria and a scope, validated here before any Hive HTTP
+// so a malformed ticket fails loudly instead of landing as an unbid, unscorable task.
+const TICKET_TYPES = ["feature", "bug", "chore"];
+const FIBONACCI_POINTS = [1, 2, 3, 5, 8, 13];
+const BUG_BUMPS = { needs_diagnosis: 2, touches_production: 1 };
+const MAX_POINTS = 13;
+
+export function tierForPoints(points) {
+  return points <= 3 ? "cheap" : points <= 5 ? "standard" : "power";
+}
+
+export function applyTicketStandard(args) {
+  const metadata = { ...(args.metadata || {}) };
+  const problems = [];
+  if (!TICKET_TYPES.includes(metadata.type)) problems.push(`metadata.type must be one of ${TICKET_TYPES.join("|")}`);
+  if (!FIBONACCI_POINTS.includes(metadata.points)) problems.push(`metadata.points must be one of ${FIBONACCI_POINTS.join(", ")} (split anything bigger than ${MAX_POINTS})`);
+  const text = (value) => typeof value === "string" && value.trim() !== "";
+  if (!text(metadata.goal)) problems.push("metadata.goal must state the outcome in one or two sentences");
+  const criteria = Array.isArray(metadata.acceptance_criteria) ? metadata.acceptance_criteria.filter(text) : [];
+  if (criteria.length === 0) problems.push("metadata.acceptance_criteria must list at least one verifiable check");
+  if (!text(metadata.scope)) problems.push("metadata.scope must name the repo/paths in scope and what is out of scope");
+  if (metadata.bug_modifiers !== undefined && (!Array.isArray(metadata.bug_modifiers) || metadata.bug_modifiers.some((m) => !(m in BUG_BUMPS)))) problems.push(`metadata.bug_modifiers may only contain ${Object.keys(BUG_BUMPS).join(", ")}`);
+  if (problems.length) throw new Error(`hive_submit rejected, ticket does not meet docs/TICKET-STANDARD.md: ${problems.join("; ")}`);
+
+  const bumps = metadata.type === "bug" ? [...new Set(metadata.bug_modifiers || [])].reduce((sum, m) => sum + BUG_BUMPS[m], 0) : 0;
+  const points = metadata.points + bumps;
+  if (points > MAX_POINTS) throw new Error(`hive_submit rejected: ${metadata.points} points + ${bumps} bug bump = ${points}, above ${MAX_POINTS}; split the ticket into smaller tickets`);
+
+  const message = [
+    args.message.trim(),
+    `Type: ${metadata.type} | Points: ${points}${bumps ? ` (${metadata.points} + ${bumps} bug bump)` : ""}`,
+    `Goal: ${metadata.goal.trim()}`,
+    `Acceptance criteria:\n${criteria.map((c) => `- ${c.trim()}`).join("\n")}`,
+    `Scope: ${metadata.scope.trim()}`,
+  ].join("\n\n");
+  // An explicit tier still wins, so a submitter can force power for work the points understate.
+  const tier = ["cheap", "standard", "power"].includes(metadata.tier) ? metadata.tier : tierForPoints(points);
+  const { bug_modifiers, ...rest } = metadata;
+  return { message, metadata: { ...rest, points, base_points: metadata.points, tier } };
+}
+
 // Client-side fail-fast for the hive_complete feedback contract
 // (HIVE-GUIDANCE-FEEDBACK.md section 3): reject before any Hive HTTP.
 const FEEDBACK_NUMBERS = ["estimated_cost", "actual_cost", "estimated_benefit", "actual_benefit"];
@@ -235,7 +277,7 @@ async function waitForEvent(taskId, timeoutSeconds = 900) {
 const instructions = `Hive member tools for the company-os coordination service (Elixir/Postgres work, leases, durable events). Lifecycle: 1) hive_available_work lists open work; bid with hive_bid (confidence, approach, estimated_cost, expected_benefit). 2) Block, never poll: idle members wait inside hive_next_work; members awaiting a specific task wait inside hive_wait(task_id) — do NOT loop hive_status (one-off inspection only) or hive_available_work. 3) While holding a lease, renew with hive_heartbeat every few minutes and always before lease_seconds elapse (default 900) — an expired lease lets the task be re-allocated. 4) hive_complete is terminal: exactly one call per task with state completed|failed and a result.feedback object; after it the lease is gone and hive_wait returns. When any stream call errors, call hive_diagnostics first. hive_events replays durable history; hive_status reads current state; hive_work_bids audits who won and why. When Steward MCP tools are available, call generate_guidance_packet(scope_path: "hive") against Steward to fetch shared guidance before bidding (hive_bid).`;
 
 const tools = [
-  { name: "hive_submit", description: "Submit work to Hive and return its durable task id. After submitting, block on hive_wait(task_id) for the outcome — never poll hive_status.", inputSchema: { type: "object", required: ["message"], properties: { message: { type: "string" }, metadata: { type: "object" } }, additionalProperties: false } },
+  { name: "hive_submit", description: "Submit work to Hive and return its durable task id. Tickets must follow docs/TICKET-STANDARD.md or are rejected: metadata.type (feature|bug|chore), metadata.points (1,2,3,5,8,13), metadata.goal, metadata.acceptance_criteria (array), metadata.scope; bugs may add metadata.bug_modifiers (needs_diagnosis +2, touches_production +1). Points set the tier unless metadata.tier is given. After submitting, block on hive_wait(task_id) for the outcome — never poll hive_status.", inputSchema: { type: "object", required: ["message", "metadata"], properties: { message: { type: "string" }, metadata: { type: "object", required: ["type", "points", "goal", "acceptance_criteria", "scope"], properties: { type: { type: "string", enum: TICKET_TYPES }, points: { type: "integer", enum: FIBONACCI_POINTS }, goal: { type: "string" }, acceptance_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, scope: { type: "string" }, bug_modifiers: { type: "array", items: { type: "string", enum: Object.keys(BUG_BUMPS) } }, tier: { type: "string", enum: ["cheap", "standard", "power"] } } } }, additionalProperties: false } },
   { name: "hive_bid", description: "Submit or update this agent's bid for Hive work (confidence, approach, estimated_cost, expected_benefit). After bidding, wait for allocation via hive_next_work or hive_wait(work_id); once allocated, hive_heartbeat the task while working.", inputSchema: { type: "object", required: ["work_id", "confidence", "approach", "estimated_cost", "expected_benefit"], properties: { work_id: { type: "string" }, interested: { type: "boolean" }, confidence: { type: "number", minimum: 0, maximum: 1 }, approach: { type: "string" }, estimated_cost: { type: "number", minimum: 0 }, expected_benefit: { type: "number", minimum: 0 }, risk: { type: "string" }, evidence: { type: "string" } }, additionalProperties: false } },
   { name: "hive_work_bids", description: "Read the ranked bids for Hive work, by id, slug or task id (work_id, work_slug and task_id are interchangeable). Order is the allocation order: eligible bids cheapest first, each with eligible/ineligible_reasons/selected and the bidder's stored rationale. Call before hive_allocate to sanity-check the ranking, or after allocation to audit why a bidder won.", inputSchema: { type: "object", properties: { work_id: { type: "string" }, work_slug: { type: "string" }, task_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
   { name: "hive_cost_ledger", description: "Read-only cost ledger: per-agent allocations, failures (failed, lease_expired, escalated), runtime and total estimated cost, plus the most recent allocation rows with outcome. Use it to see whether cost-aware allocation is working; pair with hive_work_bids for one task.", inputSchema: { type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 365 }, limit: { type: "integer", minimum: 1, maximum: 200 } }, additionalProperties: false } },
@@ -259,7 +301,11 @@ function text(id, value) { return { jsonrpc: "2.0", id, result: { content: [{ ty
 function fail(id, message) { return { jsonrpc: "2.0", id, error: { code: -32000, message } }; }
 
 async function call(name, args) {
-  if (name === "hive_submit") return request("/", { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "message/send", params: { message: { parts: [{ text: args.message }] }, ...(args.metadata ? { metadata: args.metadata } : {}) } }) });
+  if (name === "hive_submit") {
+    if (typeof args.message !== "string" || args.message.trim() === "") throw new Error("hive_submit requires a non-empty message");
+    const ticket = applyTicketStandard(args);
+    return request("/", { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "message/send", params: { message: { parts: [{ text: ticket.message }] }, metadata: ticket.metadata } }) });
+  }
   if (name === "hive_bid") { const { work_id, ...bid } = args; return request(`/work/${encodeURIComponent(work_id)}/bids`, { method: "POST", body: JSON.stringify({ agent_id: consumerId, ...bid }) }); }
   if (name === "hive_work_bids") {
     const ref = args.work_id ?? args.work_slug ?? args.task_id;

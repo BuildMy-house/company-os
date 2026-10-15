@@ -231,6 +231,12 @@ check("evaluateFit skips busy, unhealthy, missing, or invalid assessments", () =
   assert.equal(evaluateFit({ assessment: { ...validAssessment, interested: false } }).bid.interested, false);
 });
 
+check("evaluateFit discounts the bid by the coordinator's re-offer incentive, never inflating it", () => {
+  const base = evaluateFit({ assessment: validAssessment, costFactor: 1 }).bid.estimated_cost;
+  assert.equal(evaluateFit({ assessment: validAssessment, costFactor: 1, incentive: 2 }).bid.estimated_cost, base / 2);
+  assert.equal(evaluateFit({ assessment: validAssessment, costFactor: 1, incentive: 0.2 }).bid.estimated_cost, base);
+});
+
 check("prompt outcomes preserve independent worker bids and declines", async () => {
   const outcomes = await collectPromptOutcomes({
     agentIds: ["engineering-opencode", "engineering-opencode-direct"],

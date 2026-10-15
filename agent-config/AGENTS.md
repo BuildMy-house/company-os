@@ -28,6 +28,13 @@ For the long-term coordination model, read
 work should move toward Elixir/Postgres durable events, leases, and task-ID
 completion signals while preserving the existing Steward and k3s boundaries.
 
+## Ticket standard
+
+Work submitted to Hive (`hive_submit`) must follow `docs/TICKET-STANDARD.md`:
+`type`, Fibonacci `points`, `goal`, `acceptance_criteria` and `scope`. Bugs that need
+diagnosis or touch production score higher. Points set the worker tier. Malformed
+tickets are rejected.
+
 ## Compact Instructions
 
 When compacting or summarizing this conversation (Claude `/compact`, OpenCode

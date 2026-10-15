@@ -642,7 +642,9 @@ export function isValidAssessment(value) {
     && typeof risk === "string" && risk.trim().length > 0;
 }
 
-export function evaluateFit({ assessment, busy = false, healthStatus = "healthy", taskTier = "standard", poolTier = POOL_TIER, costFactor = POOL_COST_FACTOR }) {
+// `incentive` (>= 1) is set by the coordinator on re-offered work (hive/lib/hive/reoffer.ex): the
+// bid is discounted by it so work nobody wanted becomes cheaper to win.
+export function evaluateFit({ assessment, busy = false, healthStatus = "healthy", taskTier = "standard", poolTier = POOL_TIER, costFactor = POOL_COST_FACTOR, incentive = 1 }) {
   if (busy) return { skip: true, reason: "worker_busy" };
   if (healthStatus !== "healthy") return { skip: true, reason: "worker_unhealthy" };
   if (!assessment) return { skip: true, reason: "assessment_unavailable" };
@@ -652,7 +654,7 @@ export function evaluateFit({ assessment, busy = false, healthStatus = "healthy"
     bid: {
       interested: assessment.interested,
       confidence: assessment.confidence,
-      estimated_cost: assessment.estimated_cost * costFactor * tierAffinityMultiplier(taskTier, poolTier),
+      estimated_cost: (assessment.estimated_cost * costFactor * tierAffinityMultiplier(taskTier, poolTier)) / Math.max(1, incentive),
       expected_benefit: assessment.expected_benefit,
       risk: assessment.risk,
       approach: approach || "task-fit assessed execution",
@@ -879,7 +881,7 @@ export async function runHiveWork(candidate, deps = {}) {
       // while(true) loop unthrottled if Hive keeps re-offering it immediately.
       await (deps.wait ?? delay)(retryDelayMs(consecutiveFailures, deps.random ?? Math.random));
     }
-    const decision = evaluateFit({ assessment, healthStatus: healthState.status, taskTier, poolTier, ...(deps.costFactor !== undefined ? { costFactor: deps.costFactor } : {}) });
+    const decision = evaluateFit({ assessment, healthStatus: healthState.status, taskTier, poolTier, incentive: candidate?.payload?.incentive ?? 1, ...(deps.costFactor !== undefined ? { costFactor: deps.costFactor } : {}) });
     if (decision.skip) {
       const failureCount = failuresDep.get(candidate.id)?.count ?? 0;
       const severe = failureCount >= ASSESSMENT_FAILURE_WARN_THRESHOLD;
@@ -1006,7 +1008,7 @@ export async function handleBidPrompt(request, deps = {}) {
       });
     } catch (error) { emitTelemetry({ event: "hive_bid_assessment", task_id: work.id, state: "failed", stage: "task_fit_prompted", ...errorTelemetry(error) }); }
   }
-  const decision = evaluateFit({ assessment, busy: decisionBusy, healthStatus: healthState.status, taskTier: taskTierOf(work) });
+  const decision = evaluateFit({ assessment, busy: decisionBusy, healthStatus: healthState.status, taskTier: taskTierOf(work), incentive: work?.payload?.incentive ?? 1 });
   if (decision.skip) {
     return { outcome: SKIP_OUTCOMES[decision.reason] || "unavailable", worker_id: agentId, reason: decision.reason };
   }
@@ -1125,7 +1127,19 @@ if (isMain) {
         const prompt = typeof args.prompt === "string" ? args.prompt : "Complete the assigned engineering work.";
         hiveCall("hive_submit", {
           message: prompt,
-          metadata: { workFolder: args.workFolder || "/workspace", requested_by: "engineering-mcp" },
+          // Callers that already follow docs/TICKET-STANDARD.md pass the ticket fields through;
+          // others get a standard-sized chore, tagged so the defaulting stays visible.
+          metadata: {
+            workFolder: args.workFolder || "/workspace",
+            requested_by: "engineering-mcp",
+            type: args.type || "chore",
+            points: args.points || 5,
+            goal: args.goal || prompt.split("\n")[0].slice(0, 200),
+            acceptance_criteria: Array.isArray(args.acceptance_criteria) && args.acceptance_criteria.length ? args.acceptance_criteria : ["Work described in the prompt is done and verified; report what was run and the result."],
+            scope: args.scope || args.workFolder || "/workspace",
+            ...(args.bug_modifiers ? { bug_modifiers: args.bug_modifiers } : {}),
+            ...(args.type && args.points ? {} : { ticket_defaulted: true }),
+          },
         }).then(async (submitted) => {
           const taskId = submitted?.result?.id;
           if (!taskId) throw new Error("Hive did not return a task id");

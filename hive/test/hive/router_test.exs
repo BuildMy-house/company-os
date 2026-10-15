@@ -113,6 +113,22 @@ defmodule Hive.RouterTest do
     submit.("tier-bogus-item", "gpu")
     submit.("tier-missing-item", nil)
 
+    conn(
+      :post,
+      "/",
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "message/send",
+        "params" => %{
+          "message" => %{"parts" => [%{"text" => "points-item"}]},
+          "metadata" => %{"slug" => "points-item", "type" => "bug", "points" => 6, "base_points" => 3}
+        }
+      })
+    )
+    |> Plug.Conn.put_req_header("content-type", "application/json")
+    |> Hive.Router.call(@opts)
+
     {:ok, work} = Hive.Work.available(100)
     by_slug =
       Map.new(work, fn item ->
@@ -124,6 +140,9 @@ defmodule Hive.RouterTest do
     assert by_slug["tier-power-item"]["tier"] == "power"
     assert by_slug["tier-bogus-item"]["tier"] == "cheap"
     assert by_slug["tier-missing-item"]["tier"] == "cheap"
+    assert by_slug["points-item"]["points"] == 6
+    assert by_slug["points-item"]["type"] == "bug"
+    refute Map.has_key?(by_slug["tier-cheap-item"], "points")
   end
 
   test "rejects duplicate and invalid human-readable slugs" do
