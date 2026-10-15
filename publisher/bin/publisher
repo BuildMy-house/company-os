@@ -48,17 +48,6 @@ try {
     const report = analyzePost(rendered.content, { existing: existingPosts(repoDir), ...cfg.blog });
     if (!report.ok) throw new Refused("blog pr refused until blocking findings are fixed:\n" + formatReport(report));
     out(await openBlogPr({ rendered, repoDir, cfg, token: need("GITHUB_TOKEN"), run: git, write: (p, c) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, c); } }));
-  } else if (cmd === "report") { // publisher report <slug> <file.md>  -> PR adding reports/<slug>.md
-    const dir = cloneBlog(cfg.reports.repo);
-    const slug = sub.replace(/[^a-z0-9-]/g, "");
-    const branch = `reports/${slug}`;
-    git(["checkout", "-B", branch, `origin/${cfg.blog.baseBranch}`], { cwd: dir });
-    mkdirSync(join(dir, cfg.reports.dir), { recursive: true });
-    writeFileSync(join(dir, cfg.reports.dir, `${slug}.md`), readFileSync(rest[0], "utf8"));
-    git(["add", `${cfg.reports.dir}/${slug}.md`], { cwd: dir });
-    git(["commit", "-m", `report: ${slug}`], { cwd: dir });
-    git(["push", "-u", "origin", branch], { cwd: dir });
-    out({ branch, note: "open the PR with the GitHub API or ask Hermes; reports are public if the repo is public" });
   } else if (cmd === "reddit" && sub === "post") { // publisher reddit post --subreddit x --title t --text body|--url u --approval-ref R
     const { f } = flags(rest);
     for (const n of ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USERNAME", "REDDIT_PASSWORD"]) need(n);
@@ -79,7 +68,7 @@ try {
   else if (cmd === "memory" && (sub === "retain" || sub === "recall")) {
     const h = hindsight(cfg, env);
     out(sub === "retain" ? await h.retain(rest.join(" "), "publisher") : await h.recall(rest.join(" ")));
-  } else throw new Refused("usage: publisher analyze|blog pr|report|reddit post|substack draft|list|publish|ingest|db|db-queries|memory retain|recall");
+  } else throw new Refused("usage: publisher analyze|blog pr|reddit post|substack draft|list|publish|ingest|db|db-queries|memory retain|recall");
 } catch (e) {
   console.error(e instanceof Refused ? e.message : `error: ${e.message}`);
   process.exit(e instanceof Refused ? 3 : 1);

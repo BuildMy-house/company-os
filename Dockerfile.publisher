@@ -58,7 +58,7 @@ RUN ln -sf /opt/publisher/bin/git /usr/local/bin/git \
 
 ENV AGENT_FLAVOR=opencode \
     RUNNER_AGENT=opencode \
-    PUBLISHER_ALLOWED_REMOTES=https://github.com/BuildMy-house/hermees-diary
+    PUBLISHER_ALLOWED_REMOTES=https://github.com/BuildMy-house/website,https://github.com/BuildMy-house/hermees-diary,https://github.com/BuildMy-house/observer-website
 
 USER engineering
 ENTRYPOINT ["bash", "/opt/company-ops/scripts/publisher-entrypoint.sh"]

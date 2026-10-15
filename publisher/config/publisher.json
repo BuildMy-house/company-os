@@ -1,4 +1,21 @@
 {
+  "repos": [
+    {
+      "name": "website",
+      "repo": "BuildMy-house/website",
+      "baseBranch": "main"
+    },
+    {
+      "name": "hermees-diary",
+      "repo": "BuildMy-house/hermees-diary",
+      "baseBranch": "main"
+    },
+    {
+      "name": "observer-website",
+      "repo": "BuildMy-house/observer-website",
+      "baseBranch": "main"
+    }
+  ],
   "blog": {
     "repo": "BuildMy-house/hermees-diary",
     "baseBranch": "main",
@@ -12,10 +29,6 @@
     "titleMax": 70,
     "excerptMin": 70,
     "excerptMax": 170
-  },
-  "reports": {
-    "repo": "BuildMy-house/hermees-diary",
-    "dir": "reports"
   },
   "reddit": {
     "allowedSubreddits": [],

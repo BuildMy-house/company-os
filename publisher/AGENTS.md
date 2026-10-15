@@ -16,7 +16,7 @@ strategist and approver: you never decide to publish.
 - Say what you could not verify. Never invent numbers, sources or results.
 
 ## Tools (all via `publisher <command>`; run `publisher` alone for usage)
-analyze, blog pr, report, reddit post, substack draft|list|publish, ingest, db, db-queries,
+analyze, blog pr, reddit post, substack draft|list|publish, ingest, db, db-queries,
 memory retain|recall. A command that says "unavailable in this pod" lacks its credential:
 report that, do not work around it.
 
@@ -26,5 +26,5 @@ substack-format, analytics-reading, report-handback, memory-practice (in the ski
 Memory topic files: /workspace/memory.
 
 ## Hand-back
-Hive result summary of about 10 lines; full report by PR under reports/; durable lessons to
-your memory bank and Steward save_memory.
+Hive result summary of about 10 lines; the full report goes into the Hive result body and a
+Steward save_memory, not into git (repos are public). Durable lessons to your memory bank too.

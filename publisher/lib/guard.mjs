@@ -1,13 +1,19 @@
 // Push guard rules, shared by the git wrapper (bin/git) and the pre-push hook (hooks/pre-push).
-// Policy: the publisher may only create or update branches blog/<slug> and reports/<slug> on the
-// one configured repo. Never main, never deletes, never force, never tags, never other remotes.
+// Policy: the publisher may only create or update branches blog/<slug> on one of exactly three
+// repos (ALLOWED_REPOS). Never main, never deletes, never force, never tags, never other remotes.
+// Reports are NOT pushed to git at all: hand-back is the Hive result plus Steward memory.
 //
 // This is defense in depth against mistakes and prompt-injected behaviour. It is NOT a security
 // boundary against an agent with a shell (it can call /usr/bin/git directly). The authoritative
-// control is server side: a fine-grained token limited to one repo plus branch protection on
-// main (docs/PUBLISHER.md).
+// control is server side: a fine-grained token limited to these three repos plus branch
+// protection on main (docs/PUBLISHER.md).
 
-export const BRANCH_RE = /^(blog|reports)\/[a-z0-9][a-z0-9-]{0,80}$/;
+// The only repositories the publisher may touch, compiled in so a bad env value or ConfigMap edit
+// cannot widen it. publisher/config/publisher.json must list exactly these (tested).
+export const ALLOWED_REPOS = Object.freeze(["BuildMy-house/website", "BuildMy-house/hermees-diary", "BuildMy-house/observer-website"]);
+export const repoUrl = (slug) => `https://github.com/${slug}`;
+
+export const BRANCH_RE = /^blog\/[a-z0-9][a-z0-9-]{0,80}$/;
 const ZERO_OID = /^0+$/;
 
 // Exact option strings only. Abbreviations (--force-with-l, --del, --no-ver...) are therefore
@@ -30,7 +36,7 @@ export function refuse(reason) {
 export function checkBranchRef(ref) {
   const name = ref.replace(/^refs\/heads\//, "");
   if (!BRANCH_RE.test(name)) {
-    throw refuse(`push refused: "${ref}" is not an allowed branch. The publisher may only push blog/<slug> or reports/<slug> (slug: lowercase letters, digits, hyphens). It never pushes main; a human or Board-approved merge publishes.`);
+    throw refuse(`push refused: "${ref}" is not an allowed branch. The publisher may only push blog/<slug> (slug: lowercase letters, digits, hyphens). It never pushes main; a human or Board-approved merge publishes.`);
   }
   return name;
 }
@@ -110,12 +116,15 @@ export function normalizeRemoteUrl(url) {
 }
 
 // allowed: array of remote URLs from PUBLISHER_ALLOWED_REMOTES (comma list). Empty means refuse.
-export function checkRemoteUrl(url, allowed) {
+// `hardAllowed` is the compiled-in repo list; the remote must be in BOTH lists, so the env var can
+// narrow the set but never widen it beyond ALLOWED_REPOS.
+export function checkRemoteUrl(url, allowed, hardAllowed = ALLOWED_REPOS.map(repoUrl)) {
   const norm = normalizeRemoteUrl(url);
   if (/^[a-z]+:\/\/[^/]*@/i.test(norm)) throw refuse("push refused: remote URL must not embed credentials.");
   const ok = allowed.map(normalizeRemoteUrl).filter(Boolean);
   if (!ok.length) throw refuse("push refused: PUBLISHER_ALLOWED_REMOTES is not set, so no remote is allowed.");
   if (!ok.includes(norm)) throw refuse(`push refused: remote "${url}" is not the configured repo.`);
+  if (!hardAllowed.map(normalizeRemoteUrl).includes(norm)) throw refuse(`push refused: remote "${url}" is not one of the allowed site repos (${ALLOWED_REPOS.join(", ")}).`);
 }
 
 // pre-push stdin: "<local ref> <local oid> <remote ref> <remote oid>" per line.

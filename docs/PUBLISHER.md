@@ -20,8 +20,9 @@ A2A/Hive; it writes social/blog content, analyses posts, opens blog PRs and repo
   `hermes_analytics` (SELECT). The agent never writes SQL; rows are validated before upsert.
 - Memory: Hindsight bank `publisher` on `http://hindsight:8888`. One shared `HINDSIGHT_API_KEY`:
   separation is by bank name only, not access control.
-- Hand-back: ~10 line Hive result, full Markdown report committed by PR under `reports/`, Steward memory.
-  Reports state source, date range, row counts and mark unchecked items as untested.
+- Hand-back: ~10 line Hive result carrying the full report, plus Steward `save_memory`. Reports are
+  NEVER pushed to git (all three site repos are public). Reports state source, date range, row counts
+  and mark unchecked items as untested.
 
 ## Approval gate
 
@@ -32,11 +33,14 @@ the payload (or a signed ref) from Hive.
 
 ## Push guard (defense in depth only)
 
-`/usr/local/bin/git` wrapper plus `pre-push` hook allow pushes only to `blog/<slug>` and
-`reports/<slug>`. Note `reports/*` is an addition to the brief. An agent with a shell can bypass
-this. The real control: a fine-grained token scoped to ONE repo (contents + pull_requests write) AND
-branch protection on `main`. `BuildMy-house/hermees-diary` and `website` are public and `main` is
-currently unprotected. Reports pushed there are public.
+`/usr/local/bin/git` wrapper plus `pre-push` hook allow pushes only to `blog/<slug>` branches, and
+only to an explicit three-repo allowlist compiled into `publisher/lib/guard.mjs` (`ALLOWED_REPOS`):
+`BuildMy-house/website`, `BuildMy-house/hermees-diary`, `BuildMy-house/observer-website`.
+`PUBLISHER_ALLOWED_REMOTES` (env) can narrow that set but never widen it, and `publisher/config/publisher.json`
+`repos` must equal it (a test enforces both). `reports/*` branches are refused. An agent with a shell can bypass
+this. The real control: a fine-grained token scoped to exactly those three repos (contents + pull requests
+write) AND branch protection on `main` in each. All three repos are public and `main` is currently
+unprotected on all three (checked 2026-10-15 via the GitHub API).
 
 ## Website findings
 
@@ -69,7 +73,7 @@ content dir and front matter are config-driven (`publisher/config/publisher.json
 5. Apply by hand: `k8s/base/publisher-secrets-sync`, `k8s/base/marketing-ingest`, `k8s/base/publisher`.
    They are deliberately NOT in the buildmy-prod overlay.
 6. Set `reddit.allowedSubreddits` in the ConfigMap.
-7. Create the one-repo fine-grained GitHub token and enable branch protection on `main`.
+7. Create the three-repo fine-grained GitHub token and enable branch protection on `main` in each repo.
 
 ## Known limits
 

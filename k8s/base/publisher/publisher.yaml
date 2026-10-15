@@ -16,7 +16,7 @@
 #
 # Secret keys (names only; values live in Infisical, never in git):
 #   publisher-secrets          <- Infisical /publisher
-#     GITHUB_TOKEN             fine-grained PAT, ONE repo, contents:write + pull_requests:write
+#     GITHUB_TOKEN             fine-grained PAT, exactly the 3 site repos, contents:write + pull_requests:write
 #     REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD
 #     PUBLISHER_DATABASE_URL   publisher_reader DSN (SELECT only on schema marketing)
 #     HINDSIGHT_API_KEY
@@ -41,6 +41,11 @@ data:
   # An empty allowedSubreddits means the agent cannot post to Reddit at all.
   publisher.json: |
     {
+      "repos": [
+        { "name": "website", "repo": "BuildMy-house/website", "baseBranch": "main" },
+        { "name": "hermees-diary", "repo": "BuildMy-house/hermees-diary", "baseBranch": "main" },
+        { "name": "observer-website", "repo": "BuildMy-house/observer-website", "baseBranch": "main" }
+      ],
       "blog": {
         "repo": "BuildMy-house/hermees-diary",
         "baseBranch": "main",
@@ -50,7 +55,6 @@ data:
         "excerptMin": 70,
         "excerptMax": 170
       },
-      "reports": { "repo": "BuildMy-house/hermees-diary", "dir": "reports" },
       "reddit": {
         "allowedSubreddits": [],
         "dailyPostCap": 1,
@@ -134,7 +138,7 @@ spec:
             - name: RUNNER_MODEL
               value: oc-zai-coding-plan/glm-5.3-flash
             - name: PUBLISHER_ALLOWED_REMOTES
-              value: https://github.com/BuildMy-house/hermees-diary
+              value: https://github.com/BuildMy-house/website,https://github.com/BuildMy-house/hermees-diary,https://github.com/BuildMy-house/observer-website
             - name: PUBLISHER_LEDGER_FILE
               value: /var/lib/publisher/ledger.jsonl
             - name: MARKETING_INGEST_READY_FILE

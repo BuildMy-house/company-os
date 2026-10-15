@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Guarded git wrapper, installed first on PATH (/usr/local/bin/git). Refuses any push that is
-// not blog/<slug> or reports/<slug>, then execs the real git with the pre-push hook forced on.
+// not blog/<slug>, then execs the real git with the pre-push hook forced on.
 // Defense in depth, not a boundary: see lib/guard.mjs and docs/PUBLISHER.md.
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
