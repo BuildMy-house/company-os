@@ -25,6 +25,13 @@ defmodule Hive.Selection do
   gets its effective cost multiplied by `explore_discount`, so a new worker or
   freshly rolled image wins allocations until it has a track record.
 
+  Tool requirements: work may carry `requires_tools` (payload) and agents declare
+  `capabilities.tools` at registration. A bid from an agent missing any required
+  tool is ineligible with reason `missing_tools` (and its `"missing_tools"` list),
+  checked before scoring, and is never picked even by the `score_fallback`: such
+  work waits for a capable agent or escalates (`Hive.Reoffer`), it does not starve
+  onto a pool that cannot do it. Work without `requires_tools` is unaffected.
+
   Ties are broken by the old score (`confidence * benefit / cost`) and then by
   the earliest bid. When no bid is eligible the old score ranking is used as a
   fallback, so work never starves.
@@ -91,7 +98,7 @@ defmodule Hive.Selection do
     * `outcomes`     - agent id => `{completed, failed}` counts inside the history
       window, feeding the completion-rate estimate and exploration
   """
-  def context(events, agents, work_id, live_ids, now, cfg) do
+  def context(events, agents, work_id, live_ids, now, cfg, required_tools \\ []) do
     cutoff = DateTime.add(now, -cfg.strike_window_seconds, :second)
     expired = Enum.filter(events, &lease_expired?/1)
 
@@ -119,9 +126,36 @@ defmodule Hive.Selection do
       strikes: strikes,
       outcomes: outcomes(events, now, cfg),
       agents: agents,
-      live_ids: MapSet.new(live_ids)
+      live_ids: MapSet.new(live_ids),
+      required_tools: required_tools
     }
   end
+
+  @doc "Tool names an agent declared in `capabilities.tools` (always a list of strings)."
+  def agent_tools(agent) do
+    case get_in(agent || %{}, ["capabilities", "tools"]) do
+      tools when is_list(tools) -> Enum.filter(tools, &is_binary/1)
+      _ -> []
+    end
+  end
+
+  @doc "Normalizes a tool list (registration or ticket input) to sorted unique non-empty strings."
+  def normalize_tools(tools) when is_list(tools) do
+    tools
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  def normalize_tools(_), do: []
+
+  @doc "Required tools the agent does not declare, in required order."
+  def missing_tools(agent, required), do: required -- agent_tools(agent)
+
+  @doc "Tools a work item needs (`requires_tools` on its payload), `[]` when it names none."
+  def required_tools(payload), do: normalize_tools(get_in(payload || %{}, ["requires_tools"]))
 
   defp outcomes(events, now, cfg) do
     cutoff = DateTime.add(now, -cfg.history_window_seconds, :second)
@@ -167,13 +201,17 @@ defmodule Hive.Selection do
         reasons = reasons(bid, ctx, cfg)
 
         bid
+        |> Map.put("missing_tools", bid_missing_tools(bid, ctx))
         |> Map.put("eligible", reasons == [])
         |> Map.put("ineligible_reasons", reasons)
         |> Map.put("p_complete", p_complete(bid, ctx, cfg))
         |> Map.put("effective_cost", effective_cost(bid, ctx, cfg))
       end)
 
-    {interested, declined} = Enum.split_with(annotated, & &1["interested"])
+    # A bid from an agent lacking a required tool is hard-blocked: it can neither win
+    # nor be the score fallback. It stays in the ranking (last) so the reason is visible.
+    {blocked, capable} = Enum.split_with(annotated, &(&1["missing_tools"] != []))
+    {interested, declined} = Enum.split_with(capable, & &1["interested"])
     eligible = Enum.filter(interested, & &1["eligible"])
 
     {ordered_interested, mode} =
@@ -195,7 +233,7 @@ defmodule Hive.Selection do
 
         [] ->
           []
-      end ++ Enum.map(declined, &Map.put(&1, "selected", false))
+      end ++ Enum.map(declined ++ blocked, &Map.put(&1, "selected", false))
 
     %{ordered: ordered, winner: List.first(ordered_interested) && hd(ordered), mode: mode}
   end
@@ -221,6 +259,7 @@ defmodule Hive.Selection do
     agent_id = bid["agent_id"]
 
     [
+      {bid_missing_tools(bid, ctx) != [], "missing_tools"},
       {not bid["interested"], "not_interested"},
       {bid["confidence"] < cfg.min_confidence, "low_confidence"},
       {not seen_recently?(bid, ctx, cfg), "unhealthy"},
@@ -228,6 +267,13 @@ defmodule Hive.Selection do
       {Map.get(ctx.strikes, agent_id, 0) >= cfg.strike_limit, "repeated_lease_expired"}
     ]
     |> Enum.flat_map(fn {hit?, reason} -> if hit?, do: [reason], else: [] end)
+  end
+
+  defp bid_missing_tools(bid, ctx) do
+    case Map.get(ctx, :required_tools, []) do
+      [] -> []
+      required -> missing_tools(Map.get(ctx.agents, bid["agent_id"]), required)
+    end
   end
 
   # An agent is "recently seen" if it is connected right now, or its registration/

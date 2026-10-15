@@ -61,6 +61,10 @@ spec:
               value: power
             - name: AGENT_COST_FACTOR
               value: "1"
+            # Tools this pod verifiably has (hive/README.md "Tool capabilities"). The
+            # hive-member adapter drops "browser" at runtime if no Chromium is installed.
+            - name: AGENT_TOOLS
+              value: browser
             - name: RUNNER_AGENT
               value: claude
             - name: RUNNER_MODEL

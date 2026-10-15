@@ -146,3 +146,14 @@ COMPANY_DATABASE_URL=postgresql://user:pass@localhost:5432/hive_test mix test
 
 CI should run Hive tests against a throwaway `hive_test` Postgres service container
 with `COMPANY_DATABASE_URL` set to it; the guard fails the job otherwise.
+
+## Tool capabilities
+
+Agents may register `capabilities.tools` (list of names such as `browser`, `hindsight`,
+`kubectl-deploy`, `image-build`, `hermes-data`, `postgres-admin`). Work whose payload has
+`requires_tools` only goes to agents declaring all of them: others are annotated
+`ineligible_reasons: ["missing_tools"]` in `GET /work/:id/bids` and can never win or be
+the score fallback. With no capable execute-mode agent registered, the work is not
+allocated (`409 no_bids`) and the re-offer sweep escalates it with `reason: "missing_tools"`
+and the missing tool names instead of lowering the tier. Work without `requires_tools` is
+unaffected.
