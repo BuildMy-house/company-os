@@ -1,0 +1,64 @@
+# Publisher agent image: the engineering OpenCode image plus the publisher tooling.
+#
+# Build the base first (docs/IMAGES.md), then, from the company-os root:
+#   docker build -f Dockerfile.engineering --build-arg AGENT_FLAVOR=opencode \
+#     --build-arg INSTALL_BROWSER=false --build-context shared=<workspace repo/commit> -t engineering-opencode .
+#   docker build -f Dockerfile.publisher --build-arg BASE_IMAGE=engineering-opencode -t publisher .
+# In-cluster: builder_build_and_push with dockerfile_path "Dockerfile.publisher" and
+# build_args {BASE_IMAGE: "<registry>/company-os-engineering-opencode@sha256:<digest>"}.
+# No browser is installed; pin BASE_IMAGE by digest.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+
+# substack-mcp is NOT an official Substack API (it drives the web endpoints with a session
+# cookie). Pinned to 1.3.2, whose npm gitHead is c148a3b176997077d2796530ae98660ef2f96d5a and
+# whose src/ was diffed identical to that reviewed commit. Never `npx substack-mcp@latest`.
+# The tarball integrity is checked before install; bumping needs a new review + new hash.
+ARG SUBSTACK_MCP_VERSION=1.3.2
+ARG SUBSTACK_MCP_INTEGRITY=sha512-+NvSHlI6ErEjzmIXhzrZKxj6e1an7DuP4th5eaaJcvpGI0nSv3Rh62JBTDXDdbGdYMfDSBxSNWB7gomY3THfIA==
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 python3-venv postgresql-client openssl \
+  && rm -rf /var/lib/apt/lists/* \
+  && cd /tmp && npm pack "substack-mcp@${SUBSTACK_MCP_VERSION}" --silent \
+  && test "sha512-$(openssl dgst -sha512 -binary substack-mcp-${SUBSTACK_MCP_VERSION}.tgz | openssl base64 -A)" = "${SUBSTACK_MCP_INTEGRITY}" \
+  && npm install -g "/tmp/substack-mcp-${SUBSTACK_MCP_VERSION}.tgz" \
+  && rm -f /tmp/substack-mcp-*.tgz
+
+# company_ops (ingester, sidecar, bridge) in its own venv, same path the CronJob uses.
+COPY pyproject.toml /opt/company-ops-src/pyproject.toml
+COPY company_ops /opt/company-ops-src/company_ops
+RUN python3 -m venv /opt/company-ops-venv \
+  && /opt/company-ops-venv/bin/pip install --no-cache-dir /opt/company-ops-src \
+  && rm -rf /opt/company-ops-src
+
+# No inherited engineering skills: the publisher gets only its own.
+RUN rm -rf /opt/company-ops/.claude/skills/* /opt/company-ops/.claude/agents/*
+
+COPY publisher/lib /opt/publisher/lib
+COPY publisher/bin /opt/publisher/bin
+COPY publisher/hooks /opt/publisher/hooks
+COPY publisher/config /opt/publisher/config
+COPY publisher/skills /opt/publisher/skills
+COPY publisher/memory /opt/publisher/memory
+COPY publisher/package.json /opt/publisher/package.json
+COPY publisher/AGENTS.md publisher/opencode.json /opt/publisher/
+COPY publisher/gitconfig /etc/gitconfig
+COPY publisher/HIVE_WORKER_MEMORY.md /opt/company-ops/scripts/HIVE_WORKER_MEMORY.md
+COPY scripts/publisher-entrypoint.sh /opt/company-ops/scripts/publisher-entrypoint.sh
+
+# Guarded git first on PATH; real git stays at /usr/bin/git (the wrapper's default).
+RUN ln -sf /opt/publisher/bin/git /usr/local/bin/git \
+  && ln -sf /opt/publisher/bin/publisher /usr/local/bin/publisher \
+  && chmod 755 /opt/publisher/bin/* /opt/publisher/hooks/* /opt/company-ops/scripts/publisher-entrypoint.sh \
+  && mkdir -p /var/lib/publisher /workspace \
+  && chown -R engineering:engineering /var/lib/publisher /workspace
+
+ENV AGENT_FLAVOR=opencode \
+    RUNNER_AGENT=opencode \
+    PUBLISHER_ALLOWED_REMOTES=https://github.com/BuildMy-house/hermees-diary
+
+USER engineering
+ENTRYPOINT ["bash", "/opt/company-ops/scripts/publisher-entrypoint.sh"]
