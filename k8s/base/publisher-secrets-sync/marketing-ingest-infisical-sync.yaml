@@ -1,0 +1,31 @@
+# Syncs the Infisical folder /marketing-ingest (project "Build My house", environment dev)
+# into its OWN Secret, marketing-ingest-secrets, in company-ops. Every key in the folder is
+# copied, so the folder must contain exactly the keys below (manual
+# invariant; no test can see Infisical):
+#   MARKETING_INGEST_DATABASE_URL   DSN for marketing_ingest (only writer of schema marketing)
+#   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN   read-only analytics + webmasters scopes
+#   GA4_PROPERTY_ID, GSC_SITE_URL
+#   REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD   read use
+#   SUBSTACK_PUBLICATION_URL, SUBSTACK_SESSION_TOKEN, SUBSTACK_USER_ID   web-session cookie = a password; expires
+# Uses the existing infisical-auth in company-ops (k8s/base/infisical-sync/infisical-sync.yaml),
+# same mechanism as k8s/base/pm-agent-secrets-sync. No value is committed here.
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: marketing-ingest-sync
+  namespace: company-ops
+spec:
+  infisicalAuthRef:
+    name: infisical-auth
+    namespace: company-ops
+  syncOptions:
+    refreshInterval: 60s
+  sources:
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /marketing-ingest
+  targets:
+    - name: marketing-ingest-secrets
+      namespace: company-ops
+      kind: Secret
+      creationPolicy: Owner
