@@ -639,7 +639,7 @@ defmodule Hive.Work do
     now = DateTime.utc_now()
 
     with %{state: "available"} = work <- memory.work[work_id],
-         %{"agent_id" => agent_id} = winner <- ranking.winner,
+         %{"agent_id" => agent_id} = winner <- ranking.winner || :no_winner,
          :open <- memory_bid_window(memory, work_id, ranking, now) do
       attempt = (work.attempt || 0) + 1
 
@@ -684,6 +684,7 @@ defmodule Hive.Work do
     else
       nil -> {:reply, {:error, :work_not_found}, state}
       {:wait, seconds} -> {:reply, {:deferred, seconds}, state}
+      :no_winner -> {:reply, {:error, :no_bids}, state}
       %{state: _} -> {:reply, {:error, :no_bids}, state}
       _ -> {:reply, {:error, :no_bids}, state}
     end
@@ -1336,13 +1337,18 @@ defmodule Hive.Work do
   end
 
   defp allocation_payload(winner, ranking, slug) do
-    %{
+    base = %{
       "agent_id" => winner["agent_id"],
       "score" => winner["score"],
       "slug" => slug,
       "selection" => ranking.mode,
       "effective_cost" => winner["estimated_cost"]
     }
+
+    case ranking[:required_tools] do
+      [_ | _] = tools -> Map.put(base, "required_tools", tools)
+      _ -> base
+    end
   end
 
   defp live_agent_ids do
@@ -1363,10 +1369,23 @@ defmodule Hive.Work do
       |> Enum.filter(fn {{id, _agent}, _bid} -> id == work_id end)
       |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid, memory.scoring)) end)
 
-    ctx =
-      Hive.Selection.context(memory.events, memory.agents, work_id, live_agent_ids(), now, cfg)
+    required = Hive.Selection.required_tools(get_in(memory.work, [work_id, :payload]))
 
-    Hive.Selection.rank(bids, ctx, cfg) |> Map.put(:agents, memory.agents) |> Map.put(:bids, bids)
+    ctx =
+      Hive.Selection.context(
+        memory.events,
+        memory.agents,
+        work_id,
+        live_agent_ids(),
+        now,
+        cfg,
+        required
+      )
+
+    Hive.Selection.rank(bids, ctx, cfg)
+    |> Map.put(:agents, memory.agents)
+    |> Map.put(:bids, bids)
+    |> Map.put(:required_tools, required)
   end
 
   defp rank_db(db, work_id, scoring) do
@@ -1419,8 +1438,21 @@ defmodule Hive.Work do
       )
       |> rows()
 
-    ctx = Hive.Selection.context(events, agents, work_id, live_agent_ids(), now, cfg)
-    Hive.Selection.rank(bids, ctx, cfg) |> Map.put(:agents, agents) |> Map.put(:bids, bids)
+    required =
+      case Postgrex.query!(db, "SELECT payload FROM company.hive_work_items WHERE id = $1", [
+             work_id
+           ])
+           |> rows() do
+        [%{"payload" => payload}] -> Hive.Selection.required_tools(payload)
+        _ -> []
+      end
+
+    ctx = Hive.Selection.context(events, agents, work_id, live_agent_ids(), now, cfg, required)
+
+    Hive.Selection.rank(bids, ctx, cfg)
+    |> Map.put(:agents, agents)
+    |> Map.put(:bids, bids)
+    |> Map.put(:required_tools, required)
   end
 
   # Allocation waits while a connected pool worker (registered with a tier) has not
@@ -1682,11 +1714,27 @@ defmodule Hive.Work do
         |> Map.take(["type", "points", "base_points"])
         |> Map.merge(Map.put(payload, "tier", tier))
 
-      {:ok, payload}
+      # Tool requirements (docs/TICKET-STANDARD.md "Requiring tools"): stored only when the
+      # ticket names some, so tickets without `requires_tools` keep their old payload shape.
+      case requires_tools(metadata["requires_tools"]) do
+        {:ok, []} -> {:ok, payload}
+        {:ok, tools} -> {:ok, Map.put(payload, "requires_tools", tools)}
+        :error -> {:error, :invalid_requires_tools}
+      end
     else
       {:error, :invalid_slug}
     end
   end
+
+  defp requires_tools(nil), do: {:ok, []}
+
+  defp requires_tools(tools) when is_list(tools) do
+    if Enum.all?(tools, &(is_binary(&1) and String.trim(&1) != "")),
+      do: {:ok, Hive.Selection.normalize_tools(tools)},
+      else: :error
+  end
+
+  defp requires_tools(_), do: :error
 
   defp message_title(parts) do
     parts
@@ -1792,9 +1840,7 @@ defmodule Hive.Work do
             item.state == "available",
             since = memory.available_since[id],
             DateTime.compare(since, cutoff) == :lt,
-            not Enum.any?(memory.bids, fn {{work_id, _agent}, bid} ->
-              work_id == id and bid["interested"] == true
-            end),
+            Hive.Reoffer.stale?(item.payload, interested_ids(memory.bids, id), memory.agents),
             do: {id, item}
 
       memory =
@@ -1802,7 +1848,7 @@ defmodule Hive.Work do
           attempt = item.attempt || 0
           bids = mem.bids |> Enum.reject(fn {{work_id, _}, _} -> work_id == id end) |> Map.new()
 
-          case Hive.Reoffer.plan(item.payload) do
+          case Hive.Reoffer.plan(item.payload, mem.agents) do
             {:reoffer, payload, details} ->
               %{
                 mem
@@ -1828,26 +1874,41 @@ defmodule Hive.Work do
     end
   end
 
+  defp interested_ids(bids, work_id) do
+    for {{^work_id, agent}, bid} <- bids, bid["interested"] == true, do: agent
+  end
+
   defp reoffer_db(tx) do
     if Hive.Reoffer.enabled?() do
       stale =
         Postgrex.query!(
           tx,
           """
-          SELECT id, attempt, payload FROM company.hive_work_items w
+          SELECT id, attempt, payload,
+            ARRAY(SELECT b.agent_id FROM company.hive_work_bids b WHERE b.work_id = w.id AND b.interested) AS interested_ids
+          FROM company.hive_work_items w
           WHERE state = 'available' AND updated_at < now() - ($1 || ' seconds')::interval
-            AND NOT EXISTS (SELECT 1 FROM company.hive_work_bids b WHERE b.work_id = w.id AND b.interested)
           FOR UPDATE
           """,
           [Integer.to_string(Hive.Reoffer.after_seconds())]
         )
         |> rows()
 
+      agents =
+        Postgrex.query!(tx, "SELECT id, capabilities FROM company.hive_agents", [])
+        |> rows()
+        |> Map.new(&{&1["id"], &1})
+
+      stale =
+        Enum.filter(stale, fn %{"payload" => payload, "interested_ids" => interested} ->
+          Hive.Reoffer.stale?(payload, interested, agents)
+        end)
+
       Enum.map(stale, fn %{"id" => id, "attempt" => attempt, "payload" => payload} ->
         Postgrex.query!(tx, "DELETE FROM company.hive_work_bids WHERE work_id = $1", [id])
 
         event =
-          case Hive.Reoffer.plan(payload) do
+          case Hive.Reoffer.plan(payload, agents) do
             {:reoffer, updated, details} ->
               Postgrex.query!(
                 tx,

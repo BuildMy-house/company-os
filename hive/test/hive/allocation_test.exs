@@ -127,6 +127,96 @@ defmodule Hive.AllocationTest do
     assert allocate!(id)["claimed_by"] == "someone"
   end
 
+  describe "requires_tools routing" do
+    test "registration stores capabilities.tools as a sorted unique string list" do
+      post_json("/agents/register", %{
+        "id" => "tools-reg",
+        "capabilities" => %{
+          "tier" => "power",
+          "tools" => ["kubectl-deploy", "browser", "browser", 7]
+        }
+      })
+
+      agent = Enum.find(get_json("/agents")["agents"], &(&1["id"] == "tools-reg"))
+      assert agent["capabilities"]["tools"] == ["browser", "kubectl-deploy"]
+      assert agent["capabilities"]["tier"] == "power"
+    end
+
+    test "an agent registered without tools still registers (backward compatible)" do
+      post_json("/agents/register", %{
+        "id" => "tools-none",
+        "capabilities" => %{"tier" => "cheap"}
+      })
+
+      agent = Enum.find(get_json("/agents")["agents"], &(&1["id"] == "tools-none"))
+      refute Map.has_key?(agent["capabilities"], "tools")
+    end
+
+    test "work stores requires_tools, rejects malformed values, and omits the key when unset" do
+      id = create_task!("rt-store", %{"requires_tools" => ["hindsight", "browser", "browser"]})
+      {:ok, work} = Hive.Work.get(id)
+      assert (work[:payload] || work["payload"])["requires_tools"] == ["browser", "hindsight"]
+
+      plain = create_task!("rt-store-plain")
+      {:ok, work} = Hive.Work.get(plain)
+      refute Map.has_key?(work[:payload] || work["payload"], "requires_tools")
+
+      bad =
+        post_json("/", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "message/send",
+          "params" => %{
+            "message" => %{"parts" => [%{"text" => "rt-bad"}]},
+            "metadata" => %{"slug" => "rt-bad", "requires_tools" => "browser"}
+          }
+        })
+
+      assert bad.status == 422
+    end
+
+    test "an incapable agent that bids is marked missing_tools and never allocated, a capable one wins" do
+      post_json("/agents/register", %{"id" => "rt-blind", "capabilities" => %{"tools" => []}})
+
+      post_json("/agents/register", %{
+        "id" => "rt-seer",
+        "capabilities" => %{"tools" => ["browser-rt1"]}
+      })
+
+      id = create_task!("rt-route", %{"requires_tools" => ["browser-rt1"]})
+      bid!(id, "rt-blind", 0.95, 0.01, 5)
+
+      [only] = get_json("/work/#{id}/bids")["bids"]
+      assert only["ineligible_reasons"] == ["missing_tools"]
+      assert only["missing_tools"] == ["browser-rt1"]
+
+      refused = post_json("/work/#{id}/allocate", %{"lease_seconds" => 900})
+      assert refused.status == 409
+
+      {:ok, work} = Hive.Work.get(id)
+      assert (work[:state] || work["state"]) == "available"
+
+      bid!(id, "rt-seer", 0.8, 1.0, 5)
+      assert allocate!(id)["claimed_by"] == "rt-seer"
+
+      {:ok, events} = Hive.Work.events(id)
+      allocated = Enum.find(events, &(&1["topic"] == "work.allocated"))["payload"]
+      assert allocated["required_tools"] == ["browser-rt1"]
+    end
+
+    test "work without requires_tools is allocated to the cheapest bidder regardless of tools" do
+      post_json("/agents/register", %{"id" => "rt-plain-a", "capabilities" => %{"tools" => []}})
+      id = create_task!("rt-plain-route")
+      bid!(id, "rt-plain-a", 0.9, 0.01, 5)
+      bid!(id, "rt-plain-b", 0.9, 1.0, 5)
+
+      assert allocate!(id)["claimed_by"] == "rt-plain-a"
+      {:ok, events} = Hive.Work.events(id)
+      allocated = Enum.find(events, &(&1["topic"] == "work.allocated"))["payload"]
+      refute Map.has_key?(allocated, "required_tools")
+    end
+  end
+
   describe "cost ledger" do
     test "records an allocation, closes it on completion and summarizes per agent" do
       post_json("/agents/register", %{

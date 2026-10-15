@@ -128,6 +128,79 @@ defmodule Hive.ReaperTest do
     end
   end
 
+  describe "re-offering work that requires tools" do
+    setup do
+      Application.put_env(:hive, :reoffer_after_seconds, 1)
+      Application.put_env(:hive, :max_reoffers, 3)
+
+      on_exit(fn ->
+        Application.delete_env(:hive, :reoffer_after_seconds)
+        Application.delete_env(:hive, :max_reoffers)
+      end)
+    end
+
+    test "escalates with the missing tool names when no registered worker has them, tier held" do
+      post_json("/agents/register", %{
+        "id" => "ro-worker",
+        "capabilities" => %{"modes" => ["execute"], "tier" => "cheap", "tools" => ["image-build"]}
+      })
+
+      id = create_task!("ro-no-capable", %{"tier" => "power", "requires_tools" => ["ro-browser"]})
+      # An incapable bidder is not a reason to leave the work waiting forever.
+      bid!(id, "ro-worker")
+      Process.sleep(1100)
+
+      assert id in reaped(:escalated)
+      {:ok, work} = Hive.Work.get(id)
+      assert state_of(work) == "escalated"
+
+      {:ok, events} = Hive.Work.events(id)
+      escalated = Enum.find(events, &(&1["topic"] == "work.escalated"))["payload"]
+      assert escalated["reason"] == "missing_tools"
+      assert escalated["missing_tools"] == ["ro-browser"]
+      assert escalated["required_tools"] == ["ro-browser"]
+      refute Enum.any?(events, &(&1["topic"] == "work.reoffered"))
+      assert payload_of(id)["tier"] == "power"
+
+      # an escalated item is never allocated to anyone
+      assert {:error, _} = Hive.Work.allocate(id, 60)
+    end
+
+    test "with a capable worker it is re-offered but the tier is not lowered" do
+      post_json("/agents/register", %{
+        "id" => "ro-capable",
+        "capabilities" => %{"modes" => ["execute"], "tools" => ["ro-browser2"]}
+      })
+
+      id = create_task!("ro-capable", %{"tier" => "power", "requires_tools" => ["ro-browser2"]})
+      decline!(id, "ro-capable")
+      Process.sleep(1100)
+
+      assert id in reaped(:reoffered)
+      payload = payload_of(id)
+      assert payload["tier"] == "power"
+      assert payload["reoffers"] == 1
+      assert payload["incentive"] == 1.5
+
+      {:ok, events} = Hive.Work.events(id)
+      reoffer = Enum.find(events, &(&1["topic"] == "work.reoffered"))
+      assert reoffer["payload"]["tier_from"] == "power"
+      assert reoffer["payload"]["tier_to"] == "power"
+    end
+
+    test "a worker that only observes or proposes never counts as capable" do
+      post_json("/agents/register", %{
+        "id" => "ro-front-door",
+        "capabilities" => %{"modes" => ["observe", "propose"], "tools" => ["ro-browser3"]}
+      })
+
+      id = create_task!("ro-observer-only", %{"requires_tools" => ["ro-browser3"]})
+      Process.sleep(1100)
+
+      assert id in reaped(:escalated)
+    end
+  end
+
   defp reaped(key) do
     {:ok, summary} = Hive.Work.reap()
     Map.fetch!(summary, key)
