@@ -209,7 +209,7 @@ mcp_servers:
   # reads). Still no Secrets access anywhere, still --disable-destructive.
   k8s_deployment:
     command: "npx"
-    args: ["-y", "kubernetes-mcp-server@latest", "--disable-destructive", "--log-file", "stderr", "--cluster-provider", "in-cluster"]
+    args: ["-y", "kubernetes-mcp-server@0.0.67", "--disable-destructive", "--log-file", "stderr", "--cluster-provider", "in-cluster"]
     env:
       # MCP command-subprocesses don't inherit the full pod environment —
       # confirmed live: without these, in-cluster auto-detection fails with
