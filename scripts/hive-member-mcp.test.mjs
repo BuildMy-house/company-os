@@ -5,7 +5,7 @@ import readline from "node:readline";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -562,6 +562,21 @@ test("registration declares capabilities.tools only for known, verifiable tools"
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "kubectl-deploy, hindsight,kubectl-deploy,made-up" })).tools, ["hindsight", "kubectl-deploy"]);
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "browser,hindsight", PLAYWRIGHT_BROWSERS_PATH: noBrowsers })).tools, ["hindsight"], "browser is dropped without Chromium");
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "browser,hindsight", PLAYWRIGHT_BROWSERS_PATH: withChromium })).tools, ["browser", "hindsight"]);
+
+  // Credential-gated publisher tools: declared only when their env is present.
+  const publisherTools = "github-pr,reddit-publish,substack-publish,marketing-db-read,marketing-ingest";
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools })).tools, [], "no credentials declares none of the publisher tools");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c" })).tools, [], "partial reddit credentials declare nothing");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c", REDDIT_PASSWORD: "d", PUBLISHER_DATABASE_URL: "postgresql://x" })).tools, ["marketing-db-read", "reddit-publish"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, SUBSTACK_PUBLICATION_URL: "https://x.substack.com", SUBSTACK_SESSION_TOKEN: "c" })).tools, [], "the cookie alone declares nothing: the sidecar ready marker is required");
+  const marker = join(await mkdtemp(join(tmpdir(), "ready-")), "m");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, MARKETING_INGEST_READY_FILE: marker, SUBSTACK_READY_FILE: marker })).tools, [], "ready-file env pointing at a missing file declares nothing");
+  await writeFile(marker, "ok");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, MARKETING_INGEST_READY_FILE: marker })).tools, ["marketing-ingest"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, SUBSTACK_READY_FILE: marker })).tools, ["substack-publish"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "github-pr", GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "ga-read,gsc-read,reddit-read,substack-read" })).tools, [], "read-API tools were replaced by marketing-db-read");
 });
 
 test("hive_submit validates requires_tools and leaves tool-free tickets unchanged", async (t) => {

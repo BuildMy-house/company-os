@@ -1,0 +1,377 @@
+# Publisher agent (docs/PUBLISHER.md): OpenCode-flavor Hive member that writes and analyses
+# content and prepares blog PRs. Hermes approves; this pod executes.
+#
+# NOT in the buildmy-prod overlay on purpose. A human applies it by hand AFTER the Secrets exist
+# (docs/PUBLISHER.md "Human steps"): kubectl apply -k k8s/base/publisher-secrets-sync
+# then kubectl apply -k k8s/base/publisher.
+#
+# Posture:
+#   - own ServiceAccount, no token mounted, no RBAC; no kubernetes credentials of any kind
+#   - main container: env from publisher-secrets only (GITHUB_TOKEN, REDDIT_*, the SELECT-only
+#     publisher_reader DSN, HINDSIGHT_API_KEY). It never holds the ingest DSN or the Substack cookie.
+#   - sidecar: env from marketing-ingest-secrets; the only holder of MARKETING_INGEST_DATABASE_URL,
+#     GOOGLE_*, SUBSTACK_*. Listens on 127.0.0.1 only; allowlisted calls, validated rows.
+#   - no /opt/data, no company-ops-secrets, no Infisical bootstrap identity, no Steward token
+#   - NetworkPolicy: see the egress notes below
+#
+# Secret keys (names only; values live in Infisical, never in git):
+#   publisher-secrets          <- Infisical /publisher
+#     GITHUB_TOKEN             fine-grained PAT, exactly the 3 site repos, contents:write + pull_requests:write
+#     REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD
+#     PUBLISHER_DATABASE_URL   publisher_reader DSN (SELECT only on schema marketing)
+#     HINDSIGHT_API_KEY
+#   marketing-ingest-secrets   <- Infisical /marketing-ingest
+#     MARKETING_INGEST_DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN,
+#     GA4_PROPERTY_ID, GSC_SITE_URL, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME,
+#     REDDIT_PASSWORD, SUBSTACK_PUBLICATION_URL, SUBSTACK_SESSION_TOKEN, SUBSTACK_USER_ID
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: publisher
+  namespace: company-ops
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: publisher-config
+  namespace: company-ops
+data:
+  # Edit and re-apply to change the subreddit allowlist / caps (mounted over /opt/publisher/config).
+  # An empty allowedSubreddits means the agent cannot post to Reddit at all.
+  publisher.json: |
+    {
+      "repos": [
+        {
+          "name": "website",
+          "repo": "BuildMy-house/website",
+          "baseBranch": "main",
+          "verify": [
+            "npm ci",
+            "npm run lint",
+            "npm run check",
+            "npm run build"
+          ],
+          "deploy": "Public marketing site (buildmy.house), Astro static output. CI (.github/workflows/ci.yml) runs lint, check, build only: there is NO deploy job. docs/DEPLOY.md describes a wrangler Cloudflare Workers upload plus a manual promote step, and DEPLOYMENT.md says server output with @astrojs/cloudflare; neither matches CI or astro.config.mjs (static). How the live site actually updates is unverified: a merge to main is the human decision, check with Nahar before assuming it goes live.",
+          "notes": "src/ pages and components. The /diary sitemap paths are a hand-kept diaryPaths list in astro.config.mjs: when a diary blog post merges, a separate website PR must add its path."
+        },
+        {
+          "name": "hermees-diary",
+          "repo": "BuildMy-house/hermees-diary",
+          "baseBranch": "main",
+          "verify": [
+            "npm ci",
+            "npm run lint",
+            "npm run check",
+            "npm run build"
+          ],
+          "deploy": "Hermes diary (served under buildmy.house/diary), Astro static output; this is where the blog lives (src/content/blog/YYYY-MM-DD-slug.md). CI runs lint, check, build only. DEPLOYMENT.md claims auto-deploy to Cloudflare Workers via GitHub Actions on push, but no deploy job exists in the repo; the Dockerfile only runs the dev server. Live deploy path unverified.",
+          "notes": "Blog posts use the front matter in src/content/config.ts. Use `publisher blog pr` for posts (it validates and analyses them); use `publisher repo` for other edits."
+        },
+        {
+          "name": "observer-website",
+          "repo": "BuildMy-house/observer-website",
+          "baseBranch": "main",
+          "verify": [
+            "npm ci",
+            "npm run lint",
+            "npm run check",
+            "npm run build"
+          ],
+          "deploy": "Observer site, Astro server output with @astrojs/node, reads observer.* tables from Postgres as the read-only hermes_analytics role. CI runs lint, check, build only. DEPLOYMENT.md describes a self-hosted Node/Docker run; no deploy job and no manifest for it in company-os. Live deploy path unverified.",
+          "notes": "Server-rendered with a database read path: do not add write queries or any credentials to the repo. Append-only data model is documented in the UI."
+        }
+      ],
+      "blog": {
+        "repo": "BuildMy-house/hermees-diary",
+        "baseBranch": "main",
+        "contentDir": "src/content/blog",
+        "categories": [
+          "decisions",
+          "research",
+          "build-log",
+          "product"
+        ],
+        "titleMax": 70,
+        "excerptMin": 70,
+        "excerptMax": 170
+      },
+      "reddit": {
+        "allowedSubreddits": [],
+        "dailyPostCap": 1,
+        "userAgent": "buildmy-house-publisher/1.0 (by /u/REDDIT_USERNAME)"
+      },
+      "hindsight": {
+        "url": "http://hindsight:8888",
+        "bank": "publisher"
+      }
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: publisher-state
+  namespace: company-ops
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 256Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: publisher
+  namespace: company-ops
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: publisher
+  template:
+    metadata:
+      labels:
+        app: publisher
+    spec:
+      serviceAccountName: publisher
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1001
+        runAsNonRoot: true
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: publisher
+          # Placeholder: replace with the built publisher image digest (docs/IMAGES.md).
+          image: localhost:30500/company-os-publisher:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 8000
+            - containerPort: 8001
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 1536Mi
+          env:
+            - name: HOME
+              value: /tmp/publisher-home
+            - name: XDG_CONFIG_HOME
+              value: /tmp/publisher-home/.config
+            - name: HIVE_URL
+              value: http://hive-coordinator:4100
+            - name: HIVE_AGENT_ID
+              value: publisher
+            - name: A2A_ENDPOINT
+              value: http://publisher:8001
+            - name: AGENT_FLAVOR
+              value: opencode
+            - name: AGENT_ROLE
+              value: manager
+            - name: AGENT_PROFILE
+              value: generalist
+            - name: AGENT_CAPABILITIES
+              value: execute,review
+            - name: AGENT_TIER
+              value: cheap
+            - name: AGENT_COST_FACTOR
+              value: "0.1"
+            - name: AGENT_TOOLS
+              value: github-pr,reddit-publish,substack-publish,marketing-db-read,marketing-ingest
+            - name: RUNNER_AGENT
+              value: opencode
+            - name: RUNNER_MODEL
+              value: oc-zai-coding-plan/glm-5.3-flash
+            - name: PUBLISHER_ALLOWED_REMOTES
+              value: https://github.com/BuildMy-house/website,https://github.com/BuildMy-house/hermees-diary,https://github.com/BuildMy-house/observer-website
+            - name: PUBLISHER_LEDGER_FILE
+              value: /var/lib/publisher/ledger.jsonl
+            - name: MARKETING_INGEST_READY_FILE
+              value: /run/publisher/ingest.ready
+            - name: SUBSTACK_READY_FILE
+              value: /run/publisher/substack.ready
+          envFrom:
+            - secretRef:
+                name: publisher-secrets
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 3
+          volumeMounts:
+            - name: home
+              mountPath: /tmp/publisher-home
+            - name: workspace
+              mountPath: /workspace
+            - name: state
+              mountPath: /var/lib/publisher
+            - name: ready
+              mountPath: /run/publisher
+              readOnly: true
+            - name: config
+              mountPath: /opt/publisher/config
+              readOnly: true
+        - name: ingest-sidecar
+          image: localhost:30500/company-os-publisher:latest
+          imagePullPolicy: Always
+          command: ["/opt/company-ops-venv/bin/python", "-m", "company_ops.marketing_sidecar"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          env:
+            - name: HOME
+              value: /tmp/sidecar-home
+            - name: SUBSTACK_MCP_CMD
+              value: '["substack-mcp"]'
+            - name: PUBLISHER_LEDGER_FILE
+              value: /var/lib/publisher/ledger.jsonl
+            - name: MARKETING_INGEST_READY_FILE
+              value: /run/publisher/ingest.ready
+            - name: SUBSTACK_READY_FILE
+              value: /run/publisher/substack.ready
+            - name: PUBLISHER_SUBSTACK_DAILY_CAP
+              value: "1"
+          envFrom:
+            - secretRef:
+                name: marketing-ingest-secrets
+          volumeMounts:
+            - name: sidecar-home
+              mountPath: /tmp/sidecar-home
+            - name: state
+              mountPath: /var/lib/publisher
+            - name: ready
+              mountPath: /run/publisher
+      volumes:
+        - name: home
+          emptyDir: {}
+        - name: sidecar-home
+          emptyDir: {}
+        - name: workspace
+          emptyDir: {}
+        # Holds the publish ledger (daily caps, approval_ref reuse). On a PVC so a pod restart
+        # does not reset them. Recreate strategy + ReadWriteOnce: one pod at a time.
+        - name: state
+          persistentVolumeClaim:
+            claimName: publisher-state
+        - name: ready
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: config
+          configMap:
+            name: publisher-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: publisher
+  namespace: company-ops
+spec:
+  selector:
+    app: publisher
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+    - name: a2a
+      port: 8001
+      targetPort: 8001
+---
+# Egress is IP-based: NetworkPolicy cannot match hostnames. The agent needs public 443 for
+# github.com / api.github.com, reddit.com / oauth.reddit.com, the LLM provider, and (sidecar)
+# Google APIs and the Substack publication host, so public HTTPS is allowed with every private
+# range excluded. That is wider than "only these hosts": restricting by FQDN needs Cilium
+# toFQDNs or an egress proxy (follow-up, docs/PUBLISHER.md). Enforcement also depends on the
+# cluster's NetworkPolicy controller, which this change could not verify.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: publisher
+  namespace: company-ops
+spec:
+  podSelector:
+    matchLabels:
+      app: publisher
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: hive-coordinator
+        - podSelector:
+            matchLabels:
+              app: hermes-gateway
+      ports:
+        - protocol: TCP
+          port: 8001
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: hive-coordinator
+      ports:
+        - protocol: TCP
+          port: 4100
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: hindsight
+      ports:
+        - protocol: TCP
+          port: 8888
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

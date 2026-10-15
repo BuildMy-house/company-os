@@ -69,6 +69,17 @@ export function tierAffinityMultiplier(taskTier, poolTier) {
 }
 export const taskTierOf = (candidate) => normalizeTier(candidate?.payload?.tier);
 
+// Ticket metadata is not part of payload.parts, so a worker never sees it unless it is injected.
+// approval_ref (docs/PUBLISHER.md) is the one key workers need: the publisher agent refuses to
+// publish to Reddit or Substack without it. Only a well-formed value is passed on, so a ticket
+// cannot smuggle prompt text through this field.
+export const APPROVAL_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{5,119}$/;
+export function withApprovalRef(taskPrompt, payload) {
+  const ref = payload?.approval_ref;
+  if (typeof ref !== "string" || !APPROVAL_REF_RE.test(ref)) return taskPrompt;
+  return `${taskPrompt}\n\nTicket metadata approval_ref: ${ref}`;
+}
+
 const HIVE_WORKER_MEMORY = (() => {
   const paths = [
     new URL("./HIVE_WORKER_MEMORY.md", import.meta.url),
@@ -930,7 +941,7 @@ export async function runHiveWork(candidate, deps = {}) {
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "allocated", agent_id: agentId });
     keepBusy = true;
     const task = { id: candidate.id, state: "working", startedAt: Date.now() };
-    const taskPrompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
+    const taskPrompt = withApprovalRef(candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.", candidate.payload);
     const bidContext = {
       confidence: assessment.confidence,
       expected_benefit: assessment.expected_benefit,

@@ -1,4 +1,4 @@
-# Read-only on both schemas (current + future tables).
+# Read-only on company, observer and marketing (current + future tables).
 name: hermes_analytics
 login: true
 password_key: ANALYTICS_PASSWORD
@@ -8,5 +8,9 @@ grants:
     tables: all
     privileges: [SELECT]
   - schema: observer
+    tables: all
+    privileges: [SELECT]
+  # Also what the backup job connects as: it must read every dumped schema.
+  - schema: marketing
     tables: all
     privileges: [SELECT]
