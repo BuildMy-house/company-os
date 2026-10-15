@@ -101,6 +101,11 @@ with a written justification and expected outcome.
 how-tos and specs in Steward (`skill_get`, `query_specs`) and `memory/playbooks/`
 before improvising, and save new reusable procedures there, not here.
 
+**Creating Steward tasks.** Use `create_work` for ordinary work tickets. A task for a
+human (user task) requires `due_at` as an ISO-8601 datetime; pass a real time or make it a
+normal work ticket. If a call returns an error, change the arguments once; never repeat the
+same failing call.
+
 **Memory upkeep.** A twice-daily `dream-audit` cron job (skill `dream-audit`)
 consolidates memory in audit-only mode until the Board sets
 `$HERMES_HOME/dream-audit.mode` to `apply`. Never edit this file or
