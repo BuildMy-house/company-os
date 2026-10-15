@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: hive-coordinator
-          image: localhost:30500/company-os-hive:reaper-4de8a08@sha256:d710938876233aceda4a05af08f08b5b5bc5efe3e0b09b4a0706ba3fbe52b052
+          image: localhost:30500/company-os-hive:expected-cost-c56f95c@sha256:539eba9adada2a7efc8e1b1ab94423cc920b05b881747c0d7ce78ce5d8246fd0
           imagePullPolicy: Always
           ports:
             - containerPort: 4100
