@@ -74,7 +74,10 @@ clearer acceptance criteria, not another retry.
 
 A ticket that cannot be done without a specific tool lists it in the optional
 `metadata.requires_tools` array. Known names: `browser`, `hindsight`, `kubectl-deploy`,
-`image-build`, `hermes-data`, `postgres-admin`; `hive_submit` rejects any other name.
+`image-build`, `hermes-data`, `postgres-admin`, `github-pr`, `reddit-publish`,
+`substack-publish`, `marketing-db-read`; `hive_submit` rejects any other name. The last four
+belong to the publisher agent and are declared only when their credential env is present
+(see `docs/PUBLISHER.md`).
 
 Agents declare `capabilities.tools` at registration (set per pod from `AGENT_TOOLS`, only
 for tools the pod verifiably has). The coordinator marks an agent missing any required
@@ -83,6 +86,15 @@ a cheaper agent without the tool can never win and the score fallback never pick
 no registered execute-capable agent has every required tool, the work is not allocated;
 it escalates for a human with the missing tool names, and the tier is held rather than
 dropped. Tickets without `requires_tools` route exactly as before.
+
+## Approval for publishing (`approval_ref`)
+
+A ticket asking the publisher agent to publish to Reddit or Substack carries
+`metadata.approval_ref`, a reference to the Hermes/Board approval (decision id, ticket id or
+URL). Hive passes unknown metadata through untouched. The publisher refuses to publish
+without it and says why. Drafting never needs it. Hive does not yet expose payload metadata
+on `GET /tasks/:id`, so the agent can check that the ref is present and well formed but not
+that it is genuine (see `docs/PUBLISHER.md`, limitations).
 
 ## Example
 
