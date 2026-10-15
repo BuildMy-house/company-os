@@ -1,35 +1,43 @@
 """Deterministic marketing-analytics ingester.
 
-Pulls aggregate data from GA4, Search Console, Reddit and the public Substack
-RSS feed and upserts it into the ``marketing`` schema (sql/marketing_schema.sql).
+Pulls aggregate data from GA4, Search Console, Reddit and Substack (via the
+pinned, allowlisted substack-mcp bridge) and upserts it into the ``marketing`` schema (sql/marketing_schema.sql).
 No LLM is involved. Run daily by k8s/base/marketing-ingest.
 
 Rules:
 - Each source is independent: a failure is recorded in ``marketing.ingest_runs``
   and never stops the others.
 - A source without credentials is recorded as ``skipped``.
-- Substack has no official stats API; only the public RSS post inventory is
-  read. Without a publication URL the source is ``unavailable`` (not faked).
+- Substack has no official API: stats come from the unofficial cookie-based
+  substack-mcp via company_ops/substack_bridge.py (read tools only, aggregates
+  only). Without SUBSTACK_* env it is ``skipped``; an expired cookie is
+  recorded as ``auth_failed``.
+- Every row is validated (types, ranges, date windows) before upsert; one bad
+  row fails the whole source, so a model or a bad payload cannot write
+  invented numbers.
 - Upserts are idempotent: re-running a window overwrites the same keys.
 - Aggregates only. Nothing here reads or stores user-level data.
 - Credentials come only from env (Secret ``marketing-ingest-secrets``); this
   module never logs or stores them.
 
-Run: ``python -m company_ops.marketing_ingest [--days N]``.
+Run: ``python -m company_ops.marketing_ingest [--days N] [--source NAME]``.
+The same ``run`` code path backs the publisher's ``marketing-ingest`` tool
+(company_ops/marketing_sidecar.py).
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import xml.etree.ElementTree as ET
+import math
 from datetime import UTC, date, datetime, timedelta
-from email.utils import parsedate_to_datetime
 from typing import Callable
 from urllib.parse import quote
 
 import psycopg
 import requests
+
+from company_ops import substack_bridge
 
 SOURCES = ("ga4", "gsc", "reddit", "substack")
 HTTP_TIMEOUT = 30
@@ -210,29 +218,53 @@ def fetch_reddit(env: dict, http, start: date, end: date) -> tuple[str, list[dic
     return "reddit_posts_daily", rows
 
 
-def fetch_substack(env: dict, http, start: date, end: date) -> tuple[str, list[dict]]:
-    """Post inventory from the public RSS feed. Stats: unavailable (no API)."""
-    base = env.get("SUBSTACK_PUBLICATION_URL", "").rstrip("/")
-    if not base:
-        raise Unavailable("no SUBSTACK_PUBLICATION_URL; Substack has no official stats API")
-    resp = http.get(base + "/feed", headers={"User-Agent": USER_AGENT}, timeout=HTTP_TIMEOUT)
-    if resp.status_code >= 400:
-        raise RuntimeError(f"substack feed: HTTP {resp.status_code}")
-    root = ET.fromstring(resp.content)
-    rows = []
-    for item in root.iter("item"):
-        link = (item.findtext("link") or "").strip()
-        if not link:
-            continue
-        pub = item.findtext("pubDate")
-        rows.append({
-            "snapshot_date": end,
-            "publication": base,
-            "post_url": link,
-            "title": (item.findtext("title") or "").strip(),
-            "published_at": parsedate_to_datetime(pub) if pub else None,
-        })
-    return "substack_posts", rows
+def fetch_substack(env: dict, http, start: date, end: date, call=None):
+    """Aggregate publication and per-post stats via the allowlisted bridge.
+
+    ``call(tool, args)`` is injectable for tests. Only get_publication_stats,
+    get_post_stats and list_posts are reachable; no subscriber-level tool is.
+    """
+    _need(env, substack_bridge.SUBSTACK_ENV)
+    pub = env["SUBSTACK_PUBLICATION_URL"].rstrip("/")
+    call = call or (lambda tool, args: substack_bridge.call_tool(tool, args, env))
+    stats = call("get_publication_stats", {})
+    pub_row = {
+        "snapshot_date": end,
+        "publication": pub,
+        "subscribers": stats.get("subscribers"),
+        "subscribers_last_30_days": stats.get("subscribers_last_30_days"),
+        "email_subscribers": stats.get("email_subscribers"),
+        "app_subscribers": stats.get("app_subscribers"),
+        "views": stats.get("views"),
+        "views_30d": stats.get("views_30d"),
+        "open_rate_30d": stats.get("open_rate_30d"),
+    }
+    post_rows: list[dict] = []
+    offset = 0
+    while offset < 500:  # hard bound on archive pages
+        page = call("get_post_stats", {"limit": 100, "offset": offset})
+        posts = page.get("posts", [])
+        for p in posts:
+            post_rows.append({
+                "snapshot_date": end,
+                "publication": pub,
+                "post_id": p.get("post_id"),
+                "title": p.get("title") or "",
+                "post_date": p.get("post_date"),
+                "delivered": p.get("delivered"),
+                "opens": p.get("opens"),
+                "open_rate": p.get("open_rate"),
+                "clicks": p.get("clicks"),
+                "views": p.get("views"),
+                "signups": p.get("signups"),
+                "subscribes": p.get("subscribes"),
+                "unsubscribes": p.get("unsubscribes"),
+                "likes": p.get("likes"),
+            })
+        offset += len(posts)
+        if len(posts) < 100 or offset >= int(page.get("total") or 0):
+            break
+    return [("substack_publication_daily", [pub_row]), ("substack_post_stats", post_rows)]
 
 
 FETCHERS: dict[str, Callable] = {
@@ -247,8 +279,124 @@ KEYS = {
     "ga4_daily": ("date", "property_id", "page_path", "channel_group"),
     "gsc_daily": ("date", "site_url", "page", "query"),
     "reddit_posts_daily": ("snapshot_date", "subreddit", "post_id"),
-    "substack_posts": ("snapshot_date", "publication", "post_url"),
+    "substack_publication_daily": ("snapshot_date", "publication"),
+    "substack_post_stats": ("snapshot_date", "publication", "post_id"),
 }
+
+# ---------------------------------------------------------------- validation
+# column -> (kind, min, max). kind: int | float | str | date | ts. NULL allowed
+# only for columns listed in NULLABLE. Anything else raises ValidationError.
+
+BIG = 10**12
+SPEC: dict[str, dict[str, tuple]] = {
+    "ga4_daily": {
+        "date": ("date",), "property_id": ("str",), "page_path": ("str",), "channel_group": ("str",),
+        "sessions": ("int", 0, BIG), "total_users": ("int", 0, BIG),
+        "screen_page_views": ("int", 0, BIG), "engaged_sessions": ("int", 0, BIG),
+    },
+    "gsc_daily": {
+        "date": ("date",), "site_url": ("str",), "page": ("str",), "query": ("str",),
+        "clicks": ("int", 0, BIG), "impressions": ("int", 0, BIG),
+        "ctr": ("float", 0, 1), "position": ("float", 0, 10000),
+    },
+    "reddit_posts_daily": {
+        "snapshot_date": ("date",), "subreddit": ("str",), "post_id": ("str",), "title": ("str",),
+        "permalink": ("str",), "created_at": ("ts",), "score": ("int", -BIG, BIG),
+        "num_comments": ("int", 0, BIG), "upvote_ratio": ("float", 0, 1),
+    },
+    "substack_publication_daily": {
+        "snapshot_date": ("date",), "publication": ("str",),
+        "subscribers": ("int", 0, BIG), "subscribers_last_30_days": ("int", -BIG, BIG),
+        "email_subscribers": ("int", 0, BIG), "app_subscribers": ("int", 0, BIG),
+        "views": ("int", 0, BIG), "views_30d": ("int", 0, BIG), "open_rate_30d": ("float", 0, 1),
+    },
+    "substack_post_stats": {
+        "snapshot_date": ("date",), "publication": ("str",), "post_id": ("int", 1, BIG),
+        "title": ("str",), "post_date": ("ts",), "delivered": ("int", 0, BIG),
+        "opens": ("int", 0, BIG), "open_rate": ("float", 0, 1), "clicks": ("int", 0, BIG),
+        "views": ("int", 0, BIG), "signups": ("int", 0, BIG), "subscribes": ("int", 0, BIG),
+        "unsubscribes": ("int", 0, BIG), "likes": ("int", 0, BIG),
+    },
+}
+NULLABLE = {
+    "reddit_posts_daily": {"upvote_ratio"},
+    "substack_publication_daily": {
+        "subscribers", "subscribers_last_30_days", "email_subscribers", "app_subscribers",
+        "views", "views_30d", "open_rate_30d"},
+    "substack_post_stats": {
+        "post_date", "delivered", "opens", "open_rate", "clicks", "views", "signups",
+        "subscribes", "unsubscribes", "likes"},
+}
+# date columns that must fall inside the pulled window (snapshots are stamped
+# with the window end, so they must equal it; event dates must be in-window).
+WINDOW_DATE_COLS = {"ga4_daily": "date", "gsc_daily": "date"}
+SNAPSHOT_TABLES = {"reddit_posts_daily", "substack_publication_daily", "substack_post_stats"}
+
+
+class ValidationError(Exception):
+    """A fetched row failed validation; nothing from this source is written."""
+
+
+def _parse_ts(v):
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, str):
+        try:
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    raise ValueError("not a timestamp")
+
+
+def validate_rows(table: str, rows: list[dict], start: date, end: date) -> list[dict]:
+    spec = SPEC[table]
+    nullable = NULLABLE.get(table, set())
+    out = []
+    for n, row in enumerate(rows):
+        if set(row) != set(spec):
+            raise ValidationError(f"{table}[{n}]: columns {sorted(set(row) ^ set(spec))} differ from schema")
+        clean = {}
+        for col, rule in spec.items():
+            v = row[col]
+            if v is None:
+                if col not in nullable:
+                    raise ValidationError(f"{table}[{n}].{col}: null not allowed")
+                clean[col] = None
+                continue
+            kind = rule[0]
+            try:
+                if kind == "int":
+                    if isinstance(v, bool) or isinstance(v, float) and not float(v).is_integer():
+                        raise ValueError("not an integer")
+                    v = int(v)
+                elif kind == "float":
+                    if isinstance(v, bool):
+                        raise ValueError("bool")
+                    v = float(v)
+                    if not math.isfinite(v):
+                        raise ValueError("not finite")
+                elif kind == "str":
+                    if not isinstance(v, str) or len(v) > 4000:
+                        raise ValueError("not a string <= 4000 chars")
+                elif kind == "date":
+                    if not isinstance(v, date) or isinstance(v, datetime):
+                        raise ValueError("not a date")
+                elif kind == "ts":
+                    v = _parse_ts(v)
+                if kind in ("int", "float") and not rule[1] <= v <= rule[2]:
+                    raise ValueError(f"out of range [{rule[1]}, {rule[2]}]")
+            except ValueError as e:
+                raise ValidationError(f"{table}[{n}].{col}: {e}") from e
+            clean[col] = v
+        wc = WINDOW_DATE_COLS.get(table)
+        if wc and not start <= clean[wc] <= end:
+            raise ValidationError(f"{table}[{n}].{wc}: {clean[wc]} outside window {start}..{end}")
+        if table in SNAPSHOT_TABLES and clean["snapshot_date"] != end:
+            raise ValidationError(f"{table}[{n}].snapshot_date must equal window end {end}")
+        if table == "gsc_daily" and clean["clicks"] > clean["impressions"]:
+            raise ValidationError(f"{table}[{n}]: clicks exceed impressions")
+        out.append(clean)
+    return out
 
 
 # ------------------------------------------------------------------- store
@@ -288,8 +436,12 @@ def record_run(conn, source, start, end, status, rows=0, error=None, started_at=
 def run_source(conn, name: str, env: dict, http, start: date, end: date) -> dict:
     started = datetime.now(UTC)
     try:
-        table, rows = FETCHERS[name](env, http, start, end)
-        n = upsert(conn, table, rows)
+        fetched = FETCHERS[name](env, http, start, end)
+        if isinstance(fetched, tuple):
+            fetched = [fetched]
+        n = 0
+        for table, rows in fetched:
+            n += upsert(conn, table, validate_rows(table, rows, start, end))
         conn.commit()
         result = {"status": "ok", "rows": n, "error": None}
     except Skipped as e:
@@ -298,20 +450,29 @@ def run_source(conn, name: str, env: dict, http, start: date, end: date) -> dict
     except Unavailable as e:
         conn.rollback()
         result = {"status": "unavailable", "rows": 0, "error": str(e)}
+    except substack_bridge.AuthFailed as e:
+        conn.rollback()
+        result = {"status": "auth_failed", "rows": 0, "error": str(e)}
     except Exception as e:  # noqa: BLE001 - isolation: one source must not stop the others
         conn.rollback()
         result = {"status": "failed", "rows": 0, "error": f"{type(e).__name__}: {e}"}
-    if name == "substack" and result["status"] == "ok":
-        result["error"] = "inventory only; views/subscribers unavailable (no official API)"
     record_run(conn, name, start, end, result["status"], result["rows"], result["error"], started)
     return result
 
 
-def run(conn, env: dict, http=None, days: int = 7, today: date | None = None) -> dict:
+def run(conn, env: dict, http=None, days: int = 7, today: date | None = None,
+        sources: tuple[str, ...] | None = None) -> dict:
+    """Pull the named sources (default all). Shared by the CronJob and the sidecar."""
+    if not 1 <= days <= 90:
+        raise ValueError("days must be between 1 and 90")
+    names = tuple(sources or SOURCES)
+    unknown = [n for n in names if n not in FETCHERS]
+    if unknown:
+        raise ValueError(f"unknown source(s): {unknown}")
     http = http or requests.Session()
     end = (today or datetime.now(UTC).date()) - timedelta(days=1)
     start = end - timedelta(days=days - 1)
-    return {name: run_source(conn, name, env, http, start, end) for name in SOURCES}
+    return {name: run_source(conn, name, env, http, start, end) for name in names}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -320,17 +481,18 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(description="Ingest marketing analytics into the marketing schema.")
     ap.add_argument("--days", type=int, default=int(os.environ.get("MARKETING_INGEST_DAYS", "7")))
+    ap.add_argument("--source", action="append", choices=SOURCES, help="repeatable; default all")
     args = ap.parse_args(argv)
     dsn = os.environ.get("MARKETING_INGEST_DATABASE_URL")
     if not dsn:
         print("MARKETING_INGEST_DATABASE_URL not set", file=sys.stderr)
         return 2
     with psycopg.connect(dsn) as conn:
-        results = run(conn, dict(os.environ), days=args.days)
+        results = run(conn, dict(os.environ), days=args.days, sources=tuple(args.source or ()) or None)
     print(json.dumps(results))
-    # Non-zero only for real failures so the CronJob shows red; skipped and
-    # unavailable are expected states.
-    return 1 if any(r["status"] == "failed" for r in results.values()) else 0
+    # Non-zero for real failures and expired cookies so the CronJob shows red;
+    # skipped and unavailable are expected states.
+    return 1 if any(r["status"] in ("failed", "auth_failed") for r in results.values()) else 0
 
 
 if __name__ == "__main__":

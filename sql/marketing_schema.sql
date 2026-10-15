@@ -50,16 +50,39 @@ CREATE TABLE IF NOT EXISTS marketing.reddit_posts_daily (
   PRIMARY KEY (snapshot_date, subreddit, post_id)
 );
 
--- Substack: post inventory from the public RSS feed. Substack has no
--- official stats API, so there are deliberately no view/subscriber columns.
-CREATE TABLE IF NOT EXISTS marketing.substack_posts (
+-- Substack (unofficial, cookie-based substack-mcp; see company_ops/substack_bridge.py).
+-- Aggregates only: no subscriber-level rows, no emails, ever.
+CREATE TABLE IF NOT EXISTS marketing.substack_publication_daily (
   snapshot_date DATE NOT NULL,
   publication TEXT NOT NULL,
-  post_url TEXT NOT NULL,
-  title TEXT NOT NULL,
-  published_at TIMESTAMPTZ,
+  subscribers BIGINT,
+  subscribers_last_30_days BIGINT,
+  email_subscribers BIGINT,
+  app_subscribers BIGINT,
+  views BIGINT,
+  views_30d BIGINT,
+  open_rate_30d DOUBLE PRECISION,
   fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (snapshot_date, publication, post_url)
+  PRIMARY KEY (snapshot_date, publication)
+);
+
+CREATE TABLE IF NOT EXISTS marketing.substack_post_stats (
+  snapshot_date DATE NOT NULL,
+  publication TEXT NOT NULL,
+  post_id BIGINT NOT NULL,
+  title TEXT NOT NULL,
+  post_date TIMESTAMPTZ,
+  delivered BIGINT,
+  opens BIGINT,
+  open_rate DOUBLE PRECISION,
+  clicks BIGINT,
+  views BIGINT,
+  signups BIGINT,
+  subscribes BIGINT,
+  unsubscribes BIGINT,
+  likes BIGINT,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (snapshot_date, publication, post_id)
 );
 
 -- One row per source per ingest attempt.
@@ -69,7 +92,7 @@ CREATE TABLE IF NOT EXISTS marketing.ingest_runs (
   window_start DATE NOT NULL,
   window_end DATE NOT NULL,
   rows_upserted INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL CHECK (status IN ('ok','failed','skipped','unavailable')),
+  status TEXT NOT NULL CHECK (status IN ('ok','failed','skipped','unavailable','auth_failed')),
   error TEXT,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   finished_at TIMESTAMPTZ
