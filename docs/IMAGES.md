@@ -27,7 +27,7 @@ agent-driven builds; this script is the fresh-host/local-up path.
 |---|---|---|---|---|---|---|
 | `company-os` | `@sha256:…` (company-ops.yaml), `:dns-remediation` (dns-healthcheck.yaml) | hermes-gateway Deployment; dns-healthcheck CronJob | `Dockerfile` | repo root | — | build-push-images.sh / builder MCP |
 | `company-os-engineering` | `:runner-guard-b24cae3@sha256:33285f0ec1347a4f30b02576c4c693dfb9051e7b9018cafd1f4f269c3348f215` (engineering.yaml, engineering-opencode.yaml, engineering-opencode-direct.yaml), `@sha256:…` (engineering-build-dispatcher.yaml, hermes-build-dispatcher.yaml) | engineering-agent + opencode variants; both build dispatchers | `Dockerfile.engineering` | repo root | named `shared` context = `WORKSPACE_CONTEXT`; args `AGENT_FLAVOR`, `INSTALL_BROWSER` | build-push-images.sh / builder MCP |
-| `company-os-hive` | `:reaper-4de8a08@sha256:d7109388…` (hive.yaml) | hive-coordinator | `hive/Dockerfile` | repo root | — | build-push-images.sh |
+| `company-os-hive` | `:expected-cost-c56f95c@sha256:539eba9a…` (hive.yaml) | hive-coordinator | `hive/Dockerfile` | repo root | — | build-push-images.sh |
 | `company-os-pm-agent` | `:latest` (pm-agent.yaml, included by `k8s/overlays/buildmy-prod`) | pm-agent | `pm-agent/Dockerfile` | repo root | — | build-push-images.sh |
 | `company-os-browser-adversary` | `:latest` (browser-adversary.yaml) | browser-adversary | `Dockerfile.browser-adversary` | repo root | — | build-push-images.sh |
 | `company-os-mcp-gateway` | digest-pinned (mcp-gateway.yaml — **not** in kustomization; admin applies once) | mcp-gateway | `Dockerfile.mcp-gateway` | repo root | — | `builder_build_and_push` only (see docs/MCP-GATEWAY.md) |
