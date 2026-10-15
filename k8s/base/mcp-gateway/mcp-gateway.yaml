@@ -281,7 +281,7 @@ data:
                   "image_repo": {
                     "required": true,
                     "type": "string",
-                    "in": ["company-os", "company-os-browser-adversary", "company-os-engineering", "company-os-engineering-opencode", "company-os-hive", "company-os-pm-agent", "buildmyhouse-app", "buildmyhouse-luxcore", "buildmyhouse-mcp"]
+                    "in": ["company-os", "company-os-browser-adversary", "company-os-engineering", "company-os-engineering-opencode", "company-os-hive", "company-os-pm-agent", "company-os-publisher", "buildmyhouse-app", "buildmyhouse-luxcore", "buildmyhouse-mcp"]
                   },
                   "dockerfile_path": {
                     "required": true,
