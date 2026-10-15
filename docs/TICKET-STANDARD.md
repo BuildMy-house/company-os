@@ -66,8 +66,23 @@ the guide above, not individual tickets.
 Work with no interested bid for 30 minutes is re-offered by the coordinator: earlier
 declines are cleared, the tier drops one step and `incentive` rises by 0.5, which
 workers use to discount their bid. After three re-offers it escalates for a human or
-manager to decide. A re-offered ticket that keeps failing usually needs splitting or
+manager to decide. Work with `requires_tools` and no capable agent skips the re-offer
+tier drop and escalates with the missing tool names. A re-offered ticket that keeps failing usually needs splitting or
 clearer acceptance criteria, not another retry.
+
+## Requiring tools
+
+A ticket that cannot be done without a specific tool lists it in the optional
+`metadata.requires_tools` array. Known names: `browser`, `hindsight`, `kubectl-deploy`,
+`image-build`, `hermes-data`, `postgres-admin`; `hive_submit` rejects any other name.
+
+Agents declare `capabilities.tools` at registration (set per pod from `AGENT_TOOLS`, only
+for tools the pod verifiably has). The coordinator marks an agent missing any required
+tool ineligible with reason `missing_tools` before scoring and records it in the bids, so
+a cheaper agent without the tool can never win and the score fallback never picks it. If
+no registered execute-capable agent has every required tool, the work is not allocated;
+it escalates for a human with the missing tool names, and the tier is held rather than
+dropped. Tickets without `requires_tools` route exactly as before.
 
 ## Example
 
@@ -89,3 +104,19 @@ clearer acceptance criteria, not another retry.
 ```
 
 That is 3 + 1 = 4 points, which routes as `standard`.
+
+A QA sweep that needs a real browser:
+
+```json
+{
+  "message": "Run the pre-launch QA sweep against staging.",
+  "metadata": {
+    "type": "chore",
+    "points": 5,
+    "goal": "Every launch-checklist page is exercised in a real browser and defects are filed.",
+    "acceptance_criteria": ["Report lists each page checked with pass/fail"],
+    "scope": "staging site only; no code changes",
+    "requires_tools": ["browser"]
+  }
+}
+```

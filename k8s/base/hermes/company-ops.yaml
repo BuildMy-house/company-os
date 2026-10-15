@@ -36,6 +36,9 @@ spec:
               value: http://hive-coordinator:4100
             - name: HIVE_AGENT_ID
               value: hermees
+            # Hermes owns the /opt/data memory volume, so it alone declares hermes-data.
+            - name: AGENT_TOOLS
+              value: hermes-data
             - name: AXIOM_SERVICE_NAME
               value: hermes-gateway-k8s
             - name: DEPLOYMENT_ENVIRONMENT
