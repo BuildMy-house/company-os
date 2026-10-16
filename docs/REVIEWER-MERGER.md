@@ -6,7 +6,7 @@ Status: draft for review. Nothing here is deployed. Decided by Nahar on 2026-10-
 
 Engineering workers open PRs; nobody merges them without a human. The
 reviewer-merger removes that bottleneck: it reviews a PR, and if it passes the
-checklist below, merges it into `main` (and `staging` for `app`). CI/CD then
+checklist below, merges it into `main`. CI/CD then
 deploys. The agent is one more Hive member with a single job.
 
 ## Scope decisions
@@ -15,10 +15,10 @@ deploys. The agent is one more Hive member with a single job.
 |-------|----------------------|-----|
 | publisher | website, hermees-diary, observer-website; `blog/<slug>` branches only | Holds Reddit/Substack/GitHub credentials and reads external content; kept narrow (guard in `publisher/lib/guard.mjs`). Unchanged. |
 | engineering workers | all six cloned repos; branches and PRs, no merge | Existing GitHub App. |
-| reviewer-merger | website, hermees-diary, observer-website, app, company-os; merge into `main` / `staging` | The only identity with merge permission. |
+| reviewer-merger | website, hermees-diary, observer-website, app, company-os; merge into `main` | The only identity with merge permission. |
 
 It never merges into `prod`. Promotion to `prod` follows the existing branch
-workflow (app: staging to prod after verification; company-os: main to prod).
+workflow where one exists: `company-os` has a `prod` branch; `app` has none (see Verified facts).
 Moving that gate to an automated one is a separate decision (see "Deploy
 follow-ups").
 
@@ -43,7 +43,7 @@ follow-ups").
 5. Shared components (design tokens, `Layout.astro`, shared libraries) per the
    repo's `AGENTS.md`: reviewed explicitly, the review recorded in a PR comment
    before the merge.
-6. Target branch is `main` (or `staging` for `app`), never `prod`.
+6. Target branch is `main`, never `prod`.
 
 ## Refusals (human required)
 
@@ -76,9 +76,20 @@ to it when an incident shows a gap.
   last), and excluded from its own updates. Images are built host-side on
   pop-os-1 because builder pods cannot pull from the node-local HTTP registry.
 
+## Verified facts (checked 2026-10-16 via the GitHub API)
+
+- `app` has no `staging` or `prod` branch. Merging to `main` already deploys to
+  app.buildmy.house: `deploy-app.yml` runs after the `CI` workflow succeeds on `main`. There is no
+  blue-green yet, and the most recent `build-and-deploy` run on `main` failed. So for `app`, a merge
+  IS a production deploy until the blue-green work lands.
+- `company-os` has a `prod` branch; merging to `main` does not deploy by itself.
+- `main` is unprotected on `app` and `company-os` (and the three site repos).
+- Both repos report check runs (`app`: several CI jobs plus `build-and-deploy`; `company-os`:
+  `kustomize-render-gate`, `test`). The policy needs every run green, which can refuse a PR whose
+  head carries a failed duplicate run.
+
 ## Open questions
 
 - Second GitHub App vs machine user (affects `enforce_admins` and audit trail).
 - Where the agent runs (Hive member Deployment, like `publisher`).
-- Whether `staging` exists for `app` today (not verified).
 - Steward was unreachable when this was drafted, so no ticket exists yet.

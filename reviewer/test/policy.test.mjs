@@ -21,10 +21,9 @@ test("prod is never a base, even if config lists it", () => {
   const bad = { ...cfg, repos: cfg.repos.map((r) => ({ ...r, baseBranches: [...r.baseBranches, "prod"] })) };
   refused(evaluate(good({ cfg: bad, pr: { ...good().pr, base: { ref: "prod" } } })), /never prod/);
 });
-test("app may merge into staging, website may not", () => {
-  const app = (ref) => evaluate(good({ repo: "BuildMy-house/app", pr: { ...good().pr, base: { ref }, head: { sha: "b".repeat(40) } }, checks: { check_runs: [{ name: "ci", status: "completed", conclusion: "success" }] } }));
-  assert.equal(app("staging").ok, true);
+test("staging is not a base for any repo (it does not exist for app)", () => {
   refused(evaluate(good({ pr: { ...good().pr, base: { ref: "staging" } } })), /base branch/);
+  refused(evaluate(good({ repo: "BuildMy-house/app", pr: { ...good().pr, base: { ref: "staging" }, head: { sha: "b".repeat(40) } }, checks: { check_runs: [{ name: "ci", status: "completed", conclusion: "success" }] } })), /base branch/);
 });
 test("unknown repo, draft, own PR, fork, conflicts, closed", () => {
   refused(evaluate(good({ repo: "BuildMy-house/other" })), /not one the reviewer may merge/);
