@@ -1,0 +1,26 @@
+#!/usr/bin/env node
+// Reviewer CLI: reviewer review <repo> <pr> | reviewer merge <repo> <pr> [--review-note "..."]
+// <repo> is owner/name or a bare name in the BuildMy-house org. Fails closed (exit 1) on refusal.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Refused, client, merge, review } from "../lib/github.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const env = process.env;
+const cfg = JSON.parse(readFileSync(env.REVIEWER_CONFIG || join(HERE, "..", "config", "reviewer.json"), "utf8"));
+const [cmd, repoArg, prArg, ...rest] = process.argv.slice(2);
+const noteAt = rest.indexOf("--review-note");
+const reviewNote = noteAt === -1 ? "" : rest[noteAt + 1] || "";
+const repo = repoArg?.includes("/") ? repoArg : `BuildMy-house/${repoArg}`;
+const out = (v) => console.log(JSON.stringify(v, null, 2));
+try {
+  if (!["review", "merge"].includes(cmd) || !repoArg || !/^\d+$/.test(prArg || "")) throw new Refused("usage: reviewer review|merge <repo> <pr-number> [--review-note \"...\"]");
+  if (!env.GITHUB_TOKEN) throw new Refused("GITHUB_TOKEN is not set; this tool is unavailable in this pod");
+  const gh = client({ token: env.GITHUB_TOKEN });
+  const args = { gh, cfg, repo, n: Number(prArg), selfLogin: env.REVIEWER_LOGIN, reviewNote };
+  if (cmd === "review") { const { pr, ...r } = await review(args); out({ ...r, title: pr.title, author: pr.user?.login }); } else out(await merge(args));
+} catch (e) {
+  console.error(e instanceof Refused ? e.message : `error: ${e.message}`);
+  process.exit(1);
+}

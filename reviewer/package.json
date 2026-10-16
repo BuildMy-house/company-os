@@ -1,0 +1,6 @@
+{
+  "name": "reviewer-merger-agent",
+  "private": true,
+  "type": "module",
+  "description": "Reviewer-merger agent tooling. Zero dependencies; node:test only."
+}
