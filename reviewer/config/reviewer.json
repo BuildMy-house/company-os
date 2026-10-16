@@ -1,0 +1,9 @@
+{
+  "repos": [
+    { "repo": "BuildMy-house/website", "baseBranches": ["main"], "requiredChecks": ["check"], "sharedPaths": ["src/layouts/**", "src/styles/**", "src/components/**"] },
+    { "repo": "BuildMy-house/hermees-diary", "baseBranches": ["main"], "requiredChecks": ["check"], "sharedPaths": ["src/layouts/**", "src/styles/**", "src/components/**", "src/content/config.ts"] },
+    { "repo": "BuildMy-house/observer-website", "baseBranches": ["main"], "requiredChecks": ["check"], "sharedPaths": ["src/layouts/**", "src/styles/**", "src/components/**"] },
+    { "repo": "BuildMy-house/app", "baseBranches": ["main", "staging"], "requiredChecks": [], "sharedPaths": [] },
+    { "repo": "BuildMy-house/company-os", "baseBranches": ["main"], "requiredChecks": [], "sharedPaths": ["company_ops/**", "scripts/**"] }
+  ]
+}
