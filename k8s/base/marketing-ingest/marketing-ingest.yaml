@@ -48,7 +48,7 @@ spec:
               # below is a stale placeholder (the postgres-backup pin); a human
               # replaces it with the built publisher image digest (docs/IMAGES.md)
               # before the first run.
-              image: localhost:30500/company-os@sha256:6b458067b7a71bdb98fece7462953ecad3530599772dddac0f7f8d4ceabc1280
+              image: localhost:30500/company-os-publisher@sha256:ec3a00c848c3f0335c60f834dc11e5b963bc01c00dc8e0f676df1d9f75a2ad90
               imagePullPolicy: Always
               command: ["/opt/company-ops-venv/bin/python", "-m", "company_ops.marketing_ingest"]
               envFrom:

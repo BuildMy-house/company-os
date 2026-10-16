@@ -148,7 +148,7 @@ spec:
       containers:
         - name: publisher
           # Placeholder: replace with the built publisher image digest (docs/IMAGES.md).
-          image: localhost:30500/company-os-publisher:latest
+          image: localhost:30500/company-os-publisher@sha256:ec3a00c848c3f0335c60f834dc11e5b963bc01c00dc8e0f676df1d9f75a2ad90
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
@@ -229,7 +229,7 @@ spec:
               mountPath: /opt/publisher/config
               readOnly: true
         - name: ingest-sidecar
-          image: localhost:30500/company-os-publisher:latest
+          image: localhost:30500/company-os-publisher@sha256:ec3a00c848c3f0335c60f834dc11e5b963bc01c00dc8e0f676df1d9f75a2ad90
           imagePullPolicy: Always
           command: ["/opt/company-ops-venv/bin/python", "-m", "company_ops.marketing_sidecar"]
           securityContext:
