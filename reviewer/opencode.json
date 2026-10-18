@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "tokenrouter/z-ai/glm-5.3-free",
+  "model": "opencode-go/mimo-v2.6-flash",
   "provider": {
     "tokenrouter": {
       "npm": "@ai-sdk/openai-compatible",

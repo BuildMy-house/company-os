@@ -89,10 +89,10 @@ spec:
             - name: RUNNER_AGENT
               value: opencode
             - name: RUNNER_MODEL
-              value: oc-tokenrouter/z-ai/glm-5.3-free
-            # Paid fallback, used only when the free model's run fails (quota, rate limit).
-            - name: RUNNER_FALLBACK_MODELS
               value: oc-opencode-go/mimo-v2.6-flash
+            # Free fallback if the primary fails (quota, rate limit).
+            - name: RUNNER_FALLBACK_MODELS
+              value: oc-tokenrouter/z-ai/glm-5.3-free
             # Same GitHub App as engineering (config sharedIdentity), read from the existing Secret.
             - name: GITHUB_APP_ID
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_ID}}
@@ -100,7 +100,7 @@ spec:
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_INSTALLATION_ID}}
             - name: GITHUB_APP_PRIVATE_KEY
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_PRIVATE_KEY}}
-            # LLM provider keys: TokenRouter (free, RUNNER_MODEL) and OpenCode Go (paid, fallback).
+            # LLM provider keys: OpenCode Go (paid, RUNNER_MODEL) and TokenRouter (free, fallback).
             # Without a working key the agent declines every bid.
             - name: TOKENROUTER_API_KEY
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: TOKENROUTER_API_KEY}}
