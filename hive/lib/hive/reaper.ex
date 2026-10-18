@@ -29,7 +29,7 @@ defmodule Hive.Reaper do
   def handle_info(:reap, state) do
     try do
       case Hive.Work.reap() do
-        {:ok, %{redispatched: [], escalated: []}} ->
+        {:ok, %{redispatched: [], escalated: [], reoffered: []}} ->
           :ok
 
         {:ok, summary} ->

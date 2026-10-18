@@ -1,0 +1,6 @@
+{
+  "name": "publisher-agent",
+  "private": true,
+  "type": "module",
+  "description": "Publisher agent tooling. Zero dependencies; node:test only."
+}

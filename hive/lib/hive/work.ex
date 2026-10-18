@@ -25,6 +25,7 @@ defmodule Hive.Work do
       end)
 
   def register_agent(agent), do: GenServer.call(__MODULE__, {:register_agent, agent})
+  def deregister_agent(agent_id), do: GenServer.call(__MODULE__, {:deregister_agent, agent_id})
   def agents, do: GenServer.call(__MODULE__, :agents)
 
   def prompt(work_ref, requester_id),
@@ -396,12 +397,14 @@ defmodule Hive.Work do
   def handle_call(:reap, _from, %{memory: _memory} = state) do
     before = length(state.memory.events)
     {_items, state} = available_memory(state, 0, nil)
+    state = reoffer_memory(state)
     new_events = Enum.take(state.memory.events, length(state.memory.events) - before)
+    settle_recovery(Enum.filter(new_events, &(&1["topic"] in ["work.reoffered"])))
     {:reply, {:ok, reap_summary(new_events)}, state}
   end
 
   def handle_call(:reap, _from, %{db: db} = state) do
-    events = transaction!(db, &recover_expired_db/1)
+    events = transaction!(db, &recover_expired_db/1) ++ transaction!(db, &reoffer_db/1)
     settle_recovery(events)
     {:reply, {:ok, reap_summary(events)}, state}
   end
@@ -475,6 +478,17 @@ defmodule Hive.Work do
       )
 
     {:reply, {:ok, rows(result)}, state}
+  end
+
+  def handle_call({:deregister_agent, agent_id}, _from, %{memory: memory} = state) do
+    if Map.has_key?(memory.agents, agent_id),
+      do: {:reply, :ok, update_in(state.memory.agents, &Map.delete(&1, agent_id))},
+      else: {:reply, {:error, :not_found}, state}
+  end
+
+  def handle_call({:deregister_agent, agent_id}, _from, %{db: db} = state) do
+    result = Postgrex.query!(db, "DELETE FROM company.hive_agents WHERE id = $1", [agent_id])
+    {:reply, if(result.num_rows > 0, do: :ok, else: {:error, :not_found}), state}
   end
 
   def handle_call({:register_agent, agent}, _from, %{memory: _memory} = state) do
@@ -637,7 +651,7 @@ defmodule Hive.Work do
     now = DateTime.utc_now()
 
     with %{state: "available"} = work <- memory.work[work_id],
-         %{"agent_id" => agent_id} = winner <- ranking.winner,
+         %{"agent_id" => agent_id} = winner <- ranking.winner || :no_winner,
          :open <- memory_bid_window(memory, work_id, ranking, now) do
       attempt = (work.attempt || 0) + 1
 
@@ -682,6 +696,7 @@ defmodule Hive.Work do
     else
       nil -> {:reply, {:error, :work_not_found}, state}
       {:wait, seconds} -> {:reply, {:deferred, seconds}, state}
+      :no_winner -> {:reply, {:error, :no_bids}, state}
       %{state: _} -> {:reply, {:error, :no_bids}, state}
       _ -> {:reply, {:error, :no_bids}, state}
     end
@@ -995,42 +1010,89 @@ defmodule Hive.Work do
 
     case memory.work[id] do
       %{claimed_by: ^agent_id} = item ->
-        completed =
-          Map.merge(item, %{
-            state: final_state,
-            result: result,
-            claimed_by: nil,
-            lease_expires_at: nil
-          })
+        if final_state == "completed" and empty_completion?(result) do
+          now = DateTime.utc_now()
+          attempt = item.attempt || 0
+          next_state = retry_state(attempt)
 
-        topic =
-          if final_state == "completed", do: "engineering.completed", else: "engineering.failed"
+          failure = %{
+            "agent_id" => agent_id,
+            "reason" => "empty_completion",
+            "retry_state" => next_state,
+            "slug" => item["slug"]
+          }
 
-        event =
-          event(
-            topic,
-            id,
-            %{
-              "agent_id" => agent_id,
-              "state" => final_state,
-              "result" => result,
-              "slug" => item["slug"]
-            },
-            item.attempt || 0
-          )
+          events = recovery_events(id, failure, attempt)
 
-        notify_event_subscribers(event)
+          retried =
+            Map.merge(item, %{
+              state: next_state,
+              result: result,
+              claimed_by: nil,
+              lease_expires_at: nil,
+              last_failure: failure
+            })
 
-        next =
-          state
-          |> put_in([:memory, :work, id], completed)
-          |> update_in([:memory, :events], &[event | &1])
-          |> update_in(
-            [:memory, :ledger],
-            &Hive.Ledger.close(&1, id, item.attempt || 0, agent_id, final_state, DateTime.utc_now())
-          )
+          outcome = if next_state == "escalated", do: "escalated", else: "failed"
 
-        {:reply, {:ok, completed}, next}
+          next =
+            state
+            |> put_in([:memory, :work, id], retried)
+            |> update_in([:memory, :bids], &Map.delete(&1, {id, agent_id}))
+            |> update_in([:memory, :events], &(Enum.reverse(events) ++ &1))
+            |> update_in([:memory, :available_since], &Map.put(&1, id, now))
+            |> update_in(
+              [:memory, :ledger],
+              &Hive.Ledger.close(&1, id, attempt, agent_id, outcome, now)
+            )
+
+          settle_recovery(events)
+          {:reply, {:ok, retried}, next}
+        else
+          completed =
+            Map.merge(item, %{
+              state: final_state,
+              result: result,
+              claimed_by: nil,
+              lease_expires_at: nil
+            })
+
+          topic =
+            if final_state == "completed", do: "engineering.completed", else: "engineering.failed"
+
+          event =
+            event(
+              topic,
+              id,
+              %{
+                "agent_id" => agent_id,
+                "state" => final_state,
+                "result" => result,
+                "slug" => item["slug"]
+              },
+              item.attempt || 0
+            )
+
+          notify_event_subscribers(event)
+
+          next =
+            state
+            |> put_in([:memory, :work, id], completed)
+            |> update_in([:memory, :events], &[event | &1])
+            |> update_in(
+              [:memory, :ledger],
+              &Hive.Ledger.close(
+                &1,
+                id,
+                item.attempt || 0,
+                agent_id,
+                final_state,
+                DateTime.utc_now()
+              )
+            )
+
+          {:reply, {:ok, completed}, next}
+        end
 
       %{state: ^final_state, result: ^result, claimed_by: nil, attempt: attempt} = item ->
         topic =
@@ -1063,65 +1125,69 @@ defmodule Hive.Work do
 
     result =
       transaction!(db, fn tx ->
-        updated =
-          Postgrex.query!(
-            tx,
-            "UPDATE company.hive_work_items SET state = $3, result = $4::jsonb, claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND claimed_by = $2 AND state = 'claimed' AND lease_expires_at >= now() RETURNING id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result",
-            [id, agent_id, final_state, Jason.encode!(result || %{})]
-          )
+        if final_state == "completed" and empty_completion?(result || %{}) do
+          complete_empty_db(tx, id, agent_id, result || %{})
+        else
+          updated =
+            Postgrex.query!(
+              tx,
+              "UPDATE company.hive_work_items SET state = $3, result = $4::jsonb, claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND claimed_by = $2 AND state = 'claimed' AND lease_expires_at >= now() RETURNING id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result",
+              [id, agent_id, final_state, Jason.encode!(result || %{})]
+            )
 
-        case rows(updated) do
-          [item] ->
-            completion_event =
-              event(
-                topic,
-                id,
-                %{
-                  "agent_id" => agent_id,
-                  "state" => final_state,
-                  "result" => result || %{},
-                  "slug" => get_in(item, ["payload", "slug"])
-                },
-                item["attempt"]
-              )
+          case rows(updated) do
+            [item] ->
+              completion_event =
+                event(
+                  topic,
+                  id,
+                  %{
+                    "agent_id" => agent_id,
+                    "state" => final_state,
+                    "result" => result || %{},
+                    "slug" => get_in(item, ["payload", "slug"])
+                  },
+                  item["attempt"]
+                )
 
-            persist_event(tx, completion_event)
-            close_ledger(tx, id, item["attempt"], agent_id, final_state)
-            {:ok, item, completion_event}
+              persist_event(tx, completion_event)
+              close_ledger(tx, id, item["attempt"], agent_id, final_state)
+              {:ok, item, [completion_event]}
 
-          _ ->
-            encoded_result = Jason.encode!(result || %{})
+            _ ->
+              encoded_result = Jason.encode!(result || %{})
 
-            completed =
-              Postgrex.query!(
-                tx,
-                "SELECT id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result FROM company.hive_work_items WHERE id = $1 AND state = $2 AND claimed_by IS NULL AND result = $3::jsonb",
-                [id, final_state, encoded_result]
-              )
+              completed =
+                Postgrex.query!(
+                  tx,
+                  "SELECT id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result FROM company.hive_work_items WHERE id = $1 AND state = $2 AND claimed_by IS NULL AND result = $3::jsonb",
+                  [id, final_state, encoded_result]
+                )
 
-            case rows(completed) do
-              [item] ->
-                prior_event =
-                  Postgrex.query!(
-                    tx,
-                    "SELECT event_id, topic, task_id, sender, occurred_at, payload, attempt FROM company.hive_events WHERE task_id = $1 AND topic = $2 AND attempt = $3 AND payload->>'agent_id' = $4 AND payload->>'state' = $5 AND payload->'result' = $6::jsonb ORDER BY occurred_at DESC LIMIT 1",
-                    [id, topic, item["attempt"], agent_id, final_state, encoded_result]
-                  )
+              case rows(completed) do
+                [item] ->
+                  prior_event =
+                    Postgrex.query!(
+                      tx,
+                      "SELECT event_id, topic, task_id, sender, occurred_at, payload, attempt FROM company.hive_events WHERE task_id = $1 AND topic = $2 AND attempt = $3 AND payload->>'agent_id' = $4 AND payload->>'state' = $5 AND payload->'result' = $6::jsonb ORDER BY occurred_at DESC LIMIT 1",
+                      [id, topic, item["attempt"], agent_id, final_state, encoded_result]
+                    )
 
-                case rows(prior_event) do
-                  [completion_event] -> {:ok, item, completion_event}
-                  _ -> {:error, :not_owner}
-                end
+                  case rows(prior_event) do
+                    [completion_event] -> {:ok, item, [completion_event]}
+                    _ -> {:error, :not_owner}
+                  end
 
-              _ ->
-                {:error, :not_owner}
-            end
+                _ ->
+                  {:error, :not_owner}
+              end
+          end
         end
       end)
 
     case result do
-      {:ok, item, completion_event} ->
-        notify_event_subscribers(completion_event)
+      {:ok, item, events} ->
+        settle_recovery(events)
         {:reply, {:ok, item}, state}
 
       error ->
@@ -1320,17 +1386,25 @@ defmodule Hive.Work do
 
     Hive.Ledger.summarize(rows)
     |> Map.put("recent", Enum.take(rows, limit))
-    |> Map.put("selection", Hive.Selection.config() |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end))
+    |> Map.put(
+      "selection",
+      Hive.Selection.config() |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
+    )
   end
 
   defp allocation_payload(winner, ranking, slug) do
-    %{
+    base = %{
       "agent_id" => winner["agent_id"],
       "score" => winner["score"],
       "slug" => slug,
       "selection" => ranking.mode,
       "effective_cost" => winner["estimated_cost"]
     }
+
+    case ranking[:required_tools] do
+      [_ | _] = tools -> Map.put(base, "required_tools", tools)
+      _ -> base
+    end
   end
 
   defp live_agent_ids do
@@ -1351,8 +1425,23 @@ defmodule Hive.Work do
       |> Enum.filter(fn {{id, _agent}, _bid} -> id == work_id end)
       |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid, memory.scoring)) end)
 
-    ctx = Hive.Selection.context(memory.events, memory.agents, work_id, live_agent_ids(), now, cfg)
-    Hive.Selection.rank(bids, ctx, cfg) |> Map.put(:agents, memory.agents) |> Map.put(:bids, bids)
+    required = Hive.Selection.required_tools(get_in(memory.work, [work_id, :payload]))
+
+    ctx =
+      Hive.Selection.context(
+        memory.events,
+        memory.agents,
+        work_id,
+        live_agent_ids(),
+        now,
+        cfg,
+        required
+      )
+
+    Hive.Selection.rank(bids, ctx, cfg)
+    |> Map.put(:agents, memory.agents)
+    |> Map.put(:bids, bids)
+    |> Map.put(:required_tools, required)
   end
 
   defp rank_db(db, work_id, scoring) do
@@ -1405,8 +1494,21 @@ defmodule Hive.Work do
       )
       |> rows()
 
-    ctx = Hive.Selection.context(events, agents, work_id, live_agent_ids(), now, cfg)
-    Hive.Selection.rank(bids, ctx, cfg) |> Map.put(:agents, agents) |> Map.put(:bids, bids)
+    required =
+      case Postgrex.query!(db, "SELECT payload FROM company.hive_work_items WHERE id = $1", [
+             work_id
+           ])
+           |> rows() do
+        [%{"payload" => payload}] -> Hive.Selection.required_tools(payload)
+        _ -> []
+      end
+
+    ctx = Hive.Selection.context(events, agents, work_id, live_agent_ids(), now, cfg, required)
+
+    Hive.Selection.rank(bids, ctx, cfg)
+    |> Map.put(:agents, agents)
+    |> Map.put(:bids, bids)
+    |> Map.put(:required_tools, required)
   end
 
   # Allocation waits while a connected pool worker (registered with a tier) has not
@@ -1552,7 +1654,9 @@ defmodule Hive.Work do
 
     ledger =
       Enum.reduce(expired, memory.ledger, fn {id, item}, acc ->
-        outcome = if retry_state(item.attempt || 0) == "escalated", do: "escalated", else: "lease_expired"
+        outcome =
+          if retry_state(item.attempt || 0) == "escalated", do: "escalated", else: "lease_expired"
+
         Hive.Ledger.close(acc, id, item.attempt || 0, item.claimed_by, outcome, now)
       end)
 
@@ -1660,11 +1764,33 @@ defmodule Hive.Work do
       # a missing or unknown tier defaults to "cheap" so the cheapest capable pool gets
       # first refusal. Items queued before this default carry no tier and stay "standard".
       tier = if metadata["tier"] in @tiers, do: metadata["tier"], else: @default_tier
-      {:ok, Map.put(payload, "tier", tier)}
+
+      payload =
+        metadata
+        |> Map.take(["type", "points", "base_points"])
+        |> Map.merge(Map.put(payload, "tier", tier))
+
+      # Tool requirements (docs/TICKET-STANDARD.md "Requiring tools"): stored only when the
+      # ticket names some, so tickets without `requires_tools` keep their old payload shape.
+      case requires_tools(metadata["requires_tools"]) do
+        {:ok, []} -> {:ok, payload}
+        {:ok, tools} -> {:ok, Map.put(payload, "requires_tools", tools)}
+        :error -> {:error, :invalid_requires_tools}
+      end
     else
       {:error, :invalid_slug}
     end
   end
+
+  defp requires_tools(nil), do: {:ok, []}
+
+  defp requires_tools(tools) when is_list(tools) do
+    if Enum.all?(tools, &(is_binary(&1) and String.trim(&1) != "")),
+      do: {:ok, Hive.Selection.normalize_tools(tools)},
+      else: :error
+  end
+
+  defp requires_tools(_), do: :error
 
   defp message_title(parts) do
     parts
@@ -1715,6 +1841,81 @@ defmodule Hive.Work do
   # `max_attempts` leases is not retried forever, a human or manager must requeue it.
   defp retry_state(attempt), do: if(attempt >= max_attempts(), do: "escalated", else: "available")
 
+  # A worker that reports success without doing anything: zero tool calls and a blank
+  # or missing output. Treated as a failure so the item retries instead of completing.
+  # A missing tool_call_count (older workers) or any non-blank output is trusted.
+  defp empty_completion?(result),
+    do: result["tool_call_count"] == 0 and blank_output?(result["output"])
+
+  # A "completed" report with zero tool calls and a blank output is not success: the item
+  # goes back through the same retry pipeline as a lease_expired failure (available, or
+  # escalated at max attempts) with reason empty_completion.
+  defp complete_empty_db(tx, id, agent_id, result) do
+    claimed =
+      Postgrex.query!(
+        tx,
+        "SELECT attempt, payload FROM company.hive_work_items WHERE id = $1 AND claimed_by = $2 AND state = 'claimed' AND lease_expires_at >= now() FOR UPDATE",
+        [id, agent_id]
+      )
+      |> rows()
+      |> List.first()
+
+    case claimed do
+      %{"attempt" => attempt} ->
+        next_state = retry_state(attempt)
+
+        failure = %{
+          "agent_id" => agent_id,
+          "reason" => "empty_completion",
+          "retry_state" => next_state,
+          "slug" => get_in(claimed, ["payload", "slug"])
+        }
+
+        events = recovery_events(id, failure, attempt)
+
+        Postgrex.query!(
+          tx,
+          "DELETE FROM company.hive_work_bids WHERE work_id = $1 AND agent_id = $2",
+          [
+            id,
+            agent_id
+          ]
+        )
+
+        updated =
+          Postgrex.query!(
+            tx,
+            "UPDATE company.hive_work_items SET state = $3, result = $4::jsonb, last_failure = $5::jsonb, claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND claimed_by = $2 RETURNING id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result",
+            [id, agent_id, next_state, Jason.encode!(result), Jason.encode!(failure)]
+          )
+
+        case rows(updated) do
+          [item] ->
+            Enum.each(events, &persist_event(tx, &1))
+
+            close_ledger(
+              tx,
+              id,
+              attempt,
+              agent_id,
+              if(next_state == "escalated", do: "escalated", else: "failed")
+            )
+
+            {:ok, item, events}
+
+          _ ->
+            {:error, :not_owner}
+        end
+
+      _ ->
+        {:error, :not_owner}
+    end
+  end
+
+  defp blank_output?(nil), do: true
+  defp blank_output?(output) when is_binary(output), do: String.trim(output) == ""
+  defp blank_output?(_), do: false
+
   defp recovery_events(id, %{"retry_state" => "escalated"} = failure, attempt) do
     escalation =
       Map.merge(failure, %{"reason" => "max_attempts_exceeded", "max_attempts" => max_attempts()})
@@ -1739,6 +1940,8 @@ defmodule Hive.Work do
           events,
         do: notify_subscribers(id)
 
+    for %{"topic" => "work.reoffered", "task_id" => id} <- events, do: notify_subscribers(id)
+
     :ok
   end
 
@@ -1753,8 +1956,115 @@ defmodule Hive.Work do
           } <- events,
           do: id
         ),
-      escalated: for(%{"topic" => "work.escalated", "task_id" => id} <- events, do: id)
+      escalated: for(%{"topic" => "work.escalated", "task_id" => id} <- events, do: id),
+      reoffered: for(%{"topic" => "work.reoffered", "task_id" => id} <- events, do: id)
     }
+  end
+
+  defp reoffer_memory(%{memory: memory} = state) do
+    if Hive.Reoffer.enabled?() do
+      now = DateTime.utc_now()
+      cutoff = DateTime.add(now, -Hive.Reoffer.after_seconds(), :second)
+
+      stale =
+        for {id, item} <- memory.work,
+            item.state == "available",
+            since = memory.available_since[id],
+            DateTime.compare(since, cutoff) == :lt,
+            Hive.Reoffer.stale?(item.payload, interested_ids(memory.bids, id), memory.agents),
+            do: {id, item}
+
+      memory =
+        Enum.reduce(stale, memory, fn {id, item}, mem ->
+          attempt = item.attempt || 0
+          bids = mem.bids |> Enum.reject(fn {{work_id, _}, _} -> work_id == id end) |> Map.new()
+
+          case Hive.Reoffer.plan(item.payload, mem.agents) do
+            {:reoffer, payload, details} ->
+              %{
+                mem
+                | work: Map.put(mem.work, id, %{item | payload: payload}),
+                  bids: bids,
+                  available_since: Map.put(mem.available_since, id, now),
+                  events: [event("work.reoffered", id, details, attempt) | mem.events]
+              }
+
+            {:escalate, details} ->
+              %{
+                mem
+                | work: Map.put(mem.work, id, %{item | state: "escalated"}),
+                  bids: bids,
+                  events: [event("work.escalated", id, details, attempt) | mem.events]
+              }
+          end
+        end)
+
+      %{state | memory: memory}
+    else
+      state
+    end
+  end
+
+  defp interested_ids(bids, work_id) do
+    for {{^work_id, agent}, bid} <- bids, bid["interested"] == true, do: agent
+  end
+
+  defp reoffer_db(tx) do
+    if Hive.Reoffer.enabled?() do
+      stale =
+        Postgrex.query!(
+          tx,
+          """
+          SELECT id, attempt, payload,
+            ARRAY(SELECT b.agent_id FROM company.hive_work_bids b WHERE b.work_id = w.id AND b.interested) AS interested_ids
+          FROM company.hive_work_items w
+          WHERE state = 'available' AND updated_at < now() - ($1 || ' seconds')::interval
+          FOR UPDATE
+          """,
+          [Integer.to_string(Hive.Reoffer.after_seconds())]
+        )
+        |> rows()
+
+      agents =
+        Postgrex.query!(tx, "SELECT id, capabilities FROM company.hive_agents", [])
+        |> rows()
+        |> Map.new(&{&1["id"], &1})
+
+      stale =
+        Enum.filter(stale, fn %{"payload" => payload, "interested_ids" => interested} ->
+          Hive.Reoffer.stale?(payload, interested, agents)
+        end)
+
+      Enum.map(stale, fn %{"id" => id, "attempt" => attempt, "payload" => payload} ->
+        Postgrex.query!(tx, "DELETE FROM company.hive_work_bids WHERE work_id = $1", [id])
+
+        event =
+          case Hive.Reoffer.plan(payload, agents) do
+            {:reoffer, updated, details} ->
+              Postgrex.query!(
+                tx,
+                "UPDATE company.hive_work_items SET payload = $2::jsonb, updated_at = now() WHERE id = $1",
+                [id, Jason.encode!(updated)]
+              )
+
+              event("work.reoffered", id, details, attempt)
+
+            {:escalate, details} ->
+              Postgrex.query!(
+                tx,
+                "UPDATE company.hive_work_items SET state = 'escalated', updated_at = now() WHERE id = $1",
+                [id]
+              )
+
+              event("work.escalated", id, details, attempt)
+          end
+
+        persist_event(tx, event)
+        event
+      end)
+    else
+      []
+    end
   end
 
   defp recover_expired_db(tx) do
@@ -1820,7 +2130,8 @@ defmodule Hive.Work do
 
   defp decode_row(row) do
     decoded =
-      Enum.reduce(["payload", "last_failure", "result", "capabilities", "proposal"], row, fn key, acc ->
+      Enum.reduce(["payload", "last_failure", "result", "capabilities", "proposal"], row, fn key,
+                                                                                             acc ->
         case Map.get(acc, key) do
           value when is_binary(value) -> Map.put(acc, key, Jason.decode!(value))
           _ -> acc

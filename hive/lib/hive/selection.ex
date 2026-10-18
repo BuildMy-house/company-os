@@ -8,12 +8,33 @@ defmodule Hive.Selection do
   lease on this very work expire, and it has fewer than `strike_limit`
   consecutive `lease_expired` failures since it last completed anything.
 
-  Among eligible bids the winner has the lowest effective cost
-  (`estimated_cost`; workers already multiply their raw estimate by their
-  `AGENT_COST_FACTOR` and the tier-mismatch penalty before bidding, so it is
-  NOT scaled again here), ties broken by the old score
-  (`confidence * benefit / cost`) and then by the earliest bid. When no bid is
-  eligible the old score ranking is used as a fallback, so work never starves.
+  Among eligible bids the winner has the lowest effective cost: the expected
+  price per SUCCESSFUL completion, `estimated_cost / p_complete`
+  (`estimated_cost` already includes the worker's `AGENT_COST_FACTOR` and the
+  tier-mismatch penalty, so it is NOT scaled again). `p_complete` blends the
+  bid's own confidence with the agent's recorded completion rate
+  (`engineering.completed` vs `engineering.failed` events in the history
+  window) as a Beta-style estimate: the confidence counts as
+  `history_prior_weight` pseudo-observations, so a proven agent is judged on
+  results and an unproven one on its stated confidence. A flaky cheap worker
+  therefore loses to a reliable pricier one once its failures outweigh the
+  price gap, and Claude (high price, high success) only wins where cheap
+  workers decline or are ineligible.
+
+  Exploration: an agent with fewer than `explore_outcomes` recorded outcomes
+  gets its effective cost multiplied by `explore_discount`, so a new worker or
+  freshly rolled image wins allocations until it has a track record.
+
+  Tool requirements: work may carry `requires_tools` (payload) and agents declare
+  `capabilities.tools` at registration. A bid from an agent missing any required
+  tool is ineligible with reason `missing_tools` (and its `"missing_tools"` list),
+  checked before scoring, and is never picked even by the `score_fallback`: such
+  work waits for a capable agent or escalates (`Hive.Reoffer`), it does not starve
+  onto a pool that cannot do it. Work without `requires_tools` is unaffected.
+
+  Ties are broken by the old score (`confidence * benefit / cost`) and then by
+  the earliest bid. When no bid is eligible the old score ranking is used as a
+  fallback, so work never starves.
 
   Configuration (application env under `:hive` wins over the OS env var):
 
@@ -25,6 +46,10 @@ defmodule Hive.Selection do
   | `:strike_limit`             | `HIVE_LEASE_EXPIRED_STRIKES`        | 2                  |
   | `:strike_window_seconds`    | `HIVE_LEASE_EXPIRED_WINDOW_SECONDS` | 21600              |
   | `:bid_window_seconds`       | `HIVE_BID_WINDOW_SECONDS`           | 60                 |
+  | `:history_window_seconds`   | `HIVE_HISTORY_WINDOW_SECONDS`       | 604800 (7 days)    |
+  | `:history_prior_weight`     | `HIVE_HISTORY_PRIOR_WEIGHT`         | 4                  |
+  | `:explore_outcomes`         | `HIVE_EXPLORE_OUTCOMES`             | 3                  |
+  | `:explore_discount`         | `HIVE_EXPLORE_DISCOUNT`             | 0.5                |
   """
 
   @settings [
@@ -33,7 +58,11 @@ defmodule Hive.Selection do
     {:health_window_seconds, "HIVE_AGENT_HEALTH_WINDOW_SECONDS", 900},
     {:strike_limit, "HIVE_LEASE_EXPIRED_STRIKES", 2},
     {:strike_window_seconds, "HIVE_LEASE_EXPIRED_WINDOW_SECONDS", 21_600},
-    {:bid_window_seconds, "HIVE_BID_WINDOW_SECONDS", 60}
+    {:bid_window_seconds, "HIVE_BID_WINDOW_SECONDS", 60},
+    {:history_window_seconds, "HIVE_HISTORY_WINDOW_SECONDS", 604_800},
+    {:history_prior_weight, "HIVE_HISTORY_PRIOR_WEIGHT", 4.0},
+    {:explore_outcomes, "HIVE_EXPLORE_OUTCOMES", 3},
+    {:explore_discount, "HIVE_EXPLORE_DISCOUNT", 0.5}
   ]
 
   @doc "Resolved configuration map (app env, then OS env, then defaults)."
@@ -66,8 +95,10 @@ defmodule Hive.Selection do
     * `expired_here` - agents whose lease on `work_id` already expired
     * `strikes`      - agent id => consecutive lease_expired failures (inside the
       strike window) that no later completion has cleared
+    * `outcomes`     - agent id => `{completed, failed}` counts inside the history
+      window, feeding the completion-rate estimate and exploration
   """
-  def context(events, agents, work_id, live_ids, now, cfg) do
+  def context(events, agents, work_id, live_ids, now, cfg, required_tools \\ []) do
     cutoff = DateTime.add(now, -cfg.strike_window_seconds, :second)
     expired = Enum.filter(events, &lease_expired?/1)
 
@@ -93,9 +124,53 @@ defmodule Hive.Selection do
       now: now,
       expired_here: expired_here,
       strikes: strikes,
+      outcomes: outcomes(events, now, cfg),
       agents: agents,
-      live_ids: MapSet.new(live_ids)
+      live_ids: MapSet.new(live_ids),
+      required_tools: required_tools
     }
+  end
+
+  @doc "Tool names an agent declared in `capabilities.tools` (always a list of strings)."
+  def agent_tools(agent) do
+    case get_in(agent || %{}, ["capabilities", "tools"]) do
+      tools when is_list(tools) -> Enum.filter(tools, &is_binary/1)
+      _ -> []
+    end
+  end
+
+  @doc "Normalizes a tool list (registration or ticket input) to sorted unique non-empty strings."
+  def normalize_tools(tools) when is_list(tools) do
+    tools
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  def normalize_tools(_), do: []
+
+  @doc "Required tools the agent does not declare, in required order."
+  def missing_tools(agent, required), do: required -- agent_tools(agent)
+
+  @doc "Tools a work item needs (`requires_tools` on its payload), `[]` when it names none."
+  def required_tools(payload), do: normalize_tools(get_in(payload || %{}, ["requires_tools"]))
+
+  defp outcomes(events, now, cfg) do
+    cutoff = DateTime.add(now, -cfg.history_window_seconds, :second)
+
+    events
+    |> Enum.filter(&(&1["topic"] in ["engineering.completed", "engineering.failed"]))
+    |> Enum.filter(
+      &(is_struct(&1["occurred_at"], DateTime) and
+          DateTime.compare(&1["occurred_at"], cutoff) != :lt)
+    )
+    |> Enum.reduce(%{}, fn event, acc ->
+      agent_id = get_in(event, ["payload", "agent_id"])
+      done = if event["topic"] == "engineering.completed", do: 1, else: 0
+      Map.update(acc, agent_id, {done, 1 - done}, fn {c, f} -> {c + done, f + 1 - done} end)
+    end)
   end
 
   defp lease_expired?(event),
@@ -126,12 +201,17 @@ defmodule Hive.Selection do
         reasons = reasons(bid, ctx, cfg)
 
         bid
+        |> Map.put("missing_tools", bid_missing_tools(bid, ctx))
         |> Map.put("eligible", reasons == [])
         |> Map.put("ineligible_reasons", reasons)
-        |> Map.put("effective_cost", bid["estimated_cost"])
+        |> Map.put("p_complete", p_complete(bid, ctx, cfg))
+        |> Map.put("effective_cost", effective_cost(bid, ctx, cfg))
       end)
 
-    {interested, declined} = Enum.split_with(annotated, & &1["interested"])
+    # A bid from an agent lacking a required tool is hard-blocked: it can neither win
+    # nor be the score fallback. It stays in the ranking (last) so the reason is visible.
+    {blocked, capable} = Enum.split_with(annotated, &(&1["missing_tools"] != []))
+    {interested, declined} = Enum.split_with(capable, & &1["interested"])
     eligible = Enum.filter(interested, & &1["eligible"])
 
     {ordered_interested, mode} =
@@ -153,15 +233,33 @@ defmodule Hive.Selection do
 
         [] ->
           []
-      end ++ Enum.map(declined, &Map.put(&1, "selected", false))
+      end ++ Enum.map(declined ++ blocked, &Map.put(&1, "selected", false))
 
     %{ordered: ordered, winner: List.first(ordered_interested) && hd(ordered), mode: mode}
+  end
+
+  defp outcomes_for(bid, ctx), do: Map.get(Map.get(ctx, :outcomes, %{}), bid["agent_id"], {0, 0})
+
+  # Beta-style estimate: the bid's confidence is worth `history_prior_weight`
+  # pseudo-observations, recorded outcomes add real ones.
+  defp p_complete(bid, ctx, cfg) do
+    {completed, failed} = outcomes_for(bid, ctx)
+    weight = cfg.history_prior_weight
+    max((weight * bid["confidence"] + completed) / (weight + completed + failed), 0.05)
+  end
+
+  defp effective_cost(bid, ctx, cfg) do
+    {completed, failed} = outcomes_for(bid, ctx)
+    cost = bid["estimated_cost"] / p_complete(bid, ctx, cfg)
+
+    if completed + failed < cfg.explore_outcomes, do: cost * cfg.explore_discount, else: cost
   end
 
   defp reasons(bid, ctx, cfg) do
     agent_id = bid["agent_id"]
 
     [
+      {bid_missing_tools(bid, ctx) != [], "missing_tools"},
       {not bid["interested"], "not_interested"},
       {bid["confidence"] < cfg.min_confidence, "low_confidence"},
       {not seen_recently?(bid, ctx, cfg), "unhealthy"},
@@ -169,6 +267,13 @@ defmodule Hive.Selection do
       {Map.get(ctx.strikes, agent_id, 0) >= cfg.strike_limit, "repeated_lease_expired"}
     ]
     |> Enum.flat_map(fn {hit?, reason} -> if hit?, do: [reason], else: [] end)
+  end
+
+  defp bid_missing_tools(bid, ctx) do
+    case Map.get(ctx, :required_tools, []) do
+      [] -> []
+      required -> missing_tools(Map.get(ctx.agents, bid["agent_id"]), required)
+    end
   end
 
   # An agent is "recently seen" if it is connected right now, or its registration/

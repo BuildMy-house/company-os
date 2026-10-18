@@ -86,7 +86,7 @@ for key in DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS DISCORD_ALLOWED_CHANNELS \
            DISCORD_ALLOW_ALL_USERS DISCORD_HOME_CHANNEL \
            DISCORD_HIL_CHANNEL DISCORD_FINANCE_CHANNEL \
            NOUS_API_KEY OPENCODE_GO_API_KEY ZAI_CODING_PLAN_API_KEY TOKENROUTER_API_KEY \
-           HINDSIGHT_API_KEY \
+           HINDSIGHT_API_KEY AXIOM_QUERY_TOKEN AXIOM_ORG_ID \
            STEWARD_MCP_URL STEWARD_TOKEN STEWARD_URL \
            POSTGRES_PASSWORD COMPANY_PASSWORD OBSERVER_PASSWORD ANALYTICS_PASSWORD \
            COMPANY_DATABASE_URL OBSERVER_DATABASE_URL ANALYTICS_DATABASE_URL; do
@@ -101,6 +101,10 @@ chmod 644 /opt/data/.env
 # dream-audit: sync skill (only dream-audit), seed mode flag + cron job (idempotent).
 # memories/*.md above are seeded only when missing, so dream edits survive restarts.
 bash "$SCRIPT_DIR/seed-dream-audit.sh" || true
+
+# CEO behavior: copy the three CEO skills + pre-run script, install the
+# authoritative pricing decision, reconcile stale memory, align the CEO crons.
+bash "$SCRIPT_DIR/seed-ceo-behavior.sh" || true
 
 # Hindsight memory provider: seed hindsight/config.json only if missing so
 # operator edits on the PVC survive restarts (see scripts/seed-hindsight.sh).

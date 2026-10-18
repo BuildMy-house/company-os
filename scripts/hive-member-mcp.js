@@ -5,6 +5,7 @@
 import readline from "node:readline";
 import { lookup } from "node:dns/promises";
 import { createConnection } from "node:net";
+import { existsSync, readdirSync } from "node:fs";
 
 const base = process.env.HIVE_URL || "http://hive-coordinator:4100";
 const consumerId = process.env.HIVE_AGENT_ID || "hermees";
@@ -16,6 +17,53 @@ const consumerId = process.env.HIVE_AGENT_ID || "hermees";
 // pod boot) can't leave this worker permanently unregistered and silently
 // unable to bid on Hive work (2026-10-08 incident).
 const REGISTER_ESCALATE_AFTER = 5;
+
+// Tool capabilities (docs/TICKET-STANDARD.md "Requiring tools"). Hive routes a ticket that
+// lists requires_tools only to agents whose capabilities.tools declares all of them.
+export const KNOWN_TOOLS = ["browser", "hindsight", "kubectl-deploy", "image-build", "hermes-data", "postgres-admin", "github-pr", "reddit-publish", "substack-publish", "marketing-db-read", "marketing-ingest"];
+
+// Credential-gated tools (publisher pod): declared only when every listed env var is non-empty,
+// so a pod without its Secret never advertises a tool it cannot use (same idea as the Chromium
+// probe for "browser"). Tools not listed here are declared whenever AGENT_TOOLS names them.
+// An entry "file:NAME" means env NAME must hold a path to an existing file. The publisher pod's
+// sidecar (company_ops/marketing_sidecar.py) is the only holder of the Substack cookie and the
+// ingest DSN; it writes these ready markers only after checking its own env and DB connection,
+// so the main container never needs (or sees) those credentials to declare the tools.
+export const TOOL_CREDENTIAL_ENV = {
+  "github-pr": ["GITHUB_TOKEN"],
+  "reddit-publish": ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USERNAME", "REDDIT_PASSWORD"],
+  "substack-publish": ["file:SUBSTACK_READY_FILE"],
+  "marketing-db-read": ["PUBLISHER_DATABASE_URL"],
+  "marketing-ingest": ["file:MARKETING_INGEST_READY_FILE"],
+};
+
+function credentialMissing(tool, env) {
+  return (TOOL_CREDENTIAL_ENV[tool] || []).some((name) => (name.startsWith("file:") ? !(env[name.slice(5)] && existsSync(env[name.slice(5)])) : !env[name]));
+}
+
+// A pod declares tools via AGENT_TOOLS (comma list, set in its manifest). Names must be known,
+// and "browser" is only kept when a Chromium install is actually present, so a pod without
+// Playwright never advertises a browser it cannot use.
+export function resolveAgentTools(env = process.env, hasChromium = defaultHasChromium) {
+  const declared = [...new Set(String(env.AGENT_TOOLS || "").split(",").map((t) => t.trim()).filter(Boolean))];
+  const tools = [];
+  for (const tool of declared) {
+    if (!KNOWN_TOOLS.includes(tool)) console.error(`[hive-member] ignoring unknown AGENT_TOOLS entry "${tool}"`);
+    else if (tool === "browser" && !hasChromium(env)) console.error('[hive-member] AGENT_TOOLS lists "browser" but no Chromium install was found; not declaring it');
+    else if (credentialMissing(tool, env)) console.error(`[hive-member] AGENT_TOOLS lists "${tool}" but its credential env (${TOOL_CREDENTIAL_ENV[tool].join(", ")}) is incomplete; not declaring it`);
+    else tools.push(tool);
+  }
+  return tools.sort();
+}
+
+function defaultHasChromium(env) {
+  const dir = env.PLAYWRIGHT_BROWSERS_PATH || "/opt/ms-playwright";
+  try {
+    return existsSync(dir) && readdirSync(dir).some((entry) => entry.startsWith("chromium"));
+  } catch {
+    return false;
+  }
+}
 
 async function registerWithHive() {
   let attempt = 0;
@@ -35,6 +83,7 @@ async function registerWithHive() {
             flavor: process.env.AGENT_FLAVOR || "hermes",
             tier: ["cheap", "standard", "power"].includes(process.env.AGENT_TIER) ? process.env.AGENT_TIER : undefined,
             cost_factor: Number(process.env.AGENT_COST_FACTOR) > 0 ? Number(process.env.AGENT_COST_FACTOR) : undefined,
+            tools: resolveAgentTools(),
           },
         }),
       });
@@ -66,6 +115,54 @@ async function request(path, options = {}) {
     throw error;
   }
   return body;
+}
+
+// Ticket standard (docs/TICKET-STANDARD.md): every hive_submit carries a type, story
+// points, a goal, acceptance criteria and a scope, validated here before any Hive HTTP
+// so a malformed ticket fails loudly instead of landing as an unbid, unscorable task.
+const TICKET_TYPES = ["feature", "bug", "chore"];
+const FIBONACCI_POINTS = [1, 2, 3, 5, 8, 13];
+const BUG_BUMPS = { needs_diagnosis: 2, touches_production: 1 };
+const MAX_POINTS = 13;
+
+export function tierForPoints(points) {
+  return points <= 3 ? "cheap" : points <= 5 ? "standard" : "power";
+}
+
+export function applyTicketStandard(args) {
+  const metadata = { ...(args.metadata || {}) };
+  const problems = [];
+  if (!TICKET_TYPES.includes(metadata.type)) problems.push(`metadata.type must be one of ${TICKET_TYPES.join("|")}`);
+  if (!FIBONACCI_POINTS.includes(metadata.points)) problems.push(`metadata.points must be one of ${FIBONACCI_POINTS.join(", ")} (split anything bigger than ${MAX_POINTS})`);
+  const text = (value) => typeof value === "string" && value.trim() !== "";
+  if (!text(metadata.goal)) problems.push("metadata.goal must state the outcome in one or two sentences");
+  const criteria = Array.isArray(metadata.acceptance_criteria) ? metadata.acceptance_criteria.filter(text) : [];
+  if (criteria.length === 0) problems.push("metadata.acceptance_criteria must list at least one verifiable check");
+  if (!text(metadata.scope)) problems.push("metadata.scope must name the repo/paths in scope and what is out of scope");
+  if (metadata.bug_modifiers !== undefined && (!Array.isArray(metadata.bug_modifiers) || metadata.bug_modifiers.some((m) => !(m in BUG_BUMPS)))) problems.push(`metadata.bug_modifiers may only contain ${Object.keys(BUG_BUMPS).join(", ")}`);
+  if (metadata.requires_tools !== undefined) {
+    const unknown = Array.isArray(metadata.requires_tools) ? metadata.requires_tools.filter((t) => !KNOWN_TOOLS.includes(t)) : null;
+    if (unknown === null) problems.push("metadata.requires_tools must be an array of tool names");
+    else if (unknown.length) problems.push(`metadata.requires_tools has unknown tool(s) ${unknown.map((t) => JSON.stringify(t)).join(", ")}; known tools: ${KNOWN_TOOLS.join(", ")}`);
+  }
+  if (problems.length) throw new Error(`hive_submit rejected, ticket does not meet docs/TICKET-STANDARD.md: ${problems.join("; ")}`);
+
+  const bumps = metadata.type === "bug" ? [...new Set(metadata.bug_modifiers || [])].reduce((sum, m) => sum + BUG_BUMPS[m], 0) : 0;
+  const points = metadata.points + bumps;
+  if (points > MAX_POINTS) throw new Error(`hive_submit rejected: ${metadata.points} points + ${bumps} bug bump = ${points}, above ${MAX_POINTS}; split the ticket into smaller tickets`);
+
+  const message = [
+    args.message.trim(),
+    `Type: ${metadata.type} | Points: ${points}${bumps ? ` (${metadata.points} + ${bumps} bug bump)` : ""}`,
+    `Goal: ${metadata.goal.trim()}`,
+    `Acceptance criteria:\n${criteria.map((c) => `- ${c.trim()}`).join("\n")}`,
+    `Scope: ${metadata.scope.trim()}`,
+  ].join("\n\n");
+  // An explicit tier still wins, so a submitter can force power for work the points understate.
+  const tier = ["cheap", "standard", "power"].includes(metadata.tier) ? metadata.tier : tierForPoints(points);
+  const { bug_modifiers, requires_tools, ...rest } = metadata;
+  const tools = requires_tools?.length ? { requires_tools: [...new Set(requires_tools)].sort() } : {};
+  return { message, metadata: { ...rest, ...tools, points, base_points: metadata.points, tier } };
 }
 
 // Client-side fail-fast for the hive_complete feedback contract
@@ -235,7 +332,7 @@ async function waitForEvent(taskId, timeoutSeconds = 900) {
 const instructions = `Hive member tools for the company-os coordination service (Elixir/Postgres work, leases, durable events). Lifecycle: 1) hive_available_work lists open work; bid with hive_bid (confidence, approach, estimated_cost, expected_benefit). 2) Block, never poll: idle members wait inside hive_next_work; members awaiting a specific task wait inside hive_wait(task_id) — do NOT loop hive_status (one-off inspection only) or hive_available_work. 3) While holding a lease, renew with hive_heartbeat every few minutes and always before lease_seconds elapse (default 900) — an expired lease lets the task be re-allocated. 4) hive_complete is terminal: exactly one call per task with state completed|failed and a result.feedback object; after it the lease is gone and hive_wait returns. When any stream call errors, call hive_diagnostics first. hive_events replays durable history; hive_status reads current state; hive_work_bids audits who won and why. When Steward MCP tools are available, call generate_guidance_packet(scope_path: "hive") against Steward to fetch shared guidance before bidding (hive_bid).`;
 
 const tools = [
-  { name: "hive_submit", description: "Submit work to Hive and return its durable task id. After submitting, block on hive_wait(task_id) for the outcome — never poll hive_status.", inputSchema: { type: "object", required: ["message"], properties: { message: { type: "string" }, metadata: { type: "object" } }, additionalProperties: false } },
+  { name: "hive_submit", description: "Submit work to Hive and return its durable task id. Tickets must follow docs/TICKET-STANDARD.md or are rejected: metadata.type (feature|bug|chore), metadata.points (1,2,3,5,8,13), metadata.goal, metadata.acceptance_criteria (array), metadata.scope; bugs may add metadata.bug_modifiers (needs_diagnosis +2, touches_production +1). Optional metadata.requires_tools (known: browser, hindsight, kubectl-deploy, image-build, hermes-data, postgres-admin, github-pr, reddit-publish, substack-publish, marketing-db-read, marketing-ingest) routes the ticket only to agents declaring all of them; if none exists it escalates to a human instead of dropping tier. Points set the tier unless metadata.tier is given. After submitting, block on hive_wait(task_id) for the outcome — never poll hive_status.", inputSchema: { type: "object", required: ["message", "metadata"], properties: { message: { type: "string" }, metadata: { type: "object", required: ["type", "points", "goal", "acceptance_criteria", "scope"], properties: { type: { type: "string", enum: TICKET_TYPES }, points: { type: "integer", enum: FIBONACCI_POINTS }, goal: { type: "string" }, acceptance_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, scope: { type: "string" }, bug_modifiers: { type: "array", items: { type: "string", enum: Object.keys(BUG_BUMPS) } }, tier: { type: "string", enum: ["cheap", "standard", "power"] }, requires_tools: { type: "array", items: { type: "string", enum: KNOWN_TOOLS } }, approval_ref: { type: "string", description: "Board/Hermes approval reference; the publisher agent refuses to publish to Reddit or Substack without it (docs/PUBLISHER.md)." } } } }, additionalProperties: false } },
   { name: "hive_bid", description: "Submit or update this agent's bid for Hive work (confidence, approach, estimated_cost, expected_benefit). After bidding, wait for allocation via hive_next_work or hive_wait(work_id); once allocated, hive_heartbeat the task while working.", inputSchema: { type: "object", required: ["work_id", "confidence", "approach", "estimated_cost", "expected_benefit"], properties: { work_id: { type: "string" }, interested: { type: "boolean" }, confidence: { type: "number", minimum: 0, maximum: 1 }, approach: { type: "string" }, estimated_cost: { type: "number", minimum: 0 }, expected_benefit: { type: "number", minimum: 0 }, risk: { type: "string" }, evidence: { type: "string" } }, additionalProperties: false } },
   { name: "hive_work_bids", description: "Read the ranked bids for Hive work, by id, slug or task id (work_id, work_slug and task_id are interchangeable). Order is the allocation order: eligible bids cheapest first, each with eligible/ineligible_reasons/selected and the bidder's stored rationale. Call before hive_allocate to sanity-check the ranking, or after allocation to audit why a bidder won.", inputSchema: { type: "object", properties: { work_id: { type: "string" }, work_slug: { type: "string" }, task_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
   { name: "hive_cost_ledger", description: "Read-only cost ledger: per-agent allocations, failures (failed, lease_expired, escalated), runtime and total estimated cost, plus the most recent allocation rows with outcome. Use it to see whether cost-aware allocation is working; pair with hive_work_bids for one task.", inputSchema: { type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 365 }, limit: { type: "integer", minimum: 1, maximum: 200 } }, additionalProperties: false } },
@@ -259,7 +356,11 @@ function text(id, value) { return { jsonrpc: "2.0", id, result: { content: [{ ty
 function fail(id, message) { return { jsonrpc: "2.0", id, error: { code: -32000, message } }; }
 
 async function call(name, args) {
-  if (name === "hive_submit") return request("/", { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "message/send", params: { message: { parts: [{ text: args.message }] }, ...(args.metadata ? { metadata: args.metadata } : {}) } }) });
+  if (name === "hive_submit") {
+    if (typeof args.message !== "string" || args.message.trim() === "") throw new Error("hive_submit requires a non-empty message");
+    const ticket = applyTicketStandard(args);
+    return request("/", { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "message/send", params: { message: { parts: [{ text: ticket.message }] }, metadata: ticket.metadata } }) });
+  }
   if (name === "hive_bid") { const { work_id, ...bid } = args; return request(`/work/${encodeURIComponent(work_id)}/bids`, { method: "POST", body: JSON.stringify({ agent_id: consumerId, ...bid }) }); }
   if (name === "hive_work_bids") {
     const ref = args.work_id ?? args.work_slug ?? args.task_id;

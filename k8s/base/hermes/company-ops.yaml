@@ -18,7 +18,7 @@ spec:
       serviceAccountName: company-ops
       containers:
         - name: hermes-gateway
-          image: localhost:30500/company-os:hermes-6b7dcfe5244d@sha256:e9c3462c4ee90cf33c6b62e05fea3fa92fdc3d76c6e41185d5a27f268b4263a2
+          image: localhost:30500/company-os:hermes-e5fce28@sha256:f905ee5424f27a9fb676dec4f2fa73e5db43da2082129b589aec9e90692a3b55
           imagePullPolicy: Always
           command: ["env", "-u", "GITHUB_APP_PRIVATE_KEY", "-u", "GITHUB_APP_PRIVATE_KEY_PATH", "-u", "GITHUB_APP_ID", "-u", "GITHUB_APP_INSTALLATION_ID", "-u", "GITHUB_TOKEN", "-u", "GH_TOKEN", "bash", "/opt/company-ops/scripts/entrypoint.sh", "hermes", "gateway", "run"]
           resources:
@@ -36,6 +36,9 @@ spec:
               value: http://hive-coordinator:4100
             - name: HIVE_AGENT_ID
               value: hermees
+            # Hermes owns the /opt/data memory volume, so it alone declares hermes-data.
+            - name: AGENT_TOOLS
+              value: hermes-data
             - name: AXIOM_SERVICE_NAME
               value: hermes-gateway-k8s
             - name: DEPLOYMENT_ENVIRONMENT

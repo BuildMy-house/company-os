@@ -66,6 +66,20 @@ defmodule Hive.Router do
               409
             )
 
+          {:error, :invalid_requires_tools} ->
+            json(
+              conn,
+              %{
+                "jsonrpc" => "2.0",
+                "id" => request_id,
+                "error" => %{
+                  "code" => -32602,
+                  "message" => "requires_tools must be an array of non-empty tool names"
+                }
+              },
+              422
+            )
+
           {:error, :invalid_slug} ->
             json(
               conn,
@@ -118,11 +132,18 @@ defmodule Hive.Router do
   post "/agents/register" do
     case conn.body_params do
       %{"id" => id} = agent ->
-        :ok = Hive.Work.register_agent(Map.put_new(agent, "capabilities", %{}))
+        :ok = Hive.Work.register_agent(normalize_agent(agent))
         json(conn, %{"agent_id" => id, "status" => "registered"})
 
       _ ->
         json(conn, %{"error" => "agent id required"}, 400)
+    end
+  end
+
+  delete "/agents/:agent_id" do
+    case Hive.Work.deregister_agent(agent_id) do
+      :ok -> json(conn, %{"agent_id" => agent_id, "status" => "deregistered"})
+      {:error, :not_found} -> json(conn, %{"error" => "agent not found"}, 404)
     end
   end
 
@@ -389,6 +410,23 @@ defmodule Hive.Router do
 
       _ ->
         task
+    end
+  end
+
+  # `capabilities.tools` (docs/TICKET-STANDARD.md "Requiring tools") is stored as a sorted,
+  # de-duplicated list of strings so routing never has to guess at its shape.
+  defp normalize_agent(agent) do
+    agent = Map.put_new(agent, "capabilities", %{})
+
+    case agent["capabilities"] do
+      %{"tools" => tools} = capabilities ->
+        put_in(
+          agent["capabilities"],
+          Map.put(capabilities, "tools", Hive.Selection.normalize_tools(tools))
+        )
+
+      _ ->
+        agent
     end
   end
 

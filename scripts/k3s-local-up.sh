@@ -23,6 +23,7 @@ kubectl create configmap postgres-init \
   --from-file=01-company_schema.sql=sql/company_schema.sql \
   --from-file=02-observer_schema.sql=sql/observer_schema.sql \
   --from-file=03-pm_schema.sql=sql/pm_schema.sql \
+  --from-file=04-marketing_schema.sql=sql/marketing_schema.sql \
   --dry-run=client -o yaml | kubectl apply -f -
 
 if [ -x scripts/bootstrap-secrets.sh ]; then

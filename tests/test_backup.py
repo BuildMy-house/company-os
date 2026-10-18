@@ -125,6 +125,35 @@ class EnforceRetentionTests(unittest.TestCase):
         client.delete_object.assert_not_called()
 
 
+class SchemaCoverageTests(unittest.TestCase):
+    def test_marketing_is_dumped(self):
+        self.assertEqual(sorted(backup.SCHEMAS), ["company", "marketing", "observer"])
+
+    def test_pg_dump_gets_a_flag_per_schema(self):
+        with mock.patch("company_ops.backup.subprocess.run") as run:
+            backup.run_pg_dump("postgresql://u:p@h/db", "out.sql")
+        cmd = run.call_args[0][0]
+        for schema in ("company", "observer", "marketing"):
+            self.assertIn(f"--schema={schema}", cmd)
+
+    def test_backup_role_can_read_every_dumped_schema(self):
+        """The backup connects as ANALYTICS_DATABASE_URL = hermes_analytics.
+
+        A schema added to SCHEMAS without a SELECT grant there breaks the
+        nightly dump (it happened once with a new table).
+        """
+        manifest = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                "sql", "roles.d", "hermes_analytics.yaml")
+        text = open(manifest).read()
+        self.assertIn("dsn_key: ANALYTICS_DATABASE_URL", text)
+        for schema in backup.SCHEMAS:
+            block = text.split(f"- schema: {schema}\n", 1)
+            self.assertEqual(len(block), 2, f"{schema} not granted to hermes_analytics")
+            head = block[1].split("- schema:", 1)[0]
+            self.assertIn("tables: all", head)
+            self.assertIn("SELECT", head)
+
+
 class RunBackupTests(unittest.TestCase):
     def test_raises_value_error_when_dsn_missing(self):
         env = {k: v for k, v in _REQUIRED_ENV.items()
@@ -370,7 +399,7 @@ class LiveBackupRestoreIntegrationTests(unittest.TestCase):
                 scur.execute("""
                     SELECT table_schema, table_name
                     FROM information_schema.tables
-                    WHERE table_schema IN ('company', 'observer')
+                    WHERE table_schema IN ('company', 'observer', 'marketing')
                     ORDER BY table_schema, table_name;
                 """)
                 src_tables = scur.fetchall()
@@ -378,7 +407,7 @@ class LiveBackupRestoreIntegrationTests(unittest.TestCase):
                 rcur.execute("""
                     SELECT table_schema, table_name
                     FROM information_schema.tables
-                    WHERE table_schema IN ('company', 'observer')
+                    WHERE table_schema IN ('company', 'observer', 'marketing')
                     ORDER BY table_schema, table_name;
                 """)
                 restored_tables = rcur.fetchall()

@@ -80,7 +80,7 @@ The same adapter can run different phenotypes without changing the Hive:
 AGENT_PROFILE=builder
 AGENT_CAPABILITIES=execute,review
 RUNNER_AGENT=opencode
-RUNNER_MODEL=oc-zai-coding-plan/glm-5.3-flash
+RUNNER_MODEL=oc-opencode/mimo-v2.6-flash-free
 HIVE_AGENT_ID=website-builder
 ```
 

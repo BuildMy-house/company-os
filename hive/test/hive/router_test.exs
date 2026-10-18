@@ -113,6 +113,22 @@ defmodule Hive.RouterTest do
     submit.("tier-bogus-item", "gpu")
     submit.("tier-missing-item", nil)
 
+    conn(
+      :post,
+      "/",
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "message/send",
+        "params" => %{
+          "message" => %{"parts" => [%{"text" => "points-item"}]},
+          "metadata" => %{"slug" => "points-item", "type" => "bug", "points" => 6, "base_points" => 3}
+        }
+      })
+    )
+    |> Plug.Conn.put_req_header("content-type", "application/json")
+    |> Hive.Router.call(@opts)
+
     {:ok, work} = Hive.Work.available(100)
     by_slug =
       Map.new(work, fn item ->
@@ -124,6 +140,9 @@ defmodule Hive.RouterTest do
     assert by_slug["tier-power-item"]["tier"] == "power"
     assert by_slug["tier-bogus-item"]["tier"] == "cheap"
     assert by_slug["tier-missing-item"]["tier"] == "cheap"
+    assert by_slug["points-item"]["points"] == 6
+    assert by_slug["points-item"]["type"] == "bug"
+    refute Map.has_key?(by_slug["tier-cheap-item"], "points")
   end
 
   test "rejects duplicate and invalid human-readable slugs" do
@@ -183,6 +202,85 @@ defmodule Hive.RouterTest do
       conn = conn(:get, "/work/#{work_id}/bids") |> Hive.Router.call(@opts)
       assert conn.status == 404
       assert Jason.decode!(conn.resp_body) == %{"error" => "work not found"}
+    end
+  end
+
+  test "DELETE /agents/:id deregisters a registered agent and 404s otherwise" do
+    id = "dereg-" <> Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+
+    register =
+      conn(:post, "/agents/register", Jason.encode!(%{"id" => id, "endpoint" => "http://x:1"}))
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+
+    assert register.status == 200
+
+    ids = fn ->
+      conn(:get, "/agents")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+      |> Map.fetch!("agents")
+      |> Enum.map(& &1["id"])
+    end
+
+    assert id in ids.()
+
+    deleted = conn(:delete, "/agents/#{id}") |> Hive.Router.call(@opts)
+    assert deleted.status == 200
+    assert Jason.decode!(deleted.resp_body) == %{"agent_id" => id, "status" => "deregistered"}
+    refute id in ids.()
+
+    for missing <- [id, "never-registered-" <> id] do
+      conn = conn(:delete, "/agents/#{missing}") |> Hive.Router.call(@opts)
+      assert conn.status == 404
+      assert Jason.decode!(conn.resp_body) == %{"error" => "agent not found"}
+    end
+  end
+
+  test "bids are readable by human-readable slug, matching the task id" do
+    slug = "bids-by-slug-" <> Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+
+    body =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => 9,
+        "method" => "message/send",
+        "params" => %{
+          "message" => %{"parts" => [%{"text" => "slugged"}]},
+          "metadata" => %{"slug" => slug}
+        }
+      })
+
+    task_id =
+      conn(:post, "/", body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+      |> get_in(["result", "id"])
+
+    bid =
+      conn(
+        :post,
+        "/work/#{slug}/bids",
+        Jason.encode!(%{
+          "agent_id" => "slug-bidder",
+          "confidence" => 0.9,
+          "approach" => "test",
+          "estimated_cost" => 1,
+          "expected_benefit" => 3
+        })
+      )
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+
+    assert bid.status == 201
+
+    for ref <- [slug, task_id] do
+      conn = conn(:get, "/work/#{ref}/bids") |> Hive.Router.call(@opts)
+      assert conn.status == 200
+      assert [%{"agent_id" => "slug-bidder"}] = Jason.decode!(conn.resp_body)["bids"]
     end
   end
 

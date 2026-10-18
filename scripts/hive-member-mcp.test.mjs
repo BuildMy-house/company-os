@@ -5,6 +5,9 @@ import readline from "node:readline";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const memberScript = fileURLToPath(new URL("./hive-member-mcp.js", import.meta.url));
 
@@ -124,7 +127,8 @@ test("initialize sends instructions and tool descriptions carry next-tool hints"
   }
   const byName = new Map(tools.map((tool) => [tool.name, tool.description]));
   assert.equal(byName.get("hive_diagnostics"), "Check DNS, TCP, the Hive HTTP health route, and the worker SSE subscription from this container (opens and immediately closes an unclaimed stream; no work is consumed). Call this first when hive_wait or hive_next_work error or time out unexpectedly.");
-  assert.equal(byName.get("hive_submit"), "Submit work to Hive and return its durable task id. After submitting, block on hive_wait(task_id) for the outcome — never poll hive_status.");
+  assert.match(byName.get("hive_submit"), /^Submit work to Hive and return its durable task id\. Tickets must follow docs\/TICKET-STANDARD\.md/);
+  assert.match(byName.get("hive_submit"), /block on hive_wait\(task_id\) for the outcome — never poll hive_status\.$/);
 });
 
 test("manager Hive tools prompt workers with the manager's own identity", async (t) => {
@@ -469,4 +473,158 @@ test("HIVE_REGISTER=false never calls /agents/register, default still registers"
   }
   assert.equal(await registrations({ HIVE_REGISTER: "false" }), 0);
   assert.equal(await registrations({}), 1);
+});
+
+test("hive_submit enforces the ticket standard and derives tier from points", async (t) => {
+  const submitted = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    if (request.method === "POST" && request.url === "/") submitted.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"result":{"id":"task_test"}}');
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "ticket-test", HIVE_REGISTER: "false" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    waiters.get(message.id)?.(message);
+    waiters.delete(message.id);
+  });
+  let nextId = 1;
+  const submit = (args) => new Promise((resolve) => {
+    const id = nextId++;
+    waiters.set(id, resolve);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "hive_submit", arguments: args } })}\n`);
+  });
+  const ticket = { type: "feature", points: 3, goal: "Add the thing.", acceptance_criteria: ["tests pass"], scope: "repo app, src/ only" };
+
+  const missing = await submit({ message: "do it", metadata: { tier: "cheap" } });
+  assert.match(missing.error.message, /TICKET-STANDARD/);
+  assert.match(missing.error.message, /metadata\.points/);
+  assert.equal(submitted.length, 0, "a malformed ticket never reaches Hive");
+
+  const tooBig = await submit({ message: "do it", metadata: { ...ticket, type: "bug", points: 13, bug_modifiers: ["needs_diagnosis"] } });
+  assert.match(tooBig.error.message, /split/);
+
+  await submit({ message: "do it", metadata: ticket });
+  assert.equal(submitted[0].params.metadata.tier, "cheap");
+  assert.equal(submitted[0].params.metadata.points, 3);
+  assert.match(submitted[0].params.message.parts[0].text, /Acceptance criteria:\n- tests pass/);
+
+  await submit({ message: "fix it", metadata: { ...ticket, type: "bug", points: 3, bug_modifiers: ["needs_diagnosis", "touches_production"] } });
+  assert.equal(submitted[1].params.metadata.points, 6);
+  assert.equal(submitted[1].params.metadata.base_points, 3);
+  assert.equal(submitted[1].params.metadata.tier, "power");
+
+  await submit({ message: "five", metadata: { ...ticket, points: 5 } });
+  assert.equal(submitted[2].params.metadata.tier, "standard");
+});
+
+test("registration declares capabilities.tools only for known, verifiable tools", async (t) => {
+  async function registeredCapabilities(env) {
+    let captured;
+    const server = createServer(async (request, response) => {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      if (request.url === "/agents/register") captured = JSON.parse(body).capabilities;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const child = spawn(process.execPath, [memberScript], {
+      env: { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "tools-test", AGENT_TOOLS: "", ...env },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    child.kill();
+    server.closeAllConnections();
+    server.close();
+    return captured;
+  }
+  const noBrowsers = await mkdtemp(join(tmpdir(), "no-browsers-"));
+  const withChromium = await mkdtemp(join(tmpdir(), "with-chromium-"));
+  await mkdir(join(withChromium, "chromium-1234"));
+  t.after(() => Promise.all([rm(noBrowsers, { recursive: true }), rm(withChromium, { recursive: true })]));
+
+  assert.deepEqual((await registeredCapabilities({})).tools, [], "no AGENT_TOOLS declares no tools");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "kubectl-deploy, hindsight,kubectl-deploy,made-up" })).tools, ["hindsight", "kubectl-deploy"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "browser,hindsight", PLAYWRIGHT_BROWSERS_PATH: noBrowsers })).tools, ["hindsight"], "browser is dropped without Chromium");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "browser,hindsight", PLAYWRIGHT_BROWSERS_PATH: withChromium })).tools, ["browser", "hindsight"]);
+
+  // Credential-gated publisher tools: declared only when their env is present.
+  const publisherTools = "github-pr,reddit-publish,substack-publish,marketing-db-read,marketing-ingest";
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools })).tools, [], "no credentials declares none of the publisher tools");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c" })).tools, [], "partial reddit credentials declare nothing");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c", REDDIT_PASSWORD: "d", PUBLISHER_DATABASE_URL: "postgresql://x" })).tools, ["marketing-db-read", "reddit-publish"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, SUBSTACK_PUBLICATION_URL: "https://x.substack.com", SUBSTACK_SESSION_TOKEN: "c" })).tools, [], "the cookie alone declares nothing: the sidecar ready marker is required");
+  const marker = join(await mkdtemp(join(tmpdir(), "ready-")), "m");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, MARKETING_INGEST_READY_FILE: marker, SUBSTACK_READY_FILE: marker })).tools, [], "ready-file env pointing at a missing file declares nothing");
+  await writeFile(marker, "ok");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, MARKETING_INGEST_READY_FILE: marker })).tools, ["marketing-ingest"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, SUBSTACK_READY_FILE: marker })).tools, ["substack-publish"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "github-pr", GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "ga-read,gsc-read,reddit-read,substack-read" })).tools, [], "read-API tools were replaced by marketing-db-read");
+});
+
+test("hive_submit validates requires_tools and leaves tool-free tickets unchanged", async (t) => {
+  const submitted = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    if (request.method === "POST" && request.url === "/") submitted.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"result":{"id":"task_test"}}');
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "tools-ticket-test", HIVE_REGISTER: "false" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    waiters.get(message.id)?.(message);
+    waiters.delete(message.id);
+  });
+  let nextId = 1;
+  const submit = (args) => new Promise((resolve) => {
+    const id = nextId++;
+    waiters.set(id, resolve);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "hive_submit", arguments: args } })}\n`);
+  });
+  const ticket = { type: "chore", points: 2, goal: "Sweep it.", acceptance_criteria: ["report filed"], scope: "repo app only" };
+
+  const unknown = await submit({ message: "qa", metadata: { ...ticket, requires_tools: ["browser", "teleporter"] } });
+  assert.match(unknown.error.message, /unknown tool\(s\) .{1,3}teleporter/);
+  assert.match(unknown.error.message, /known tools: browser, hindsight/);
+  const notArray = await submit({ message: "qa", metadata: { ...ticket, requires_tools: "browser" } });
+  assert.match(notArray.error.message, /requires_tools must be an array/);
+  assert.equal(submitted.length, 0, "an invalid requires_tools never reaches Hive");
+
+  await submit({ message: "qa", metadata: { ...ticket, requires_tools: ["hindsight", "browser", "browser"] } });
+  assert.deepEqual(submitted[0].params.metadata.requires_tools, ["browser", "hindsight"]);
+
+  await submit({ message: "plain", metadata: ticket });
+  assert.equal("requires_tools" in submitted[1].params.metadata, false);
+  await submit({ message: "empty", metadata: { ...ticket, requires_tools: [] } });
+  assert.equal("requires_tools" in submitted[2].params.metadata, false);
 });

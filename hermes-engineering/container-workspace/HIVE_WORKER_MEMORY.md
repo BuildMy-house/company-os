@@ -28,6 +28,10 @@ pools; do not put personal notes, credentials, or task-specific data here.
 
 ## Worker tiers (cost vs. power)
 
+- Tickets follow `docs/TICKET-STANDARD.md`; the points you set choose the tier unless
+  `metadata.tier` overrides. Re-offered work carries `payload.incentive` (>= 1) and your
+  bid cost is divided by it.
+
 - Submitters set `metadata.tier` on `hive_submit`: `cheap` (mechanical edits,
   docs, config, standard features, read-only investigation, QA sweeps),
   `standard` (default when omitted), or `power` (hard debugging, security or

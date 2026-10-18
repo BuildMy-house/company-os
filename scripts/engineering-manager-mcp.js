@@ -21,11 +21,21 @@ const upstream = isMain
   })
   : null;
 
+// ai-cli routes by model prefix: an OpenCode model without "oc-" silently runs
+// on Claude and fails. Refuse to start rather than decline every task later.
+export function validateRunner(agent, model) {
+  if (agent === "opencode" && model !== "opencode" && !model?.startsWith("oc-")) {
+    throw new Error(`RUNNER_MODEL "${model}" is invalid for RUNNER_AGENT=opencode: ai-cli would route it to Claude. Use oc-<provider>/<model>, e.g. oc-opencode/mimo-v2.6-flash-free.`);
+  }
+  return model;
+}
+const RUNNER_AGENT = process.env.RUNNER_AGENT || (process.env.AGENT_FLAVOR === "opencode" ? "opencode" : "claude");
+
 const MANAGER = {
   flavor: process.env.AGENT_FLAVOR || "claude",
   role: process.env.AGENT_ROLE || "manager",
-  agent: process.env.RUNNER_AGENT || (process.env.AGENT_FLAVOR === "opencode" ? "opencode" : "claude"),
-  model: process.env.RUNNER_MODEL || (process.env.AGENT_FLAVOR === "opencode" ? "oc-opencode/mimo-v2.6-flash-free" : "sonnet"),
+  agent: RUNNER_AGENT,
+  model: validateRunner(RUNNER_AGENT, process.env.RUNNER_MODEL || (process.env.AGENT_FLAVOR === "opencode" ? "oc-opencode/mimo-v2.6-flash-free" : "sonnet")),
   reasoning_effort: process.env.RUNNER_REASONING || "medium",
   auto_compact: "200k",
 };
@@ -58,6 +68,17 @@ export function tierAffinityMultiplier(taskTier, poolTier) {
   return 2 ** Math.abs(TIERS.indexOf(task) - TIERS.indexOf(normalizeTier(poolTier)));
 }
 export const taskTierOf = (candidate) => normalizeTier(candidate?.payload?.tier);
+
+// Ticket metadata is not part of payload.parts, so a worker never sees it unless it is injected.
+// approval_ref (docs/PUBLISHER.md) is the one key workers need: the publisher agent refuses to
+// publish to Reddit or Substack without it. Only a well-formed value is passed on, so a ticket
+// cannot smuggle prompt text through this field.
+export const APPROVAL_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{5,119}$/;
+export function withApprovalRef(taskPrompt, payload) {
+  const ref = payload?.approval_ref;
+  if (typeof ref !== "string" || !APPROVAL_REF_RE.test(ref)) return taskPrompt;
+  return `${taskPrompt}\n\nTicket metadata approval_ref: ${ref}`;
+}
 
 const HIVE_WORKER_MEMORY = (() => {
   const paths = [
@@ -492,6 +513,20 @@ export function outputText(payload) {
   return output == null ? "" : JSON.stringify(output);
 }
 
+// A "completed" run that made zero tool calls and produced no output text is a
+// dead run (model rate limit, empty agent response), not finished work. Returns
+// the failure reason for such runs, or null when the run did real work.
+export function emptyRunFailure(payload) {
+  const toolCalls = Array.isArray(payload?.agentOutput?.tools) ? payload.agentOutput.tools.length : 0;
+  if (toolCalls > 0 || outputText(payload ?? {}).trim().length > 0) return null;
+  const agent = payload?.agent || payload?.agentID || process.env.HIVE_AGENT_ID || "unknown";
+  const detail = [payload?.error, payload?.agentOutput?.error, payload?.agentOutput?.stderr]
+    .map((value) => (typeof value === "string" && value.trim() ? value.trim() : null))
+    .filter(Boolean)
+    .join(" | ");
+  return capText(`empty_agent_run: 0 tool calls, empty output (agent=${agent}, pid=${payload?.pid ?? "unknown"}${detail ? `, error=${detail}` : ""})`, RESULT_ERROR_CAP);
+}
+
 export function retryDelayMs(attempt, random = Math.random) {
   const ceiling = Math.min(60_000, 1_000 * (2 ** Math.max(0, attempt - 1)));
   return Math.floor(Math.max(0, Math.min(0.999999, random())) * ceiling);
@@ -544,14 +579,15 @@ const capText = (value, cap) => {
 // forwarded; only the final output, state, error and duration are kept.
 export function buildCompletionResult(finished, bidContext = {}) {
   const durationMs = Math.max(0, Date.now() - (finished?.startedAt ?? Date.now()));
-  const failed = finished?.state !== "completed";
+  const emptyRun = finished?.state === "completed" ? emptyRunFailure(finished?.result) : null;
+  const failed = finished?.state !== "completed" || emptyRun != null;
   const num = (value, fallback) => (Number.isFinite(value) && value >= 0 ? value : fallback);
   const estimatedCost = num(bidContext.estimated_cost, 1);
   const estimatedBenefit = num(bidContext.expected_benefit, 1);
-  const error = failed ? capText(finished?.error || finished?.result?.error || `agent process ${finished?.result?.status || "failed"}`, RESULT_ERROR_CAP) : "";
   const payload = finished?.result || {};
+  const error = failed ? capText(emptyRun || finished?.error || finished?.result?.error || `agent process ${finished?.result?.status || "failed"}`, RESULT_ERROR_CAP) : "";
   return {
-    state: finished?.state || "failed",
+    state: failed ? "failed" : "completed",
     duration_ms: durationMs,
     ...(error ? { error } : {}),
     output: capText(outputText(payload), RESULT_TEXT_CAP),
@@ -575,7 +611,7 @@ export async function completeHiveTask(hiveCallDep, taskId, finished, bidContext
   const result = buildCompletionResult(finished, bidContext);
   let attempts = 0;
   try {
-    return await completeWithRetry(hiveCallDep, { task_id: taskId, state: finished.state, result }, {
+    return await completeWithRetry(hiveCallDep, { task_id: taskId, state: result.state, result }, {
       ...retryOptions,
       onFailure: (failure) => {
         attempts = failure.attempt;
@@ -632,7 +668,9 @@ export function isValidAssessment(value) {
     && typeof risk === "string" && risk.trim().length > 0;
 }
 
-export function evaluateFit({ assessment, busy = false, healthStatus = "healthy", taskTier = "standard", poolTier = POOL_TIER, costFactor = POOL_COST_FACTOR }) {
+// `incentive` (>= 1) is set by the coordinator on re-offered work (hive/lib/hive/reoffer.ex): the
+// bid is discounted by it so work nobody wanted becomes cheaper to win.
+export function evaluateFit({ assessment, busy = false, healthStatus = "healthy", taskTier = "standard", poolTier = POOL_TIER, costFactor = POOL_COST_FACTOR, incentive = 1 }) {
   if (busy) return { skip: true, reason: "worker_busy" };
   if (healthStatus !== "healthy") return { skip: true, reason: "worker_unhealthy" };
   if (!assessment) return { skip: true, reason: "assessment_unavailable" };
@@ -642,7 +680,7 @@ export function evaluateFit({ assessment, busy = false, healthStatus = "healthy"
     bid: {
       interested: assessment.interested,
       confidence: assessment.confidence,
-      estimated_cost: assessment.estimated_cost * costFactor * tierAffinityMultiplier(taskTier, poolTier),
+      estimated_cost: (assessment.estimated_cost * costFactor * tierAffinityMultiplier(taskTier, poolTier)) / Math.max(1, incentive),
       expected_benefit: assessment.expected_benefit,
       risk: assessment.risk,
       approach: approach || "task-fit assessed execution",
@@ -732,11 +770,17 @@ async function runPromptToCompletion(prompt, context) {
   if (reply.error || started?.status !== "started" || !Number.isInteger(started.pid)) {
     throw new Error(reply.error?.message || "engineering runner did not return a process id");
   }
+  if (started.agent && started.agent !== MANAGER.agent) {
+    throw new Error(`ai-cli ran agent "${started.agent}" but RUNNER_AGENT is "${MANAGER.agent}" (model "${MANAGER.model}")`);
+  }
   const deadline = Date.now() + FIT_ASSESSMENT_TIMEOUT_MS;
   for (;;) {
     await delay(2000);
     const payload = toolPayload(await boundedUpstream("get_result", { pid: started.pid, verbose: true }, context));
-    if (payload?.status === "failed" || payload?.status === "killed") throw new Error(`assessment run ${payload.status}`);
+    if (payload?.status === "failed" || payload?.status === "killed") {
+      const detail = payload.agentOutput?.message ?? payload.error;
+      throw new Error(`assessment run ${payload.status}${detail ? `: ${String(detail).slice(0, 300)}` : ""}`);
+    }
     if (payload?.status === "completed") return outputText(payload);
     if (Date.now() >= deadline) {
       if (upstreamCancelTool) await upstreamCall(upstreamCancelTool, { pid: started.pid }, context).catch(() => {});
@@ -863,7 +907,7 @@ export async function runHiveWork(candidate, deps = {}) {
       // while(true) loop unthrottled if Hive keeps re-offering it immediately.
       await (deps.wait ?? delay)(retryDelayMs(consecutiveFailures, deps.random ?? Math.random));
     }
-    const decision = evaluateFit({ assessment, healthStatus: healthState.status, taskTier, poolTier, ...(deps.costFactor !== undefined ? { costFactor: deps.costFactor } : {}) });
+    const decision = evaluateFit({ assessment, healthStatus: healthState.status, taskTier, poolTier, incentive: candidate?.payload?.incentive ?? 1, ...(deps.costFactor !== undefined ? { costFactor: deps.costFactor } : {}) });
     if (decision.skip) {
       const failureCount = failuresDep.get(candidate.id)?.count ?? 0;
       const severe = failureCount >= ASSESSMENT_FAILURE_WARN_THRESHOLD;
@@ -912,7 +956,7 @@ export async function runHiveWork(candidate, deps = {}) {
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "allocated", agent_id: agentId });
     keepBusy = true;
     const task = { id: candidate.id, state: "working", startedAt: Date.now() };
-    const taskPrompt = candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.";
+    const taskPrompt = withApprovalRef(candidate.payload?.parts?.filter((part) => typeof part.text === "string").map((part) => part.text).join("\n") || "Complete the assigned work.", candidate.payload);
     const bidContext = {
       confidence: assessment.confidence,
       expected_benefit: assessment.expected_benefit,
@@ -990,7 +1034,7 @@ export async function handleBidPrompt(request, deps = {}) {
       });
     } catch (error) { emitTelemetry({ event: "hive_bid_assessment", task_id: work.id, state: "failed", stage: "task_fit_prompted", ...errorTelemetry(error) }); }
   }
-  const decision = evaluateFit({ assessment, busy: decisionBusy, healthStatus: healthState.status, taskTier: taskTierOf(work) });
+  const decision = evaluateFit({ assessment, busy: decisionBusy, healthStatus: healthState.status, taskTier: taskTierOf(work), incentive: work?.payload?.incentive ?? 1 });
   if (decision.skip) {
     return { outcome: SKIP_OUTCOMES[decision.reason] || "unavailable", worker_id: agentId, reason: decision.reason };
   }
@@ -1109,7 +1153,19 @@ if (isMain) {
         const prompt = typeof args.prompt === "string" ? args.prompt : "Complete the assigned engineering work.";
         hiveCall("hive_submit", {
           message: prompt,
-          metadata: { workFolder: args.workFolder || "/workspace", requested_by: "engineering-mcp" },
+          // Callers that already follow docs/TICKET-STANDARD.md pass the ticket fields through;
+          // others get a standard-sized chore, tagged so the defaulting stays visible.
+          metadata: {
+            workFolder: args.workFolder || "/workspace",
+            requested_by: "engineering-mcp",
+            type: args.type || "chore",
+            points: args.points || 5,
+            goal: args.goal || prompt.split("\n")[0].slice(0, 200),
+            acceptance_criteria: Array.isArray(args.acceptance_criteria) && args.acceptance_criteria.length ? args.acceptance_criteria : ["Work described in the prompt is done and verified; report what was run and the result."],
+            scope: args.scope || args.workFolder || "/workspace",
+            ...(args.bug_modifiers ? { bug_modifiers: args.bug_modifiers } : {}),
+            ...(args.type && args.points ? {} : { ticket_defaulted: true }),
+          },
         }).then(async (submitted) => {
           const taskId = submitted?.result?.id;
           if (!taskId) throw new Error("Hive did not return a task id");
