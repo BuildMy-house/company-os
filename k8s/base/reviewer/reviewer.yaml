@@ -45,7 +45,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: reviewer
-          image: localhost:30500/company-os-reviewer@sha256:fd7e7cf60dbd0d7d3a9c7895b2250c0fd47f6d6ec55dc9b5edac070d23913336
+          image: localhost:30500/company-os-reviewer@sha256:315e7afe4be18d2ddf24ca8441149a092fa30703767a7738bbe54a0210c53ff7
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
