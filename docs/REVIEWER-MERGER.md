@@ -48,6 +48,10 @@ follow-ups").
    repo's `AGENTS.md`: reviewed explicitly, the review recorded in a PR comment
    before the merge.
 6. Target branch is `main`, never `prod`.
+7. A PR from a `blog/*` head branch (the publisher agent) changes only blog
+   content paths (`src/content/blog/**`, `public/blog/**`, per the repo's
+   `branchPathRules` in `reviewer.json`), checked on every changed file
+   including the `previous_filename` of renames. Anything else is refused.
 
 ## Refusals (human required)
 

@@ -72,6 +72,20 @@ test("globs: ** crosses directories, * does not", () => {
   assert.ok(globToRe("src/**").test("src/a/b.js"));
   assert.ok(!globToRe("src/*").test("src/a/b.js"));
 });
+test("blog/* PRs may only change blog content paths", () => {
+  const blogHead = { ...good().pr, head: { ...good().pr.head, ref: "blog/hello-world" } };
+  assert.equal(evaluate(good({ pr: blogHead, files: [{ filename: "src/content/blog/hello-world.md", status: "added", changes: 1, patch: "+hi" }] })).ok, true);
+  refused(evaluate(good({ pr: blogHead, files: [
+    { filename: "src/content/blog/hello-world.md", status: "added", changes: 1, patch: "+hi" },
+    { filename: "package.json", status: "modified", changes: 1, patch: "+{}" },
+  ] })), /blog\/hello-world.*may only change.*also touches: package\.json/);
+  refused(evaluate(good({ pr: blogHead, files: [{ filename: "src/layouts/Layout.astro", status: "modified", changes: 1, patch: "+<slot/>" }] })), /may only change/);
+  refused(evaluate(good({ pr: blogHead, files: [{ filename: "src/content/blog/moved.md", previous_filename: "src/pages/moved.md", status: "renamed", changes: 1, patch: "+x" }] })), /src\/pages\/moved\.md/);
+});
+test("branch path rules do not apply to non-blog head branches", () => {
+  const head = { ...good().pr, head: { ...good().pr.head, ref: "feature/foo" } };
+  assert.equal(evaluate(good({ pr: head, files: [{ filename: "src/layouts/Layout.astro", status: "modified", changes: 1, patch: "+<slot/>" }, { filename: "package.json", status: "modified", changes: 1, patch: "+{}" }], reviewNote: "read the layout change, it is safe" })).ok, true);
+});
 
 function fakeGithub({ pr, files, checks }) {
   const calls = [];

@@ -52,6 +52,12 @@ export function evaluate({ cfg, repo, pr, files, checks, selfLogin, reviewNote }
   const paths = (files || []).flatMap((f) => [f.filename, f.previous_filename].filter(Boolean));
   const guarded = paths.filter((p) => matchesAny(p, GUARDED_PATHS));
   if (guarded.length) refusals.push(`touches guarded paths that need a human: ${[...new Set(guarded)].slice(0, 8).join(", ")}`);
+  const headRef = pr.head?.ref;
+  for (const rule of rc.branchPathRules || []) {
+    if (!headRef || !headRef.startsWith(rule.headPrefix)) continue;
+    const offending = paths.filter((p) => !matchesAny(p, rule.allowedPaths));
+    if (offending.length) refusals.push(`PR from "${headRef}" may only change ${rule.allowedPaths.join(", ")}; also touches: ${[...new Set(offending)].slice(0, 8).join(", ")}`);
+  }
   for (const f of files || []) {
     if (f.status !== "removed" && f.changes > 0 && !f.patch && !/\.(png|jpe?g|gif|webp|ico|woff2?|pdf|svg|lock)$/i.test(f.filename) && !/package-lock\.json$/.test(f.filename)) {
       refusals.push(`diff for "${f.filename}" is not available (too large or binary), so it cannot be reviewed`);
