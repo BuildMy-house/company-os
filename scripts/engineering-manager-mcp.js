@@ -513,6 +513,20 @@ export function outputText(payload) {
   return output == null ? "" : JSON.stringify(output);
 }
 
+// A "completed" run that made zero tool calls and produced no output text is a
+// dead run (model rate limit, empty agent response), not finished work. Returns
+// the failure reason for such runs, or null when the run did real work.
+export function emptyRunFailure(payload) {
+  const toolCalls = Array.isArray(payload?.agentOutput?.tools) ? payload.agentOutput.tools.length : 0;
+  if (toolCalls > 0 || outputText(payload ?? {}).trim().length > 0) return null;
+  const agent = payload?.agent || payload?.agentID || process.env.HIVE_AGENT_ID || "unknown";
+  const detail = [payload?.error, payload?.agentOutput?.error, payload?.agentOutput?.stderr]
+    .map((value) => (typeof value === "string" && value.trim() ? value.trim() : null))
+    .filter(Boolean)
+    .join(" | ");
+  return capText(`empty_agent_run: 0 tool calls, empty output (agent=${agent}, pid=${payload?.pid ?? "unknown"}${detail ? `, error=${detail}` : ""})`, RESULT_ERROR_CAP);
+}
+
 export function retryDelayMs(attempt, random = Math.random) {
   const ceiling = Math.min(60_000, 1_000 * (2 ** Math.max(0, attempt - 1)));
   return Math.floor(Math.max(0, Math.min(0.999999, random())) * ceiling);
@@ -565,14 +579,15 @@ const capText = (value, cap) => {
 // forwarded; only the final output, state, error and duration are kept.
 export function buildCompletionResult(finished, bidContext = {}) {
   const durationMs = Math.max(0, Date.now() - (finished?.startedAt ?? Date.now()));
-  const failed = finished?.state !== "completed";
+  const emptyRun = finished?.state === "completed" ? emptyRunFailure(finished?.result) : null;
+  const failed = finished?.state !== "completed" || emptyRun != null;
   const num = (value, fallback) => (Number.isFinite(value) && value >= 0 ? value : fallback);
   const estimatedCost = num(bidContext.estimated_cost, 1);
   const estimatedBenefit = num(bidContext.expected_benefit, 1);
-  const error = failed ? capText(finished?.error || finished?.result?.error || `agent process ${finished?.result?.status || "failed"}`, RESULT_ERROR_CAP) : "";
   const payload = finished?.result || {};
+  const error = failed ? capText(emptyRun || finished?.error || finished?.result?.error || `agent process ${finished?.result?.status || "failed"}`, RESULT_ERROR_CAP) : "";
   return {
-    state: finished?.state || "failed",
+    state: failed ? "failed" : "completed",
     duration_ms: durationMs,
     ...(error ? { error } : {}),
     output: capText(outputText(payload), RESULT_TEXT_CAP),
@@ -596,7 +611,7 @@ export async function completeHiveTask(hiveCallDep, taskId, finished, bidContext
   const result = buildCompletionResult(finished, bidContext);
   let attempts = 0;
   try {
-    return await completeWithRetry(hiveCallDep, { task_id: taskId, state: finished.state, result }, {
+    return await completeWithRetry(hiveCallDep, { task_id: taskId, state: result.state, result }, {
       ...retryOptions,
       onFailure: (failure) => {
         attempts = failure.attempt;
