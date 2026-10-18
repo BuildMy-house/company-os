@@ -1,5 +1,5 @@
 {
-  "_comment": "Preferred free Nous models, best first. resolve_model.py tries these before the remaining free candidates (ordered by context length). Ids not currently free/probe-passing are skipped, so stale entries are harmless. laguna-s-2.1 is excluded: Hermes measures a 50K window (min 64K) although /models advertises more, so every chat failed (2026-10-18).",
+  "_comment": "Preferred free Nous models, best first. resolve_model.py tries these before the remaining free candidates (ordered by context length). Ids not currently free/probe-passing are skipped, so stale entries are harmless. laguna-s-2.1 is excluded: Hermes measures a 50K window (min 64K) although /models advertises more, so every chat failed (2026-10-18). laguna-s-2.1 is excluded: Hermes measures a 50K window (min 64K) although /models advertises more, so every chat failed (2026-10-18).",
   "preferred": [
     "inclusionai/ling-3.1-flash",
     "stepfun/step-3.7-flash",
@@ -12,6 +12,7 @@
     "-fin",
     "-sante",
     "stealth/",
+    "poolside/laguna-s-2.1",
     "poolside/laguna-s-2.1"
   ]
 }
