@@ -205,6 +205,52 @@ defmodule Hive.RouterTest do
     end
   end
 
+  test "bids are readable by human-readable slug, matching the task id" do
+    slug = "bids-by-slug-" <> Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+
+    body =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => 9,
+        "method" => "message/send",
+        "params" => %{
+          "message" => %{"parts" => [%{"text" => "slugged"}]},
+          "metadata" => %{"slug" => slug}
+        }
+      })
+
+    task_id =
+      conn(:post, "/", body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+      |> get_in(["result", "id"])
+
+    bid =
+      conn(
+        :post,
+        "/work/#{slug}/bids",
+        Jason.encode!(%{
+          "agent_id" => "slug-bidder",
+          "confidence" => 0.9,
+          "approach" => "test",
+          "estimated_cost" => 1,
+          "expected_benefit" => 3
+        })
+      )
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+
+    assert bid.status == 201
+
+    for ref <- [slug, task_id] do
+      conn = conn(:get, "/work/#{ref}/bids") |> Hive.Router.call(@opts)
+      assert conn.status == 200
+      assert [%{"agent_id" => "slug-bidder"}] = Jason.decode!(conn.resp_body)["bids"]
+    end
+  end
+
   test "restores an A2A task read from durable work" do
     task_id = "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
     assert {:ok, _} = Hive.Work.enqueue(task_id, [%{"text" => "durable"}])
