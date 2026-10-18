@@ -22,7 +22,7 @@ spec:
         runAsNonRoot: true
       containers:
         - name: engineering-agent
-          image: localhost:30500/company-os-engineering:ticket-std-714c938@sha256:24d6efe3f75630b250045e482af3dbf20156d42dddf70b58c6ab7c46a73f27ed
+          image: localhost:30500/company-os-engineering:fallback-chain@sha256:bdf93a170744f24bec656fedc081a43b550c1a1b4e4bcd4b72aa09f1dd01df11
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
@@ -69,6 +69,9 @@ spec:
               value: claude
             - name: RUNNER_MODEL
               value: sonnet
+            # If Claude fails (credits, outage): free DeepSeek, then paid OpenCode Go mimo.
+            - name: RUNNER_FALLBACK_MODELS
+              value: oc-opencode/deepseek-v4.1-flash-free,oc-opencode-go/mimo-v2.6-flash
             - name: CODEX_HOME
               value: /tmp/company-ops-home/.codex
             - name: KUBERNETES_SERVICE_HOST

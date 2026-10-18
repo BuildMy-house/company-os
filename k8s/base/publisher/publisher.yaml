@@ -193,6 +193,8 @@ spec:
               value: opencode
             - name: RUNNER_MODEL
               value: oc-zai-coding-plan/glm-5.3-flash
+            - name: RUNNER_FALLBACK_MODELS
+              value: oc-opencode/deepseek-v4.1-flash-free,oc-opencode-go/mimo-v2.6-flash
             - name: PUBLISHER_ALLOWED_REMOTES
               value: https://github.com/BuildMy-house/website,https://github.com/BuildMy-house/hermees-diary,https://github.com/BuildMy-house/observer-website
             - name: PUBLISHER_LEDGER_FILE
