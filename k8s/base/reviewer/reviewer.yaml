@@ -4,8 +4,8 @@
 # NOT in the buildmy-prod overlay on purpose. A human applies it by hand:
 #   kubectl apply -k k8s/base/reviewer
 #
-# Posture: own ServiceAccount (no token, no RBAC); only the three GitHub App keys from
-# company-ops-secrets (same App as engineering); no /opt/data, no other company-ops-secrets keys,
+# Posture: own ServiceAccount (no token, no RBAC); only the three GitHub App keys and the
+# Z.AI model key from company-ops-secrets (same App as engineering); no /opt/data, no other company-ops-secrets keys,
 # no Infisical bootstrap identity, no Steward token, no git credentials
 # (API only, merges are pinned to the reviewed head sha). Egress: hive, dns, public 443 (GitHub
 # API and the LLM provider).
@@ -97,6 +97,9 @@ spec:
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_INSTALLATION_ID}}
             - name: GITHUB_APP_PRIVATE_KEY
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_PRIVATE_KEY}}
+            # LLM provider key for RUNNER_MODEL (zai-coding-plan); without it the agent declines every bid.
+            - name: ZAI_CODING_PLAN_API_KEY
+              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: ZAI_CODING_PLAN_API_KEY}}
           readinessProbe:
             tcpSocket:
               port: 8000
