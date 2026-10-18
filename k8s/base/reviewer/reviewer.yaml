@@ -5,7 +5,7 @@
 #   kubectl apply -k k8s/base/reviewer
 #
 # Posture: own ServiceAccount (no token, no RBAC); only the three GitHub App keys and the
-# Z.AI model key from company-ops-secrets (same App as engineering); no /opt/data, no other company-ops-secrets keys,
+# TokenRouter and OpenCode Go model keys from company-ops-secrets (same App as engineering); no /opt/data, no other company-ops-secrets keys,
 # no Infisical bootstrap identity, no Steward token, no git credentials
 # (API only, merges are pinned to the reviewed head sha). Egress: hive, dns, public 443 (GitHub
 # API and the LLM provider).
@@ -89,7 +89,10 @@ spec:
             - name: RUNNER_AGENT
               value: opencode
             - name: RUNNER_MODEL
-              value: oc-zai-coding-plan/glm-5.3-flash
+              value: oc-tokenrouter/z-ai/glm-5.3-free
+            # Paid fallback, used only when the free model's run fails (quota, rate limit).
+            - name: RUNNER_FALLBACK_MODELS
+              value: oc-opencode-go/mimo-v2.6-flash
             # Same GitHub App as engineering (config sharedIdentity), read from the existing Secret.
             - name: GITHUB_APP_ID
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_ID}}
@@ -97,9 +100,12 @@ spec:
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_INSTALLATION_ID}}
             - name: GITHUB_APP_PRIVATE_KEY
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_PRIVATE_KEY}}
-            # LLM provider key for RUNNER_MODEL (zai-coding-plan); without it the agent declines every bid.
-            - name: ZAI_CODING_PLAN_API_KEY
-              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: ZAI_CODING_PLAN_API_KEY}}
+            # LLM provider keys: TokenRouter (free, RUNNER_MODEL) and OpenCode Go (paid, fallback).
+            # Without a working key the agent declines every bid.
+            - name: TOKENROUTER_API_KEY
+              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: TOKENROUTER_API_KEY}}
+            - name: OPENCODE_GO_API_KEY
+              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: OPENCODE_GO_API_KEY}}
           readinessProbe:
             tcpSocket:
               port: 8000

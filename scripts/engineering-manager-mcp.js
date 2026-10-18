@@ -36,6 +36,9 @@ const MANAGER = {
   role: process.env.AGENT_ROLE || "manager",
   agent: RUNNER_AGENT,
   model: validateRunner(RUNNER_AGENT, process.env.RUNNER_MODEL || (process.env.AGENT_FLAVOR === "opencode" ? "oc-opencode/mimo-v2.6-flash-free" : "sonnet")),
+  // Tried in order when the primary model's run fails (quota, rate limit, outage), e.g. a free
+  // model first and a paid one behind it. Comma-separated, same oc-<provider>/<model> form.
+  fallback_models: (process.env.RUNNER_FALLBACK_MODELS || "").split(",").map((m) => m.trim()).filter(Boolean).map((m) => validateRunner(RUNNER_AGENT, m)),
   reasoning_effort: process.env.RUNNER_REASONING || "medium",
   auto_compact: "200k",
 };
@@ -765,13 +768,26 @@ const FIT_ASSESSMENT_TIMEOUT_MS = 90_000;
 const boundedUpstream = (name, arguments_, context) => rejectAfter(upstreamCall(name, arguments_, context), 30_000, `upstream ${name} did not reply within 30s`);
 
 async function runPromptToCompletion(prompt, context) {
-  const reply = await boundedUpstream("run", { workFolder: "/workspace", prompt, agent: MANAGER.agent, model: MANAGER.model }, context);
+  const models = [MANAGER.model, ...MANAGER.fallback_models];
+  let lastError;
+  for (const model of models) {
+    try {
+      return await runPromptOnModel(prompt, context, model);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+async function runPromptOnModel(prompt, context, model) {
+  const reply = await boundedUpstream("run", { workFolder: "/workspace", prompt, agent: MANAGER.agent, model }, context);
   const started = toolPayload(reply);
   if (reply.error || started?.status !== "started" || !Number.isInteger(started.pid)) {
     throw new Error(reply.error?.message || "engineering runner did not return a process id");
   }
   if (started.agent && started.agent !== MANAGER.agent) {
-    throw new Error(`ai-cli ran agent "${started.agent}" but RUNNER_AGENT is "${MANAGER.agent}" (model "${MANAGER.model}")`);
+    throw new Error(`ai-cli ran agent "${started.agent}" but RUNNER_AGENT is "${MANAGER.agent}" (model "${model}")`);
   }
   const deadline = Date.now() + FIT_ASSESSMENT_TIMEOUT_MS;
   for (;;) {

@@ -1,23 +1,28 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "zai-coding-plan/glm-5.3-flash",
+  "model": "tokenrouter/z-ai/glm-5.3-free",
   "provider": {
-    "zai-coding-plan": {
+    "tokenrouter": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Z.AI Coding Plan",
+      "name": "TokenRouter",
       "options": {
-        "baseURL": "https://api.z.ai/api/coding/paas/v4",
-        "apiKey": "{env:ZAI_CODING_PLAN_API_KEY}"
+        "baseURL": "https://api.tokenrouter.com/v1",
+        "apiKey": "{env:TOKENROUTER_API_KEY}"
       },
       "models": {
-        "glm-5.3-flash": {
-          "name": "GLM-5.3 Flash",
+        "z-ai/glm-5.3-free": {
+          "name": "GLM-5.3 Free",
           "limit": {
-            "context": 1000000,
+            "context": 200000,
             "input": 120000,
-            "output": 131072
+            "output": 32768
           }
         }
+      }
+    },
+    "opencode-go": {
+      "options": {
+        "apiKey": "{env:OPENCODE_GO_API_KEY}"
       }
     }
   },
