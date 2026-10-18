@@ -45,8 +45,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: reviewer
-          # Placeholder: replace with the built reviewer image digest (Dockerfile.reviewer, docs/IMAGES.md).
-          image: localhost:30500/company-os-reviewer@sha256:REPLACE_WITH_BUILT_DIGEST
+          image: localhost:30500/company-os-reviewer@sha256:bf7cc51c458decae8c5f9af45978085927f991e8931b96fa6424b2cca26a5ef0
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

@@ -7,7 +7,7 @@ set -euo pipefail
 # registry — no host-specific paths, no locally pre-built images.
 #
 # Usage: scripts/build-push-images.sh [--only NAME] [--dry-run] [--print-digests]
-#   --only NAME       build one image: company-os|engineering|publisher|hive|pm-agent|browser-adversary
+#   --only NAME       build one image: company-os|engineering|publisher|reviewer|hive|pm-agent|browser-adversary
 #   --dry-run         print the commands instead of running them
 #   --print-digests   after the push, print image@sha256 refs for pinning manifests
 #
@@ -63,6 +63,7 @@ images=(
   "company-os|company-os|Dockerfile|dns-remediation|"
   "engineering|company-os-engineering|Dockerfile.engineering|hive-bid-8b29112|--build-arg AGENT_FLAVOR=$AGENT_FLAVOR --build-arg INSTALL_BROWSER=$INSTALL_BROWSER --build-context shared=$WORKSPACE_CONTEXT"
   "publisher|company-os-publisher|Dockerfile.publisher|latest|--build-arg BASE_IMAGE=${PUBLISHER_BASE_IMAGE:-}"
+  "reviewer|company-os-reviewer|Dockerfile.reviewer|latest|--build-arg BASE_IMAGE=${REVIEWER_BASE_IMAGE:-}"
   "hive|company-os-hive|hive/Dockerfile|events|"
   "pm-agent|company-os-pm-agent|pm-agent/Dockerfile|latest|"
   "browser-adversary|company-os-browser-adversary|Dockerfile.browser-adversary|latest|"
