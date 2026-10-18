@@ -1,6 +1,6 @@
-# Reviewer-merger agent (design, not yet built)
+# Reviewer-merger agent
 
-Status: draft for review. Nothing here is deployed. Decided by Nahar on 2026-10-16.
+Status: built, not deployed (no image, no GitHub App, no live test). Decided by Nahar on 2026-10-16.
 
 ## Purpose
 
@@ -24,8 +24,8 @@ follow-ups").
 
 ## Identity and permissions
 
-- A separate GitHub identity (second GitHub App preferred, machine user
-  otherwise). Not the engineering App, so workers cannot merge.
+- Its own GitHub App, separate from the engineering App (4857525), so workers cannot merge.
+  `reviewer/lib/token.mjs` mints installation tokens from its credentials and has no defaults.
 - Pull requests: write, Contents: write, Checks/Statuses: read, on the five
   repos only.
 - Branch protection on `main` of every repo: require the `check` status and one
@@ -88,8 +88,27 @@ to it when an incident shows a gap.
   `kustomize-render-gate`, `test`). The policy needs every run green, which can refuse a PR whose
   head carries a failed duplicate run.
 
+## Build and deploy (human steps)
+
+Code: `reviewer/` (policy, GitHub client, token minter, CLI, tests), `Dockerfile.reviewer`,
+`scripts/reviewer-entrypoint.sh`, `k8s/base/reviewer/`, `k8s/base/reviewer-secrets-sync/`. The pod is a
+Hive member declaring the tool `github-merge`, only when `GITHUB_APP_ID`,
+`GITHUB_APP_INSTALLATION_ID` and `GITHUB_APP_PRIVATE_KEY` are all present. Like `publisher`, it is
+not in the `buildmy-prod` overlay.
+
+1. Create a GitHub App (org BuildMy-house): Pull requests read/write, Contents read/write, Checks
+   read, Metadata read. Install it on website, hermees-diary, observer-website, app, company-os only.
+2. Put in Infisical `/reviewer` (exactly these keys): `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`,
+   `GITHUB_APP_PRIVATE_KEY`, `REVIEWER_LOGIN` (the bot login, `<app-slug>[bot]`).
+3. Build the image host-side on pop-os-1 (`Dockerfile.reviewer`, BASE_IMAGE pinned by digest), put
+   the digest in `k8s/base/reviewer/reviewer.yaml`.
+4. `kubectl apply -k k8s/base/reviewer-secrets-sync`, then `kubectl apply -k k8s/base/reviewer`.
+5. Verify the Hive registration lists `github-merge`, then test on a throwaway PR in a site repo.
+
+`app` merges deploy to production (see Verified facts). To keep the first live run safe, test on a
+site repo before the `app` entry is exercised.
+
 ## Open questions
 
-- Second GitHub App vs machine user (affects `enforce_admins` and audit trail).
-- Where the agent runs (Hive member Deployment, like `publisher`).
+- Whether the five-repo scope should include `app` before blue-green exists (Nahar accepted the risk).
 - Steward was unreachable when this was drafted, so no ticket exists yet.

@@ -1,0 +1,191 @@
+# Reviewer-merger agent (docs/REVIEWER-MERGER.md): Hive member that reviews PRs and merges those
+# that pass policy into main of the five allowed repos. Never prod.
+#
+# NOT in the buildmy-prod overlay on purpose. A human applies it by hand AFTER the reviewer GitHub
+# App exists and its credentials are in Infisical /reviewer:
+#   kubectl apply -k k8s/base/reviewer-secrets-sync
+#   kubectl apply -k k8s/base/reviewer
+#
+# Posture: own ServiceAccount (no token, no RBAC); env from reviewer-secrets only; no /opt/data,
+# no company-ops-secrets, no Infisical bootstrap identity, no Steward token, no git credentials
+# (API only, merges are pinned to the reviewed head sha). Egress: hive, dns, public 443 (GitHub
+# API and the LLM provider).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: reviewer
+  namespace: company-ops
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reviewer
+  namespace: company-ops
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: reviewer
+  template:
+    metadata:
+      labels:
+        app: reviewer
+    spec:
+      serviceAccountName: reviewer
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1001
+        runAsNonRoot: true
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reviewer
+          # Placeholder: replace with the built reviewer image digest (Dockerfile.reviewer, docs/IMAGES.md).
+          image: localhost:30500/company-os-reviewer@sha256:REPLACE_WITH_BUILT_DIGEST
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 8000
+            - containerPort: 8001
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 1536Mi
+          env:
+            - name: HOME
+              value: /tmp/reviewer-home
+            - name: XDG_CONFIG_HOME
+              value: /tmp/reviewer-home/.config
+            - name: HIVE_URL
+              value: http://hive-coordinator:4100
+            - name: HIVE_AGENT_ID
+              value: reviewer
+            - name: A2A_ENDPOINT
+              value: http://reviewer:8001
+            - name: AGENT_FLAVOR
+              value: opencode
+            - name: AGENT_ROLE
+              value: manager
+            - name: AGENT_PROFILE
+              value: generalist
+            - name: AGENT_CAPABILITIES
+              value: execute,review
+            - name: AGENT_TIER
+              value: cheap
+            - name: AGENT_COST_FACTOR
+              value: "0.1"
+            - name: AGENT_TOOLS
+              value: github-merge
+            - name: RUNNER_AGENT
+              value: opencode
+            - name: RUNNER_MODEL
+              value: oc-zai-coding-plan/glm-5.3-flash
+          envFrom:
+            - secretRef:
+                name: reviewer-secrets
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 3
+          volumeMounts:
+            - name: home
+              mountPath: /tmp/reviewer-home
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: home
+          emptyDir: {}
+        - name: workspace
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reviewer
+  namespace: company-ops
+spec:
+  selector:
+    app: reviewer
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+    - name: a2a
+      port: 8001
+      targetPort: 8001
+---
+# Egress is IP-based: public 443 for api.github.com and the LLM provider, every private range
+# excluded. Restricting by FQDN needs Cilium toFQDNs or an egress proxy (same follow-up as the
+# publisher). Enforcement depends on the cluster's NetworkPolicy controller.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: reviewer
+  namespace: company-ops
+spec:
+  podSelector:
+    matchLabels:
+      app: reviewer
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: hive-coordinator
+        - podSelector:
+            matchLabels:
+              app: hermes-gateway
+      ports:
+        - protocol: TCP
+          port: 8001
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: hive-coordinator
+      ports:
+        - protocol: TCP
+          port: 4100
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

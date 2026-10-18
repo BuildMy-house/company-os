@@ -1,0 +1,31 @@
+# Syncs the Infisical folder /reviewer (project "Build My house", environment dev)
+# into its OWN Secret, reviewer-secrets, in company-ops. Every key in the folder is
+# copied, so the folder must contain exactly the keys below (manual
+# invariant; no test can see Infisical):
+#   GITHUB_APP_ID               the reviewer GitHub App's id (NOT the engineering App, 4857525)
+#   GITHUB_APP_INSTALLATION_ID  installation of that App on the 5 repos
+#   GITHUB_APP_PRIVATE_KEY      the App's PEM private key (multi-line, or one line with literal \n)
+#   REVIEWER_LOGIN              the App's bot login, e.g. buildmy-house-reviewer[bot]
+# Uses the existing infisical-auth in company-ops (k8s/base/infisical-sync/infisical-sync.yaml),
+# same mechanism as k8s/base/publisher-secrets-sync. No value is committed here.
+# Guarded: the reviewer refuses PRs that change this file (reviewer/lib/policy.mjs GUARDED_PATHS).
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: reviewer-sync
+  namespace: company-ops
+spec:
+  infisicalAuthRef:
+    name: infisical-auth
+    namespace: company-ops
+  syncOptions:
+    refreshInterval: 60s
+  sources:
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /reviewer
+  targets:
+    - name: reviewer-secrets
+      namespace: company-ops
+      kind: Secret
+      creationPolicy: Owner
