@@ -102,6 +102,10 @@ chmod 644 /opt/data/.env
 # memories/*.md above are seeded only when missing, so dream edits survive restarts.
 bash "$SCRIPT_DIR/seed-dream-audit.sh" || true
 
+# CEO behavior: copy the three CEO skills + pre-run script, install the
+# authoritative pricing decision, reconcile stale memory, align the CEO crons.
+bash "$SCRIPT_DIR/seed-ceo-behavior.sh" || true
+
 # Hindsight memory provider: seed hindsight/config.json only if missing so
 # operator edits on the PVC survive restarts (see scripts/seed-hindsight.sh).
 bash "$SCRIPT_DIR/seed-hindsight.sh" || true
