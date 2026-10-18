@@ -45,7 +45,7 @@ spec:
         - name: pm-agent
           # Replace with the immutable tag/digest built from the PR's merged
           # source SHA (see docs/PM-AGENT-HERMES.md, "Build and rollout").
-          image: localhost:30500/company-os-pm-agent:latest
+          image: localhost:30500/company-os-pm-agent@sha256:28adbe5762e2689fa8f581ab2a09986b5c506699eec4add7d8359b83cb0c9e69
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
