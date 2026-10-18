@@ -1,0 +1,33 @@
+# Reviewer-merger agent image (docs/REVIEWER-MERGER.md): the engineering OpenCode image plus the
+# reviewer tooling. API-only: no repo checkouts, no git wrapper, no browser.
+#
+# In-cluster: builder_build_and_push with dockerfile_path "Dockerfile.reviewer" and
+# build_args {BASE_IMAGE: "<registry>/company-os-engineering-opencode@sha256:<digest>"}.
+# Host-side (pop-os-1): docker build -f Dockerfile.reviewer --build-arg BASE_IMAGE=... -t reviewer .
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+
+# No inherited engineering skills: the reviewer gets only its own rules (reviewer/AGENTS.md).
+RUN rm -rf /opt/company-ops/.claude/skills/* /opt/company-ops/.claude/agents/*
+
+COPY reviewer/lib /opt/reviewer/lib
+COPY reviewer/bin /opt/reviewer/bin
+COPY reviewer/config /opt/reviewer/config
+COPY reviewer/package.json /opt/reviewer/package.json
+COPY reviewer/AGENTS.md reviewer/opencode.json /opt/reviewer/
+# Managed settings outrank every other Claude config: only the reviewer CLI may run, bypass mode is off.
+COPY reviewer/claude-managed-settings.json /etc/claude-code/managed-settings.json
+COPY scripts/reviewer-entrypoint.sh /opt/company-ops/scripts/reviewer-entrypoint.sh
+
+RUN ln -sf /opt/reviewer/bin/reviewer /usr/local/bin/reviewer \
+  && chmod 755 /opt/reviewer/bin/* /opt/company-ops/scripts/reviewer-entrypoint.sh \
+  && mkdir -p /workspace \
+  && chown -R engineering:engineering /workspace
+
+ENV AGENT_FLAVOR=claude \
+    RUNNER_AGENT=claude
+
+USER engineering
+ENTRYPOINT ["bash", "/opt/company-ops/scripts/reviewer-entrypoint.sh"]

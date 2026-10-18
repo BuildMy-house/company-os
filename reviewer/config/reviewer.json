@@ -1,0 +1,10 @@
+{
+  "sharedIdentity": true,
+  "repos": [
+    { "repo": "BuildMy-house/website", "baseBranches": ["main"], "requiredChecks": ["check"], "sharedPaths": ["src/layouts/**", "src/styles/**", "src/components/**"], "branchPathRules": [{ "headPrefix": "blog/", "allowedPaths": ["src/content/blog/**", "public/blog/**"] }] },
+    { "repo": "BuildMy-house/hermees-diary", "baseBranches": ["main"], "requiredChecks": ["check"], "sharedPaths": ["src/layouts/**", "src/styles/**", "src/components/**", "src/content/config.ts"], "branchPathRules": [{ "headPrefix": "blog/", "allowedPaths": ["src/content/blog/**", "public/blog/**"] }] },
+    { "repo": "BuildMy-house/observer-website", "baseBranches": ["main"], "requiredChecks": ["check"], "sharedPaths": ["src/layouts/**", "src/styles/**", "src/components/**"], "branchPathRules": [{ "headPrefix": "blog/", "allowedPaths": ["src/content/blog/**", "public/blog/**"] }] },
+    { "repo": "BuildMy-house/app", "baseBranches": ["main"], "requiredChecks": [], "sharedPaths": [] },
+    { "repo": "BuildMy-house/company-os", "baseBranches": ["main"], "requiredChecks": [], "sharedPaths": ["company_ops/**", "scripts/**"] }
+  ]
+}

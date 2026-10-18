@@ -36,6 +36,11 @@ const MANAGER = {
   role: process.env.AGENT_ROLE || "manager",
   agent: RUNNER_AGENT,
   model: validateRunner(RUNNER_AGENT, process.env.RUNNER_MODEL || (process.env.AGENT_FLAVOR === "opencode" ? "oc-opencode/mimo-v2.6-flash-free" : "sonnet")),
+  // Tried in order when the primary model's run fails (quota, rate limit, outage). Comma-separated;
+  // an oc-<provider>/<model> entry runs on OpenCode, anything else on Claude, so one agent can
+  // fall back from Claude to an OpenCode model or the reverse.
+  fallbacks: (process.env.RUNNER_FALLBACK_MODELS || "").split(",").map((m) => m.trim()).filter(Boolean)
+    .map((model) => ({ agent: model.startsWith("oc-") ? "opencode" : "claude", model })),
   reasoning_effort: process.env.RUNNER_REASONING || "medium",
   auto_compact: "200k",
 };
@@ -765,13 +770,26 @@ const FIT_ASSESSMENT_TIMEOUT_MS = 90_000;
 const boundedUpstream = (name, arguments_, context) => rejectAfter(upstreamCall(name, arguments_, context), 30_000, `upstream ${name} did not reply within 30s`);
 
 async function runPromptToCompletion(prompt, context) {
-  const reply = await boundedUpstream("run", { workFolder: "/workspace", prompt, agent: MANAGER.agent, model: MANAGER.model }, context);
+  const runners = [{ agent: MANAGER.agent, model: MANAGER.model }, ...MANAGER.fallbacks];
+  let lastError;
+  for (const runner of runners) {
+    try {
+      return await runPromptOnModel(prompt, context, runner);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+async function runPromptOnModel(prompt, context, { agent, model }) {
+  const reply = await boundedUpstream("run", { workFolder: "/workspace", prompt, agent, model }, context);
   const started = toolPayload(reply);
   if (reply.error || started?.status !== "started" || !Number.isInteger(started.pid)) {
     throw new Error(reply.error?.message || "engineering runner did not return a process id");
   }
-  if (started.agent && started.agent !== MANAGER.agent) {
-    throw new Error(`ai-cli ran agent "${started.agent}" but RUNNER_AGENT is "${MANAGER.agent}" (model "${MANAGER.model}")`);
+  if (started.agent && started.agent !== agent) {
+    throw new Error(`ai-cli ran agent "${started.agent}" but expected "${agent}" (model "${model}")`);
   }
   const deadline = Date.now() + FIT_ASSESSMENT_TIMEOUT_MS;
   for (;;) {
