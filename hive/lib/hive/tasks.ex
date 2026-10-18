@@ -37,7 +37,7 @@ defmodule Hive.Tasks do
           Enum.find_value(tasks, fn {_id, task} -> if task.slug == id_or_slug, do: task end)
 
       task_id = (task && task.id) || remote["id"] || id_or_slug
-      state = get_in(remote, ["status", "state"]) || "completed"
+      state = get_in(remote, ["status", "state"]) || "unknown"
 
       task =
         task ||
