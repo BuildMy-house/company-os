@@ -16,7 +16,7 @@ COPY reviewer/lib /opt/reviewer/lib
 COPY reviewer/bin /opt/reviewer/bin
 COPY reviewer/config /opt/reviewer/config
 COPY reviewer/package.json /opt/reviewer/package.json
-COPY reviewer/AGENTS.md /opt/reviewer/
+COPY reviewer/AGENTS.md reviewer/opencode.json /opt/reviewer/
 # Managed settings outrank every other Claude config: only the reviewer CLI may run, bypass mode is off.
 COPY reviewer/claude-managed-settings.json /etc/claude-code/managed-settings.json
 COPY scripts/reviewer-entrypoint.sh /opt/company-ops/scripts/reviewer-entrypoint.sh

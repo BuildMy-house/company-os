@@ -5,7 +5,7 @@
 #   kubectl apply -k k8s/base/reviewer
 #
 # Posture: own ServiceAccount (no token, no RBAC); only the three GitHub App keys and the
-# Claude OAuth token from company-ops-secrets (same App as engineering); no /opt/data, no other company-ops-secrets keys,
+# Claude OAuth token and the OpenCode Go key from company-ops-secrets (same App as engineering); no /opt/data, no other company-ops-secrets keys,
 # no Infisical bootstrap identity, no Steward token, no git credentials
 # (API only, merges are pinned to the reviewed head sha). Egress: hive, dns, public 443 (GitHub
 # API and the LLM provider).
@@ -92,6 +92,9 @@ spec:
               value: claude
             - name: RUNNER_MODEL
               value: sonnet
+            # If Claude fails (credits, outage): free DeepSeek first, then paid OpenCode Go mimo.
+            - name: RUNNER_FALLBACK_MODELS
+              value: oc-opencode/deepseek-v4.1-flash-free,oc-opencode-go/mimo-v2.6-flash
             - name: CLAUDE_CODE_OAUTH_TOKEN
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: CLAUDE_CODE_OAUTH_TOKEN}}
             # Same GitHub App as engineering (config sharedIdentity), read from the existing Secret.
@@ -101,6 +104,9 @@ spec:
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_INSTALLATION_ID}}
             - name: GITHUB_APP_PRIVATE_KEY
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_PRIVATE_KEY}}
+            # Paid fallback model key (OpenCode Go); the free fallback needs none.
+            - name: OPENCODE_GO_API_KEY
+              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: OPENCODE_GO_API_KEY}}
           readinessProbe:
             tcpSocket:
               port: 8000
