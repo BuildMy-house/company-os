@@ -252,6 +252,11 @@ function updateOpencode(servers) {
     config.mcp[name] = toOpencodeServer(server);
   }
   updateOpencodePlugins(config);
+  // Paid fallback model: opencode only picks up the OpenCode Go key through an explicit provider block.
+  if (process.env.OPENCODE_GO_API_KEY) {
+    config.provider = config.provider || {};
+    config.provider['opencode-go'] = { ...(config.provider['opencode-go'] || {}), options: { apiKey: '{env:OPENCODE_GO_API_KEY}' } };
+  }
   writeJson(filePath, config);
   console.error(`[generate-agent-mcp-config] wrote ${Object.keys(servers).join(', ')} to ${filePath}`);
 }
