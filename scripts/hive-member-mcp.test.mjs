@@ -576,6 +576,10 @@ test("registration declares capabilities.tools only for known, verifiable tools"
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, MARKETING_INGEST_READY_FILE: marker })).tools, ["marketing-ingest"]);
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, SUBSTACK_READY_FILE: marker })).tools, ["substack-publish"]);
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "github-pr", GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
+  const app = { GITHUB_APP_ID: "1", GITHUB_APP_INSTALLATION_ID: "2", GITHUB_APP_PRIVATE_KEY: "k" };
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "github-merge", GITHUB_APP_ID: "1" })).tools, [], "partial App credentials declare nothing");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "github-merge", GITHUB_TOKEN: "x" })).tools, [], "a plain token does not declare github-merge");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "github-merge", ...app })).tools, ["github-merge"]);
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "ga-read,gsc-read,reddit-read,substack-read" })).tools, [], "read-API tools were replaced by marketing-db-read");
 });
 

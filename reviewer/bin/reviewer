@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Reviewer CLI: reviewer review <repo> <pr> | reviewer merge <repo> <pr> [--review-note "..."]
+// Auth: its own GitHub App (GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY, REVIEWER_LOGIN).
 // <repo> is owner/name or a bare name in the BuildMy-house org. Fails closed (exit 1) on refusal.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Refused, client, merge, review } from "../lib/github.mjs";
+import { installationToken } from "../lib/token.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const env = process.env;
@@ -16,8 +18,10 @@ const repo = repoArg?.includes("/") ? repoArg : `BuildMy-house/${repoArg}`;
 const out = (v) => console.log(JSON.stringify(v, null, 2));
 try {
   if (!["review", "merge"].includes(cmd) || !repoArg || !/^\d+$/.test(prArg || "")) throw new Refused("usage: reviewer review|merge <repo> <pr-number> [--review-note \"...\"]");
-  if (!env.GITHUB_TOKEN) throw new Refused("GITHUB_TOKEN is not set; this tool is unavailable in this pod");
-  const gh = client({ token: env.GITHUB_TOKEN });
+  if (!env.GITHUB_APP_ID || !env.GITHUB_APP_INSTALLATION_ID || !env.GITHUB_APP_PRIVATE_KEY || !env.REVIEWER_LOGIN) throw new Refused("GitHub App credentials or REVIEWER_LOGIN are not set; this tool is unavailable in this pod");
+  // A fresh installation token per command (they last an hour); the key never leaves this process.
+  const token = await installationToken({ appId: env.GITHUB_APP_ID, installationId: env.GITHUB_APP_INSTALLATION_ID, privateKey: env.GITHUB_APP_PRIVATE_KEY });
+  const gh = client({ token });
   const args = { gh, cfg, repo, n: Number(prArg), selfLogin: env.REVIEWER_LOGIN, reviewNote };
   if (cmd === "review") { const { pr, ...r } = await review(args); out({ ...r, title: pr.title, author: pr.user?.login }); } else out(await merge(args));
 } catch (e) {

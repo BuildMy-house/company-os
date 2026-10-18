@@ -75,8 +75,8 @@ clearer acceptance criteria, not another retry.
 A ticket that cannot be done without a specific tool lists it in the optional
 `metadata.requires_tools` array. Known names: `browser`, `hindsight`, `kubectl-deploy`,
 `image-build`, `hermes-data`, `postgres-admin`, `github-pr`, `reddit-publish`,
-`substack-publish`, `marketing-db-read`, `marketing-ingest`; `hive_submit` rejects any other name. The last five
-belong to the publisher agent and are declared only when their credential env (or, for substack-publish and marketing-ingest, the sidecar ready marker) is present
+`substack-publish`, `marketing-db-read`, `marketing-ingest`, `github-merge`; `hive_submit` rejects any other name. The last five
+belong to the publisher agent (`github-merge` belongs to the reviewer-merger, `docs/REVIEWER-MERGER.md`) and are declared only when their credential env (or, for substack-publish and marketing-ingest, the sidecar ready marker) is present
 (see `docs/PUBLISHER.md`).
 
 Agents declare `capabilities.tools` at registration (set per pod from `AGENT_TOOLS`, only
