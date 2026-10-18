@@ -205,6 +205,39 @@ defmodule Hive.RouterTest do
     end
   end
 
+  test "DELETE /agents/:id deregisters a registered agent and 404s otherwise" do
+    id = "dereg-" <> Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+
+    register =
+      conn(:post, "/agents/register", Jason.encode!(%{"id" => id, "endpoint" => "http://x:1"}))
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+
+    assert register.status == 200
+
+    ids = fn ->
+      conn(:get, "/agents")
+      |> Hive.Router.call(@opts)
+      |> Map.fetch!(:resp_body)
+      |> Jason.decode!()
+      |> Map.fetch!("agents")
+      |> Enum.map(& &1["id"])
+    end
+
+    assert id in ids.()
+
+    deleted = conn(:delete, "/agents/#{id}") |> Hive.Router.call(@opts)
+    assert deleted.status == 200
+    assert Jason.decode!(deleted.resp_body) == %{"agent_id" => id, "status" => "deregistered"}
+    refute id in ids.()
+
+    for missing <- [id, "never-registered-" <> id] do
+      conn = conn(:delete, "/agents/#{missing}") |> Hive.Router.call(@opts)
+      assert conn.status == 404
+      assert Jason.decode!(conn.resp_body) == %{"error" => "agent not found"}
+    end
+  end
+
   test "restores an A2A task read from durable work" do
     task_id = "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
     assert {:ok, _} = Hive.Work.enqueue(task_id, [%{"text" => "durable"}])
