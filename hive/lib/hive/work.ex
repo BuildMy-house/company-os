@@ -25,6 +25,7 @@ defmodule Hive.Work do
       end)
 
   def register_agent(agent), do: GenServer.call(__MODULE__, {:register_agent, agent})
+  def deregister_agent(agent_id), do: GenServer.call(__MODULE__, {:deregister_agent, agent_id})
   def agents, do: GenServer.call(__MODULE__, :agents)
 
   def prompt(work_ref, requester_id),
@@ -477,6 +478,17 @@ defmodule Hive.Work do
       )
 
     {:reply, {:ok, rows(result)}, state}
+  end
+
+  def handle_call({:deregister_agent, agent_id}, _from, %{memory: memory} = state) do
+    if Map.has_key?(memory.agents, agent_id),
+      do: {:reply, :ok, update_in(state.memory.agents, &Map.delete(&1, agent_id))},
+      else: {:reply, {:error, :not_found}, state}
+  end
+
+  def handle_call({:deregister_agent, agent_id}, _from, %{db: db} = state) do
+    result = Postgrex.query!(db, "DELETE FROM company.hive_agents WHERE id = $1", [agent_id])
+    {:reply, if(result.num_rows > 0, do: :ok, else: {:error, :not_found}), state}
   end
 
   def handle_call({:register_agent, agent}, _from, %{memory: _memory} = state) do

@@ -140,6 +140,13 @@ defmodule Hive.Router do
     end
   end
 
+  delete "/agents/:agent_id" do
+    case Hive.Work.deregister_agent(agent_id) do
+      :ok -> json(conn, %{"agent_id" => agent_id, "status" => "deregistered"})
+      {:error, :not_found} -> json(conn, %{"error" => "agent not found"}, 404)
+    end
+  end
+
   get "/agents" do
     {:ok, agents} = Hive.Work.agents()
     json(conn, %{"agents" => agents})
