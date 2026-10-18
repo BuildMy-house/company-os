@@ -6,15 +6,16 @@
 set -euo pipefail
 export HOME="${HOME:-/home/reviewer}"
 
-mkdir -p "$HOME/.config/opencode"
-cp /opt/reviewer/opencode.json "$HOME/.config/opencode/opencode.json"
-cp /opt/reviewer/AGENTS.md "$HOME/.config/opencode/AGENTS.md"
-cp /opt/reviewer/AGENTS.md /workspace/AGENTS.md
+cp /opt/reviewer/AGENTS.md /workspace/CLAUDE.md
 
-# The agent is told which model to use; refuse the silent Claude fallback.
-case "${RUNNER_MODEL:-}" in
-  oc-*) ;;
-  *) echo "[reviewer] RUNNER_MODEL must be oc-<provider>/<model> (got '${RUNNER_MODEL:-}')" >&2; exit 1 ;;
+# The agent is told which model to use. Claude runs need the OAuth token; OpenCode models must
+# carry the oc- prefix or ai-cli silently runs them on Claude.
+case "${RUNNER_AGENT:-}" in
+  claude) [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || { echo "[reviewer] RUNNER_AGENT=claude needs CLAUDE_CODE_OAUTH_TOKEN" >&2; exit 1; } ;;
+  *) case "${RUNNER_MODEL:-}" in
+       oc-*) ;;
+       *) echo "[reviewer] RUNNER_MODEL must be oc-<provider>/<model> (got '${RUNNER_MODEL:-}')" >&2; exit 1 ;;
+     esac ;;
 esac
 
 # Hive registration declares github-merge only when the three App credentials are present.

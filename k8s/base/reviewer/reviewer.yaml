@@ -5,7 +5,7 @@
 #   kubectl apply -k k8s/base/reviewer
 #
 # Posture: own ServiceAccount (no token, no RBAC); only the three GitHub App keys and the
-# TokenRouter and OpenCode Go model keys from company-ops-secrets (same App as engineering); no /opt/data, no other company-ops-secrets keys,
+# Claude OAuth token from company-ops-secrets (same App as engineering); no /opt/data, no other company-ops-secrets keys,
 # no Infisical bootstrap identity, no Steward token, no git credentials
 # (API only, merges are pinned to the reviewed head sha). Egress: hive, dns, public 443 (GitHub
 # API and the LLM provider).
@@ -73,7 +73,7 @@ spec:
             - name: A2A_ENDPOINT
               value: http://reviewer:8001
             - name: AGENT_FLAVOR
-              value: opencode
+              value: claude
             - name: AGENT_ROLE
               value: manager
             - name: AGENT_PROFILE
@@ -86,13 +86,14 @@ spec:
               value: "0.1"
             - name: AGENT_TOOLS
               value: github-merge
+            # A strong model on purpose: the reviewer does little work, and its judgment is the
+            # quality gate. Claude only, locked to the reviewer CLI by managed settings.
             - name: RUNNER_AGENT
-              value: opencode
+              value: claude
             - name: RUNNER_MODEL
-              value: oc-opencode-go/mimo-v2.6-flash
-            # Free fallback if the primary fails (quota, rate limit).
-            - name: RUNNER_FALLBACK_MODELS
-              value: oc-tokenrouter/z-ai/glm-5.3-free
+              value: sonnet
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: CLAUDE_CODE_OAUTH_TOKEN}}
             # Same GitHub App as engineering (config sharedIdentity), read from the existing Secret.
             - name: GITHUB_APP_ID
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_ID}}
@@ -100,12 +101,6 @@ spec:
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_INSTALLATION_ID}}
             - name: GITHUB_APP_PRIVATE_KEY
               valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_PRIVATE_KEY}}
-            # LLM provider keys: OpenCode Go (paid, RUNNER_MODEL) and TokenRouter (free, fallback).
-            # Without a working key the agent declines every bid.
-            - name: TOKENROUTER_API_KEY
-              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: TOKENROUTER_API_KEY}}
-            - name: OPENCODE_GO_API_KEY
-              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: OPENCODE_GO_API_KEY}}
           readinessProbe:
             tcpSocket:
               port: 8000
