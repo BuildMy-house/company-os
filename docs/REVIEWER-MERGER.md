@@ -24,20 +24,24 @@ follow-ups").
 
 ## Identity and permissions
 
-- Its own GitHub App, separate from the engineering App (4857525), so workers cannot merge.
-  `reviewer/lib/token.mjs` mints installation tokens from its credentials and has no defaults.
+- The engineering GitHub App (4857525, installation 159686448), by owner decision on 2026-10-18.
+  `reviewer/lib/token.mjs` mints installation tokens from env credentials and has no defaults.
+  Consequence, accepted: engineering workers hold the same App credentials, so they can merge
+  through the GitHub API directly and bypass this policy engine. The policy binds the reviewer,
+  not the workers. Branch protection (not enabled today) is the only control that would close
+  this. With one identity the own-PR rule cannot work, so config `sharedIdentity: true` turns it off.
 - Pull requests: write, Contents: write, Checks/Statuses: read, on the five
   repos only.
 - Branch protection on `main` of every repo: require the `check` status and one
   approving review. The reviewer-merger's identity is the approver and the only
   actor allowed to merge. `prod` branches: no merge rights for this identity.
-- Credentials live in Infisical in their own folder and sync to their own
-  k8s Secret, like `/publisher`.
+- Credentials are the existing `company-ops-secrets` keys, referenced by the pod with secretKeyRef;
+  no copy and no separate Infisical folder.
 
 ## Review checklist (all must pass)
 
 1. Required checks (`check`) are green on the PR head commit.
-2. The PR was not opened by the reviewer-merger's own identity.
+2. The PR was not opened by the reviewer-merger's own identity (skipped while `sharedIdentity` is on).
 3. The diff matches the PR title and the linked ticket's definition of done.
 4. No secrets, tokens or `.env` content in the diff.
 5. Shared components (design tokens, `Layout.astro`, shared libraries) per the
@@ -91,19 +95,17 @@ to it when an incident shows a gap.
 ## Build and deploy (human steps)
 
 Code: `reviewer/` (policy, GitHub client, token minter, CLI, tests), `Dockerfile.reviewer`,
-`scripts/reviewer-entrypoint.sh`, `k8s/base/reviewer/`, `k8s/base/reviewer-secrets-sync/`. The pod is a
+`scripts/reviewer-entrypoint.sh`, `k8s/base/reviewer/`. The pod is a
 Hive member declaring the tool `github-merge`, only when `GITHUB_APP_ID`,
 `GITHUB_APP_INSTALLATION_ID` and `GITHUB_APP_PRIVATE_KEY` are all present. Like `publisher`, it is
 not in the `buildmy-prod` overlay.
 
-1. Create a GitHub App (org BuildMy-house): Pull requests read/write, Contents read/write, Checks
-   read, Metadata read. Install it on website, hermees-diary, observer-website, app, company-os only.
-2. Put in Infisical `/reviewer` (exactly these keys): `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`,
-   `GITHUB_APP_PRIVATE_KEY`, `REVIEWER_LOGIN` (the bot login, `<app-slug>[bot]`).
-3. Build the image host-side on pop-os-1 (`Dockerfile.reviewer`, BASE_IMAGE pinned by digest), put
+1. Confirm the engineering App has Pull requests read/write, Contents read/write, Checks read,
+   Metadata read, and is installed on website, hermees-diary, observer-website, app, company-os.
+2. Build the image host-side on pop-os-1 (`Dockerfile.reviewer`, BASE_IMAGE pinned by digest), put
    the digest in `k8s/base/reviewer/reviewer.yaml`.
-4. `kubectl apply -k k8s/base/reviewer-secrets-sync`, then `kubectl apply -k k8s/base/reviewer`.
-5. Verify the Hive registration lists `github-merge`, then test on a throwaway PR in a site repo.
+3. `kubectl apply -k k8s/base/reviewer`.
+4. Verify the Hive registration lists `github-merge`, then test on a throwaway PR in a site repo.
 
 `app` merges deploy to production (see Verified facts). To keep the first live run safe, test on a
 site repo before the `app` entry is exercised.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Entrypoint for the reviewer pod (Dockerfile.reviewer). Deliberately NOT the engineering
 # entrypoint: no Infisical bootstrap identity, no generated MCP config (no Steward/kubernetes/neon
-# servers), no repo sync. Credentials arrive only as env from the Secret reviewer-secrets
-# (synced from Infisical /reviewer).
+# servers), no repo sync. Credentials arrive only as env: the three GitHub App keys
+# from company-ops-secrets (same App as engineering).
 set -euo pipefail
 export HOME="${HOME:-/home/reviewer}"
 

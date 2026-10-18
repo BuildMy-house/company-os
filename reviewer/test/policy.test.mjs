@@ -28,11 +28,17 @@ test("staging is not a base for any repo (it does not exist for app)", () => {
 test("unknown repo, draft, own PR, fork, conflicts, closed", () => {
   refused(evaluate(good({ repo: "BuildMy-house/other" })), /not one the reviewer may merge/);
   refused(evaluate(good({ pr: { ...good().pr, draft: true } })), /draft/);
-  refused(evaluate(good({ pr: { ...good().pr, user: { login: ME } } })), /own identity/);
+  refused(evaluate(good({ cfg: { ...good().cfg, sharedIdentity: false }, pr: { ...good().pr, user: { login: ME } } })), /own identity/);
   refused(evaluate(good({ pr: { ...good().pr, head: { sha: "c", repo: { full_name: "evil/website" } } } })), /fork/);
   refused(evaluate(good({ pr: { ...good().pr, mergeable: false } })), /conflicts/);
   refused(evaluate(good({ pr: { ...good().pr, state: "closed" } })), /not open/);
-  refused(evaluate(good({ selfLogin: "" })), /REVIEWER_LOGIN/);
+});
+test("sharedIdentity skips the own-PR check; strict config still refuses", () => {
+  const own = { ...good().pr, user: { login: ME } };
+  const strict = { ...good().cfg, sharedIdentity: false };
+  assert.equal(evaluate(good({ cfg: { ...good().cfg, sharedIdentity: true }, pr: own, selfLogin: "" })).ok, true);
+  refused(evaluate(good({ cfg: strict, pr: own })), /own identity/);
+  refused(evaluate(good({ cfg: strict, selfLogin: "" })), /REVIEWER_LOGIN/);
 });
 test("guarded paths need a human, including renames away from them", () => {
   for (const p of ["reviewer/lib/policy.mjs", "k8s/base/mcp-gateway/mcp-gateway.yaml", "k8s/base/publisher-secrets-sync/x.yaml", ".github/workflows/ci.yml", "docs/REVIEWER-MERGER.md"]) {

@@ -1,13 +1,12 @@
 # Reviewer-merger agent (docs/REVIEWER-MERGER.md): Hive member that reviews PRs and merges those
 # that pass policy into main of the five allowed repos. Never prod.
 #
-# NOT in the buildmy-prod overlay on purpose. A human applies it by hand AFTER the reviewer GitHub
-# App exists and its credentials are in Infisical /reviewer:
-#   kubectl apply -k k8s/base/reviewer-secrets-sync
+# NOT in the buildmy-prod overlay on purpose. A human applies it by hand:
 #   kubectl apply -k k8s/base/reviewer
 #
-# Posture: own ServiceAccount (no token, no RBAC); env from reviewer-secrets only; no /opt/data,
-# no company-ops-secrets, no Infisical bootstrap identity, no Steward token, no git credentials
+# Posture: own ServiceAccount (no token, no RBAC); only the three GitHub App keys from
+# company-ops-secrets (same App as engineering); no /opt/data, no other company-ops-secrets keys,
+# no Infisical bootstrap identity, no Steward token, no git credentials
 # (API only, merges are pinned to the reviewed head sha). Egress: hive, dns, public 443 (GitHub
 # API and the LLM provider).
 apiVersion: v1
@@ -92,9 +91,13 @@ spec:
               value: opencode
             - name: RUNNER_MODEL
               value: oc-zai-coding-plan/glm-5.3-flash
-          envFrom:
-            - secretRef:
-                name: reviewer-secrets
+            # Same GitHub App as engineering (config sharedIdentity), read from the existing Secret.
+            - name: GITHUB_APP_ID
+              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_ID}}
+            - name: GITHUB_APP_INSTALLATION_ID
+              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_INSTALLATION_ID}}
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom: {secretKeyRef: {name: company-ops-secrets, key: GITHUB_APP_PRIVATE_KEY}}
           readinessProbe:
             tcpSocket:
               port: 8000

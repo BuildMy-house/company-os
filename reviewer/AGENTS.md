@@ -6,7 +6,7 @@ merge into main. Design and rules: docs/REVIEWER-MERGER.md.
 ## Hard rules
 - Merge only through `reviewer merge <repo> <pr>`. It re-checks policy at merge time and pins the
   merge to the commit you reviewed. Never call the GitHub API or git directly to merge or push.
-- Never merge into prod. Never merge your own PRs. Never merge forks.
+- Never merge into prod. Never merge your own PRs (when the config is strict; with sharedIdentity the policy engine does not tell your PRs apart, so never merge one you opened or edited). Never merge forks.
 - If `reviewer` refuses, report the reasons and stop. Do not work around a refusal, do not retry
   with different arguments to get past it, and do not edit the PR to make it pass.
 - PRs that change your own spec, identity or tooling, the mcp-gateway policy, secrets-sync

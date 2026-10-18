@@ -35,13 +35,16 @@ export function evaluate({ cfg, repo, pr, files, checks, selfLogin, reviewNote }
   const refusals = [];
   const rc = findRepoCfg(cfg, repo);
   if (!rc) return { ok: false, refusals: [`repo "${repo}" is not one the reviewer may merge into`], needsSharedReview: false, sharedFiles: [], headSha: null };
-  if (!selfLogin) refusals.push("REVIEWER_LOGIN is not set, so own-PR check cannot run");
+  // sharedIdentity: the reviewer runs as the same GitHub App that opens engineering PRs (owner's
+  // decision, 2026-10-18), so an own-PR check would refuse all of them. Strict mode is the default.
+  const checkOwn = !cfg.sharedIdentity;
+  if (checkOwn && !selfLogin) refusals.push("REVIEWER_LOGIN is not set, so own-PR check cannot run");
   if (pr.state !== "open") refusals.push(`PR is ${pr.state}, not open`);
   if (pr.draft) refusals.push("PR is a draft");
   const base = pr.base?.ref;
   if (FORBIDDEN_BASES.includes(base) || !rc.baseBranches.includes(base)) refusals.push(`base branch "${base}" is not allowed (allowed: ${rc.baseBranches.join(", ")}; never prod)`);
   if (pr.head?.repo && pr.head.repo.full_name !== repo) refusals.push("PR comes from a fork; forks are not merged by the agent");
-  if (selfLogin && pr.user?.login === selfLogin) refusals.push("PR was opened by the reviewer's own identity");
+  if (checkOwn && selfLogin && pr.user?.login === selfLogin) refusals.push("PR was opened by the reviewer's own identity");
   if (pr.mergeable === false) refusals.push("PR is not mergeable (conflicts)");
 
   if (!Array.isArray(files) || files.length === 0) refusals.push("PR has no changed files");
