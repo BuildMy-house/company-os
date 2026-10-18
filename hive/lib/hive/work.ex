@@ -998,49 +998,89 @@ defmodule Hive.Work do
 
     case memory.work[id] do
       %{claimed_by: ^agent_id} = item ->
-        completed =
-          Map.merge(item, %{
-            state: final_state,
-            result: result,
-            claimed_by: nil,
-            lease_expires_at: nil
-          })
+        if final_state == "completed" and empty_completion?(result) do
+          now = DateTime.utc_now()
+          attempt = item.attempt || 0
+          next_state = retry_state(attempt)
 
-        topic =
-          if final_state == "completed", do: "engineering.completed", else: "engineering.failed"
+          failure = %{
+            "agent_id" => agent_id,
+            "reason" => "empty_completion",
+            "retry_state" => next_state,
+            "slug" => item["slug"]
+          }
 
-        event =
-          event(
-            topic,
-            id,
-            %{
-              "agent_id" => agent_id,
-              "state" => final_state,
-              "result" => result,
-              "slug" => item["slug"]
-            },
-            item.attempt || 0
-          )
+          events = recovery_events(id, failure, attempt)
 
-        notify_event_subscribers(event)
+          retried =
+            Map.merge(item, %{
+              state: next_state,
+              result: result,
+              claimed_by: nil,
+              lease_expires_at: nil,
+              last_failure: failure
+            })
 
-        next =
-          state
-          |> put_in([:memory, :work, id], completed)
-          |> update_in([:memory, :events], &[event | &1])
-          |> update_in(
-            [:memory, :ledger],
-            &Hive.Ledger.close(
-              &1,
-              id,
-              item.attempt || 0,
-              agent_id,
-              final_state,
-              DateTime.utc_now()
+          outcome = if next_state == "escalated", do: "escalated", else: "failed"
+
+          next =
+            state
+            |> put_in([:memory, :work, id], retried)
+            |> update_in([:memory, :bids], &Map.delete(&1, {id, agent_id}))
+            |> update_in([:memory, :events], &(Enum.reverse(events) ++ &1))
+            |> update_in([:memory, :available_since], &Map.put(&1, id, now))
+            |> update_in(
+              [:memory, :ledger],
+              &Hive.Ledger.close(&1, id, attempt, agent_id, outcome, now)
             )
-          )
 
-        {:reply, {:ok, completed}, next}
+          settle_recovery(events)
+          {:reply, {:ok, retried}, next}
+        else
+          completed =
+            Map.merge(item, %{
+              state: final_state,
+              result: result,
+              claimed_by: nil,
+              lease_expires_at: nil
+            })
+
+          topic =
+            if final_state == "completed", do: "engineering.completed", else: "engineering.failed"
+
+          event =
+            event(
+              topic,
+              id,
+              %{
+                "agent_id" => agent_id,
+                "state" => final_state,
+                "result" => result,
+                "slug" => item["slug"]
+              },
+              item.attempt || 0
+            )
+
+          notify_event_subscribers(event)
+
+          next =
+            state
+            |> put_in([:memory, :work, id], completed)
+            |> update_in([:memory, :events], &[event | &1])
+            |> update_in(
+              [:memory, :ledger],
+              &Hive.Ledger.close(
+                &1,
+                id,
+                item.attempt || 0,
+                agent_id,
+                final_state,
+                DateTime.utc_now()
+              )
+            )
+
+          {:reply, {:ok, completed}, next}
+        end
 
       %{state: ^final_state, result: ^result, claimed_by: nil, attempt: attempt} = item ->
         topic =
@@ -1073,65 +1113,69 @@ defmodule Hive.Work do
 
     result =
       transaction!(db, fn tx ->
-        updated =
-          Postgrex.query!(
-            tx,
-            "UPDATE company.hive_work_items SET state = $3, result = $4::jsonb, claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND claimed_by = $2 AND state = 'claimed' AND lease_expires_at >= now() RETURNING id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result",
-            [id, agent_id, final_state, Jason.encode!(result || %{})]
-          )
+        if final_state == "completed" and empty_completion?(result || %{}) do
+          complete_empty_db(tx, id, agent_id, result || %{})
+        else
+          updated =
+            Postgrex.query!(
+              tx,
+              "UPDATE company.hive_work_items SET state = $3, result = $4::jsonb, claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND claimed_by = $2 AND state = 'claimed' AND lease_expires_at >= now() RETURNING id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result",
+              [id, agent_id, final_state, Jason.encode!(result || %{})]
+            )
 
-        case rows(updated) do
-          [item] ->
-            completion_event =
-              event(
-                topic,
-                id,
-                %{
-                  "agent_id" => agent_id,
-                  "state" => final_state,
-                  "result" => result || %{},
-                  "slug" => get_in(item, ["payload", "slug"])
-                },
-                item["attempt"]
-              )
+          case rows(updated) do
+            [item] ->
+              completion_event =
+                event(
+                  topic,
+                  id,
+                  %{
+                    "agent_id" => agent_id,
+                    "state" => final_state,
+                    "result" => result || %{},
+                    "slug" => get_in(item, ["payload", "slug"])
+                  },
+                  item["attempt"]
+                )
 
-            persist_event(tx, completion_event)
-            close_ledger(tx, id, item["attempt"], agent_id, final_state)
-            {:ok, item, completion_event}
+              persist_event(tx, completion_event)
+              close_ledger(tx, id, item["attempt"], agent_id, final_state)
+              {:ok, item, [completion_event]}
 
-          _ ->
-            encoded_result = Jason.encode!(result || %{})
+            _ ->
+              encoded_result = Jason.encode!(result || %{})
 
-            completed =
-              Postgrex.query!(
-                tx,
-                "SELECT id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result FROM company.hive_work_items WHERE id = $1 AND state = $2 AND claimed_by IS NULL AND result = $3::jsonb",
-                [id, final_state, encoded_result]
-              )
+              completed =
+                Postgrex.query!(
+                  tx,
+                  "SELECT id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result FROM company.hive_work_items WHERE id = $1 AND state = $2 AND claimed_by IS NULL AND result = $3::jsonb",
+                  [id, final_state, encoded_result]
+                )
 
-            case rows(completed) do
-              [item] ->
-                prior_event =
-                  Postgrex.query!(
-                    tx,
-                    "SELECT event_id, topic, task_id, sender, occurred_at, payload, attempt FROM company.hive_events WHERE task_id = $1 AND topic = $2 AND attempt = $3 AND payload->>'agent_id' = $4 AND payload->>'state' = $5 AND payload->'result' = $6::jsonb ORDER BY occurred_at DESC LIMIT 1",
-                    [id, topic, item["attempt"], agent_id, final_state, encoded_result]
-                  )
+              case rows(completed) do
+                [item] ->
+                  prior_event =
+                    Postgrex.query!(
+                      tx,
+                      "SELECT event_id, topic, task_id, sender, occurred_at, payload, attempt FROM company.hive_events WHERE task_id = $1 AND topic = $2 AND attempt = $3 AND payload->>'agent_id' = $4 AND payload->>'state' = $5 AND payload->'result' = $6::jsonb ORDER BY occurred_at DESC LIMIT 1",
+                      [id, topic, item["attempt"], agent_id, final_state, encoded_result]
+                    )
 
-                case rows(prior_event) do
-                  [completion_event] -> {:ok, item, completion_event}
-                  _ -> {:error, :not_owner}
-                end
+                  case rows(prior_event) do
+                    [completion_event] -> {:ok, item, [completion_event]}
+                    _ -> {:error, :not_owner}
+                  end
 
-              _ ->
-                {:error, :not_owner}
-            end
+                _ ->
+                  {:error, :not_owner}
+              end
+          end
         end
       end)
 
     case result do
-      {:ok, item, completion_event} ->
-        notify_event_subscribers(completion_event)
+      {:ok, item, events} ->
+        settle_recovery(events)
         {:reply, {:ok, item}, state}
 
       error ->
@@ -1784,6 +1828,81 @@ defmodule Hive.Work do
   # Redispatch below the attempt limit, escalate at it: a task that already burned
   # `max_attempts` leases is not retried forever, a human or manager must requeue it.
   defp retry_state(attempt), do: if(attempt >= max_attempts(), do: "escalated", else: "available")
+
+  # A worker that reports success without doing anything: zero tool calls and a blank
+  # or missing output. Treated as a failure so the item retries instead of completing.
+  # A missing tool_call_count (older workers) or any non-blank output is trusted.
+  defp empty_completion?(result),
+    do: result["tool_call_count"] == 0 and blank_output?(result["output"])
+
+  # A "completed" report with zero tool calls and a blank output is not success: the item
+  # goes back through the same retry pipeline as a lease_expired failure (available, or
+  # escalated at max attempts) with reason empty_completion.
+  defp complete_empty_db(tx, id, agent_id, result) do
+    claimed =
+      Postgrex.query!(
+        tx,
+        "SELECT attempt, payload FROM company.hive_work_items WHERE id = $1 AND claimed_by = $2 AND state = 'claimed' AND lease_expires_at >= now() FOR UPDATE",
+        [id, agent_id]
+      )
+      |> rows()
+      |> List.first()
+
+    case claimed do
+      %{"attempt" => attempt} ->
+        next_state = retry_state(attempt)
+
+        failure = %{
+          "agent_id" => agent_id,
+          "reason" => "empty_completion",
+          "retry_state" => next_state,
+          "slug" => get_in(claimed, ["payload", "slug"])
+        }
+
+        events = recovery_events(id, failure, attempt)
+
+        Postgrex.query!(
+          tx,
+          "DELETE FROM company.hive_work_bids WHERE work_id = $1 AND agent_id = $2",
+          [
+            id,
+            agent_id
+          ]
+        )
+
+        updated =
+          Postgrex.query!(
+            tx,
+            "UPDATE company.hive_work_items SET state = $3, result = $4::jsonb, last_failure = $5::jsonb, claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND claimed_by = $2 RETURNING id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result",
+            [id, agent_id, next_state, Jason.encode!(result), Jason.encode!(failure)]
+          )
+
+        case rows(updated) do
+          [item] ->
+            Enum.each(events, &persist_event(tx, &1))
+
+            close_ledger(
+              tx,
+              id,
+              attempt,
+              agent_id,
+              if(next_state == "escalated", do: "escalated", else: "failed")
+            )
+
+            {:ok, item, events}
+
+          _ ->
+            {:error, :not_owner}
+        end
+
+      _ ->
+        {:error, :not_owner}
+    end
+  end
+
+  defp blank_output?(nil), do: true
+  defp blank_output?(output) when is_binary(output), do: String.trim(output) == ""
+  defp blank_output?(_), do: false
 
   defp recovery_events(id, %{"retry_state" => "escalated"} = failure, attempt) do
     escalation =
