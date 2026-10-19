@@ -13,11 +13,13 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const refused = (fn) => assert.throws(fn, (e) => e.guard === true);
 const head = () => "blog/current";
 
-test("push: only blog/ branches allowed, everything else (incl. reports/) refused", () => {
+test("push: only blog/ and seo/ branches allowed, everything else (incl. reports/) refused", () => {
   assert.deepEqual(checkPushArgs(["-u", "origin", "blog/my-post"], head).branches, ["blog/my-post"]);
   assert.deepEqual(checkPushArgs(["origin", "blog/a:refs/heads/blog/b"], head).branches, ["blog/b"]);
   assert.deepEqual(checkPushArgs(["origin", "HEAD"], head).branches, ["blog/current"]);
-  for (const bad of ["reports/2026-10-weekly", "refs/heads/reports/x", "main", "master", "prod", "staging", "refs/heads/main", "blog/a:main", "HEAD:main", "blog/../main", "blog/", "blog/UPPER", "blog", "refs/tags/blog/x", "blogger/x", "x/blog/y"]) {
+  assert.deepEqual(checkPushArgs(["-u", "origin", "seo/title-ctr-fix"], head).branches, ["seo/title-ctr-fix"]);
+  assert.deepEqual(checkPushArgs(["origin", "HEAD"], () => "seo/current").branches, ["seo/current"]);
+  for (const bad of ["reports/2026-10-weekly", "refs/heads/reports/x", "main", "master", "prod", "staging", "refs/heads/main", "blog/a:main", "HEAD:main", "blog/../main", "blog/", "blog/UPPER", "blog", "refs/tags/blog/x", "blogger/x", "x/blog/y", "seo/", "seo", "seo/UPPER", "seo/../main", "seo/a:main", "seos/x", "x/seo/y", "refs/tags/seo/x"]) {
     refused(() => checkPushArgs(["origin", bad], head));
   }
 });
@@ -75,6 +77,7 @@ test("remote URL must be the configured repo and carry no credentials", () => {
 test("pre-push ref lines: main, deletes and tags refused", () => {
   const sha = "a".repeat(40);
   checkRefLines(`refs/heads/x ${sha} refs/heads/blog/x ${"0".repeat(40)}\n`);
+  checkRefLines(`refs/heads/x ${sha} refs/heads/seo/x ${"0".repeat(40)}\n`);
   refused(() => checkRefLines(`refs/heads/x ${sha} refs/heads/main ${sha}\n`));
   refused(() => checkRefLines(`(delete) ${"0".repeat(40)} refs/heads/blog/x ${sha}\n`));
   refused(() => checkRefLines(`refs/tags/v1 ${sha} refs/tags/v1 ${"0".repeat(40)}\n`));

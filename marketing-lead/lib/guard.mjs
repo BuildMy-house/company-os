@@ -1,5 +1,5 @@
 // Push guard rules, shared by the git wrapper (bin/git) and the pre-push hook (hooks/pre-push).
-// Policy: the marketing-lead may only create or update branches blog/<slug> on one of exactly three
+// Policy: the marketing-lead may only create or update branches blog/<slug> or seo/<slug> on one of exactly three
 // repos (ALLOWED_REPOS). Never main, never deletes, never force, never tags, never other remotes.
 // Reports are NOT pushed to git at all: hand-back is the Hive result plus Steward memory.
 //
@@ -13,7 +13,8 @@
 export const ALLOWED_REPOS = Object.freeze(["BuildMy-house/website", "BuildMy-house/hermees-diary", "BuildMy-house/observer-website"]);
 export const repoUrl = (slug) => `https://github.com/${slug}`;
 
-export const BRANCH_RE = /^blog\/[a-z0-9][a-z0-9-]{0,80}$/;
+// blog/<slug>: blog posts. seo/<slug>: website/SEO changes and playbook experiment PRs.
+export const BRANCH_RE = /^(blog|seo)\/[a-z0-9][a-z0-9-]{0,80}$/;
 const ZERO_OID = /^0+$/;
 
 // Exact option strings only. Abbreviations (--force-with-l, --del, --no-ver...) are therefore
@@ -36,7 +37,7 @@ export function refuse(reason) {
 export function checkBranchRef(ref) {
   const name = ref.replace(/^refs\/heads\//, "");
   if (!BRANCH_RE.test(name)) {
-    throw refuse(`push refused: "${ref}" is not an allowed branch. The marketing-lead may only push blog/<slug> (slug: lowercase letters, digits, hyphens). It never pushes main; a human or Board-approved merge publishes.`);
+    throw refuse(`push refused: "${ref}" is not an allowed branch. The marketing-lead may only push blog/<slug> or seo/<slug> (slug: lowercase letters, digits, hyphens). It never pushes main; a human or Board-approved merge publishes.`);
   }
   return name;
 }
@@ -51,8 +52,8 @@ export function checkPushArgs(args, currentBranch) {
     } else positional.push(arg);
   }
   const [remote, ...refspecs] = positional;
-  if (!remote) throw refuse('push refused: name the remote and branch explicitly, e.g. "git push -u origin blog/<slug>".');
-  if (!refspecs.length) throw refuse(`push refused: no explicit branch given for "${remote}". Use "git push -u ${remote} blog/<slug>".`);
+  if (!remote) throw refuse('push refused: name the remote and branch explicitly, e.g. "git push -u origin blog/<slug>" or "seo/<slug>".');
+  if (!refspecs.length) throw refuse(`push refused: no explicit branch given for "${remote}". Use "git push -u ${remote} blog/<slug>" (or seo/<slug>).`);
   const dests = [];
   for (const spec of refspecs) {
     if (spec.startsWith("+")) throw refuse(`push refused: "${spec}" is a forced refspec.`);

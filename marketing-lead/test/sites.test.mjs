@@ -45,12 +45,14 @@ test("sync clones when absent, fetches when present, refuses a dirty tree, alway
   assert.throws(() => syncRepo({ r, work: "/w", run, exists: () => true, clean: () => false }), /uncommitted/);
 });
 
-test("branch names must be blog/<slug>", () => {
+test("branch names must be blog/<slug> or seo/<slug>", () => {
   const r = findRepo(cfg, "website");
   const calls = [];
   startBranch({ r, work: "/w", run: (a) => calls.push(a), branch: "blog/fix-hero" });
   assert.deepEqual(calls[0], ["checkout", "-B", "blog/fix-hero", "origin/main"]);
-  for (const bad of ["main", "reports/x", "feature/x", "blog/UP", ""]) assert.throws(() => startBranch({ r, work: "/w", run: () => {}, branch: bad }), /branch must match/);
+  startBranch({ r, work: "/w", run: (a) => calls.push(a), branch: "seo/ctr-fix" });
+  assert.deepEqual(calls.at(-1), ["checkout", "-B", "seo/ctr-fix", "origin/main"]);
+  for (const bad of ["main", "reports/x", "feature/x", "blog/UP", "seo/UP", ""]) assert.throws(() => startBranch({ r, work: "/w", run: () => {}, branch: bad }), /branch must match/);
 });
 
 test("repo pr commits, pushes only blog/<slug>, opens the PR against the base, never the base itself", async () => {
