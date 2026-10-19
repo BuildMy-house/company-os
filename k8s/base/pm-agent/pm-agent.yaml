@@ -3,10 +3,11 @@
 # -> pm-agent POST /chat. Hive member: registers as HIVE_AGENT_ID=pm-agent.
 #
 # Security posture (each item has a test in tests/test_pm_agent.py):
-#   - own Secret pm-agent-secrets (PM_DATABASE_URL + PM_AGENT_LLM_API_KEY only),
+#   - own Secret pm-agent-secrets (PM_DATABASE_URL + PM_AGENT_LLM_API_KEY, plus
+#     the optional HINDSIGHT_API_KEY for its pm-lead memory bank),
 #     never company-ops-secrets (k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml)
 #   - dedicated ServiceAccount, no token mounted, no RBAC
-#   - NetworkPolicy: egress hive/postgres/dns/LLM only, ingress gateway only
+#   - NetworkPolicy: egress hive/postgres/hindsight/dns/LLM only, ingress gateway only
 #   - no Axiom credentials; telemetry is structured stdout logs
 apiVersion: v1
 kind: ServiceAccount
@@ -83,6 +84,18 @@ spec:
                 secretKeyRef:
                   name: pm-agent-secrets
                   key: PM_AGENT_LLM_API_KEY
+            # Hindsight long-term memory (bank pm-lead, docs/HINDSIGHT-BANKS.md).
+            # optional: the pod must still start before the key is synced.
+            - name: HINDSIGHT_URL
+              value: http://hindsight:8888
+            - name: HINDSIGHT_BANK_ID
+              value: pm-lead
+            - name: HINDSIGHT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pm-agent-secrets
+                  key: HINDSIGHT_API_KEY
+                  optional: true
           readinessProbe:
             httpGet:
               path: /healthz
@@ -173,6 +186,14 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+    # Hindsight memory server (bank pm-lead only, enforced in code).
+    - to:
+        - podSelector:
+            matchLabels:
+              app: hindsight
+      ports:
+        - protocol: TCP
+          port: 8888
     # LLM endpoint (inference-api.nousresearch.com:443). Pod policies cannot match a
     # hostname, so this is public HTTPS only, with every private/in-cluster
     # range excluded. Tighten cidr to the provider's published ranges once

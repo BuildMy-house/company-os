@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hindsight-dream-marketing-lead
+  namespace: company-ops
+  labels:
+    app: hindsight-dream
+spec:
+  # 04:30 UTC: after the 03:45 UTC hindsight-data backup. Daily scan of bank `marketing-lead`:
+  # flags prompt-injection / planted lessons and quarantines them (state=invalidated,
+  # reversible, excluded from recall). APPLY by default; logs counts and ids only.
+  schedule: "30 4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: hindsight-dream
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: dream
+              image: localhost:30500/company-os@sha256:6b458067b7a71bdb98fece7462953ecad3530599772dddac0f7f8d4ceabc1280
+              imagePullPolicy: Always
+              command:
+                - /opt/company-ops-venv/bin/python
+                - -m
+                - company_ops.hindsight_dream
+                - --bank
+                - marketing-lead
+                - --apply
+              env:
+                - name: HINDSIGHT_URL
+                  value: http://hindsight:8888
+                - name: HINDSIGHT_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: marketing-lead-secrets
+                      key: HINDSIGHT_API_KEY
+                      optional: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
