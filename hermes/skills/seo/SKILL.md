@@ -1,20 +1,20 @@
 ---
 name: seo
-description: Weekly SEO job skill for the CEO - reviews GSC data, runs the search report, picks ownership-worthy experiments, and appends parseable entries to the playbook experiment log via PR.
+description: SEO cycle skill (every 2-3 days) for the marketing-lead, which owns the website and SEO - reviews GSC data, runs the search report, picks one experiment, and appends parseable entries to the playbook experiment log via PR. Hermes approves.
 version: 1.0.0
 metadata:
   hermes:
-    tags: [seo, marketing, experiments, weekly, cron]
+    tags: [seo, marketing, experiments, cron]
     category: marketing
 ---
 
 # seo
 
-Runs from the `seo` weekly job. The output is an updated experiment log in `hermes-operations/domains/marketing/knowledge/seo-playbook.md`, committed on a branch and delivered as a PR for review. Nothing in this skill publishes, merges, or deploys. The playbook is the single source of SEO truth; this skill is the weekly procedure that operates on it.
+Runs from the `seo` job, every 2-3 days (cron `0 6 */3 * *`), owned by the marketing-lead agent. The output is an updated experiment log in `hermes-operations/domains/marketing/knowledge/seo-playbook.md`, committed on a branch and delivered as a PR for review. Nothing in this skill publishes, merges, or deploys. The playbook is the single source of SEO truth; this skill is the cycle procedure that operates on it.
 
 ## When to Use
 
-Only from the weekly SEO job, or on explicit Board request. Never start on your own from a conversation.
+Only from the SEO cycle job, or on explicit Board request. Never start on your own from a conversation.
 
 ## Decided product facts (may be stated as fact)
 
@@ -34,9 +34,9 @@ Only from the weekly SEO job, or on explicit Board request. Never start on your 
 
 ## Procedure
 
-1. **Check ingest health.** Query `marketing.ingest_runs` where `source = 'gsc'` for the most recent run. If the latest run is missing or older than ~7 days, stop and file an ingest bug before reading analytics — below-threshold data from a broken ingest is worse than no data.
+1. **Check ingest health.** Query `marketing.ingest_runs` where `source = 'gsc'` for the most recent run. If the latest run is missing or older than ~3 days, stop and file an ingest bug before reading analytics — below-threshold data from a broken ingest is worse than no data.
 2. **Run the report.** `python -m company_ops.seo_report`. It summarizes clicks, impressions, CTR, and position from `marketing.gsc_search_analytics`. GSC data lags ~3 days — only compare windows that have fully settled.
-3. **Pick at most 1–3 experiments** for the week. Prefer: a page with impressions but weak CTR-vs-position (title/snippet work), a page type missing structured data per playbook Section 5, or an intent bucket (Section 7) that deserves a new page — subject to the programmatic gates in Section 8.
+3. **Pick at most 1–3 experiments** for this cycle. Prefer: a page with impressions but weak CTR-vs-position (title/snippet work), a page type missing structured data per playbook Section 5, or an intent bucket (Section 7) that deserves a new page — subject to the programmatic gates in Section 8.
 4. **Write the hypothesis BEFORE the change exists.** A change without a prior hypothesis is not an experiment.
 5. **Append the experiment-log entry** to `hermes-operations/domains/marketing/knowledge/seo-playbook.md` in the exact parseable format (`### YYYY-MM-DD <short title>`, then `- Hypothesis:`, `- Change:`, `- Metric:`, `- Result:`, `- Learning:`, `- Status: open|confirmed|refuted|inconclusive`). New entries get `Status: open`.
 6. **File follow-up tickets** for any implementation work through `hive_submit` per `docs/TICKET-STANDARD.md` — a real ticket needs `type` (feature|bug|chore), Fibonacci `points`, a 1–2 sentence `goal`, checkable `acceptance_criteria`, and an explicit `scope` (in/out). Blog or site content changes can be routed to the marketing-lead agent per `docs/MARKETING-LEAD.md` (it opens PRs on `blog/<slug>` branches; merging to `main` stays a human decision).

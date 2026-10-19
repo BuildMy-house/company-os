@@ -6,7 +6,7 @@ This playbook is the CEO agent's single source of truth for SEO work on buildmy.
 
 - buildmy.house is a browser-based home, floor-plan, and 3D house-design tool with an "Own the sandbox" positioning: the free lane to design a house in the browser — the "Google Docs of house design".
 - The website (Astro static site, deployed to Cloudflare Pages) is new. The GSC property is `sc-domain:buildmy.house` and has no data yet. Expect small numbers and treat them accordingly (Section 9).
-- The CEO agent owns SEO: this playbook defines what is true; the `seo` skill (`hermes/skills/seo/SKILL.md`) defines the weekly procedure; the `## Experiment log` at the bottom of this file records what was tried and what happened.
+- The marketing-lead agent owns the website and SEO (Hermes approves): this playbook defines what is true; the `seo` skill (`hermes/skills/seo/SKILL.md`) defines the weekly procedure; the `## Experiment log` at the bottom of this file records what was tried and what happened.
 
 ## 2. Titles and snippets
 
@@ -17,7 +17,7 @@ This playbook is the CEO agent's single source of truth for SEO work on buildmy.
 - Every markdown page title follows `<Page> · buildmy.house` (e.g. `Floor Plan Tool · buildmy.house`).
 - Meta descriptions are written per page, roughly 1–2 sentences, naming what the page lets the visitor do.
 - **Practitioner heuristic**: keeping the branded suffix out of the truncation-critical first ~55–60 characters is the safest layout — front-load the page-specific words. This is a layout rule, not a length rule: Google still says there is no cutoff [1].
-- Title changes recrawl in days to weeks [1] — do not judge a title experiment for at least two weekly cycles.
+- Title changes recrawl in days to weeks [1] — do not judge a title experiment for at least two cycles.
 
 ## 3. Helpful, people-first content
 
@@ -95,7 +95,7 @@ Data source: Google Search Console (property `sc-domain:buildmy.house`), ingeste
 - Minimum thresholds before declaring a result (our decision, scaled for a new low-traffic site): a comparison window needs ≥2 weeks of post-change data and both windows ≥ a few hundred impressions on the affected pages/queries; below that the result is logged as `inconclusive`, not `confirmed`.
 - Weeks or days of data on a brand-new site are noise. Slow decisions.
 - One experiment = one page (or one page group) changed. Never two overlapping changes in the same window — causality becomes unreadable.
-- Weekly cadence (skill): ingest health → report → ≤1–3 experiments chosen → logged in `## Experiment log`.
+- Cycle cadence every 2-3 days (skill): ingest health → report → ≤1–3 experiments chosen → logged in `## Experiment log`.
 
 ## 10. Sources
 
@@ -117,7 +117,7 @@ All fetched 2026-10-19. Last-updated dates on Google pages noted where displayed
 
 ## Experiment log
 
-Entries below follow the exact parseable format. The weekly job appends entries and opens a PR; entries never bypass review.
+Entries below follow the exact parseable format. The cycle job appends entries and opens a PR; entries never bypass review.
 
 ### 2026-10-19 title-standardization
 

@@ -228,6 +228,14 @@ kubectl -n company-ops create job seo-gsc-ingest-backfill \
 create job` cannot set `envFrom`, use a small one-off manifest mirroring the
 CronJob's pod spec with the extra `--backfill` argument.)
 
+## Rollout (human steps; nothing here is applied by the PR)
+
+1. Apply `sql/marketing_schema_v2_drop_gsc_daily.sql` (idempotent `DROP TABLE IF EXISTS marketing.gsc_daily`) after the new image no longer reads it.
+2. In Infisical, `/seo` holds `GSC_SERVICE_ACCOUNT_JSON`, `SEO_GSC_SITE_URL`, DSN for `seo-gsc-ingest-secrets`; it feeds the existing sync (never printed).
+3. Rename the Infisical folder `/publisher` to `/marketing-lead` (Secret `marketing-lead-secrets`), keep `/marketing-ingest`; then apply `k8s/base/marketing-lead-secrets-sync` and `k8s/base/marketing-lead`, and remove the old `publisher` Deployment/Service/PVC/Secret by hand.
+4. Check Hive registration: agent id `marketing-lead` appears in the agent list with tools `github-pr,reddit-publish,substack-publish,marketing-db-read,marketing-ingest`.
+5. Run the one-off `--backfill` Job above, then enable the cycle CronJob (`0 6 */3 * *`).
+
 ## Status
 
 Code, DDL, tests and this document are committed. **No cluster change has

@@ -103,3 +103,9 @@ git runner and a local bare remote).
 - Substack drafts are plain paragraphs; Markdown to ProseMirror conversion is a follow-up.
 - `CREATE TABLE IF NOT EXISTS` does not alter an existing `ingest_runs` CHECK (schema not applied anywhere yet).
 - NetworkPolicy egress is public 443 minus private ranges (no FQDN matching).
+
+## Ownership, cadence and naming exceptions
+
+The marketing-lead owns the website (BuildMy-house/website) and all SEO, blog, Substack and Reddit posting; Hermes approves publishing (`metadata.approval_ref`). It works a cycle every 2-3 days (one post or site improvement, driven by `marketing.gsc_search_analytics`; `seo/<slug>` or `blog/<slug>` PRs), recalls from and retains to its Hindsight bank `marketing-lead` each cycle (`marketing-lead memory recall`, `memory retain-cycle`), and keeps the Steward `save_memory` hand-back.
+
+Names deliberately NOT renamed: the image repo `company-os-publisher` (allowlisted in the mcp-gateway builder `image_repo`; renaming needs a coordinated gateway config change), the DB role `publisher_reader` and the env var `PUBLISHER_DATABASE_URL` (a role rename is a live-DB change).
