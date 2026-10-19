@@ -1,4 +1,4 @@
-"""Weekly SEO learning loop (service: seo_report).
+"""SEO learning loop, run every 2-3 days by the marketing-lead cycle (service: seo_report).
 
 Reads Google Search Console rows ingested into `marketing.gsc_search_analytics`
 by `company_ops.seo_gsc_ingest` (READ-only here), compares the last 7 days

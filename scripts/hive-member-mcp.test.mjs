@@ -563,18 +563,18 @@ test("registration declares capabilities.tools only for known, verifiable tools"
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "browser,hindsight", PLAYWRIGHT_BROWSERS_PATH: noBrowsers })).tools, ["hindsight"], "browser is dropped without Chromium");
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "browser,hindsight", PLAYWRIGHT_BROWSERS_PATH: withChromium })).tools, ["browser", "hindsight"]);
 
-  // Credential-gated publisher tools: declared only when their env is present.
-  const publisherTools = "github-pr,reddit-publish,substack-publish,marketing-db-read,marketing-ingest";
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools })).tools, [], "no credentials declares none of the publisher tools");
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c" })).tools, [], "partial reddit credentials declare nothing");
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c", REDDIT_PASSWORD: "d", PUBLISHER_DATABASE_URL: "postgresql://x" })).tools, ["marketing-db-read", "reddit-publish"]);
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, SUBSTACK_PUBLICATION_URL: "https://x.substack.com", SUBSTACK_SESSION_TOKEN: "c" })).tools, [], "the cookie alone declares nothing: the sidecar ready marker is required");
+  // Credential-gated marketing-lead tools: declared only when their env is present.
+  const marketingLeadTools = "github-pr,reddit-publish,substack-publish,marketing-db-read,marketing-ingest";
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools })).tools, [], "no credentials declares none of the marketing-lead tools");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c" })).tools, [], "partial reddit credentials declare nothing");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c", REDDIT_PASSWORD: "d", PUBLISHER_DATABASE_URL: "postgresql://x" })).tools, ["marketing-db-read", "reddit-publish"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, SUBSTACK_PUBLICATION_URL: "https://x.substack.com", SUBSTACK_SESSION_TOKEN: "c" })).tools, [], "the cookie alone declares nothing: the sidecar ready marker is required");
   const marker = join(await mkdtemp(join(tmpdir(), "ready-")), "m");
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, MARKETING_INGEST_READY_FILE: marker, SUBSTACK_READY_FILE: marker })).tools, [], "ready-file env pointing at a missing file declares nothing");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, MARKETING_INGEST_READY_FILE: marker, SUBSTACK_READY_FILE: marker })).tools, [], "ready-file env pointing at a missing file declares nothing");
   await writeFile(marker, "ok");
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, MARKETING_INGEST_READY_FILE: marker })).tools, ["marketing-ingest"]);
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, SUBSTACK_READY_FILE: marker })).tools, ["substack-publish"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, MARKETING_INGEST_READY_FILE: marker })).tools, ["marketing-ingest"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, SUBSTACK_READY_FILE: marker })).tools, ["substack-publish"]);
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "github-pr", GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "ga-read,gsc-read,reddit-read,substack-read" })).tools, [], "read-API tools were replaced by marketing-db-read");
 });

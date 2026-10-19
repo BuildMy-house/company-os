@@ -11,7 +11,7 @@ Git (source of truth, baked into the company-os image):
 
 - `hermes/skills/ceo-status-update/`, `hermes/skills/blog-draft-builder/`,
   `hermes/skills/report-request/`, `hermes/skills/seo/` — the skill
-  definitions. The `seo` skill backs the CEO's weekly SEO job (see
+  definitions. The `seo` skill describes the SEO cycle now owned by the marketing-lead agent (every 2-3 days; Hermes approves) (see
   `hermes-operations/domains/marketing/knowledge/seo-playbook.md`); it is
   seeded but no seo cron job is wired yet, so it runs on explicit request
   until that job exists.
@@ -88,7 +88,7 @@ Find the job id:
 kubectl -n company-ops exec deploy/hermes-gateway -- hermes cron list
 ```
 
-To re-enable once the publisher agent is deployed (run by an in-cluster
+To re-enable once the marketing-lead agent is deployed (run by an in-cluster
 agent with container-manager/kubectl access):
 
 ```

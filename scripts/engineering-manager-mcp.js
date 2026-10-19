@@ -70,7 +70,7 @@ export function tierAffinityMultiplier(taskTier, poolTier) {
 export const taskTierOf = (candidate) => normalizeTier(candidate?.payload?.tier);
 
 // Ticket metadata is not part of payload.parts, so a worker never sees it unless it is injected.
-// approval_ref (docs/PUBLISHER.md) is the one key workers need: the publisher agent refuses to
+// approval_ref (docs/MARKETING-LEAD.md) is the one key workers need: the marketing-lead agent refuses to
 // publish to Reddit or Substack without it. Only a well-formed value is passed on, so a ticket
 // cannot smuggle prompt text through this field.
 export const APPROVAL_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{5,119}$/;

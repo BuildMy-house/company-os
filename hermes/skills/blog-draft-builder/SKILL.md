@@ -11,7 +11,7 @@ metadata:
 # blog-draft-builder
 
 Runs from the `blog-draft-builder` daily cron job. The cron session is fresh:
-everything you need is in this skill. The output is a DRAFT for Board/publisher
+everything you need is in this skill. The output is a DRAFT for Board/marketing-lead
 review. This skill NEVER publishes.
 
 House Designer (buildmy.house) is a Sweet Home 3D-inspired home design app.

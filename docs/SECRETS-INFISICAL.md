@@ -25,8 +25,8 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | COMPANY_PASSWORD, OBSERVER_PASSWORD, ANALYTICS_PASSWORD, PM_AGENT_WRITER_PASSWORD (each role's `password_key` in `sql/roles.d/*.yaml`) | read by `scripts/provision-db-roles.sh` from env or Infisical | role provisioning (see below) | yes | `/hermes` (NOT `/infra`) |
 | COMPANY_DATABASE_URL, OBSERVER_DATABASE_URL, ANALYTICS_DATABASE_URL | company-ops-secrets | hermes-gateway, engineering pods | yes | `/hermes` |
 | PM_DATABASE_URL, PM_AGENT_LLM_API_KEY, HINDSIGHT_API_KEY (optional) | `pm-agent-secrets` (own Secret, `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml`; pm-agent no longer reads company-ops-secrets) | pm-agent only (docs/PM-AGENT-HERMES.md) | **NO — gap** | `/pm-agent` (exactly these three keys) |
-| GITHUB_TOKEN, REDDIT_* (publish), PUBLISHER_DATABASE_URL, HINDSIGHT_API_KEY | `publisher-secrets` (`k8s/base/publisher-secrets-sync/publisher-infisical-sync.yaml`) | publisher pod main container (docs/PUBLISHER.md) | **NO - gap** | `/publisher` (exactly these keys) |
-| MARKETING_INGEST_DATABASE_URL, GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN, GA4_PROPERTY_ID, GSC_SITE_URL, REDDIT_* (read), SUBSTACK_PUBLICATION_URL, SUBSTACK_SESSION_TOKEN, SUBSTACK_USER_ID | `marketing-ingest-secrets` (`.../marketing-ingest-infisical-sync.yaml`) | marketing-ingest CronJob and publisher sidecar only | **NO - gap** | `/marketing-ingest` (exactly these keys) |
+| GITHUB_TOKEN, REDDIT_* (publish), PUBLISHER_DATABASE_URL, HINDSIGHT_API_KEY | `marketing-lead-secrets` (`k8s/base/marketing-lead-secrets-sync/marketing-lead-infisical-sync.yaml`) | marketing-lead pod main container (docs/MARKETING-LEAD.md) | **NO - gap** | `/marketing-lead` (exactly these keys) |
+| MARKETING_INGEST_DATABASE_URL, GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN, GA4_PROPERTY_ID, REDDIT_* (read), SUBSTACK_PUBLICATION_URL, SUBSTACK_SESSION_TOKEN, SUBSTACK_USER_ID | `marketing-ingest-secrets` (`.../marketing-ingest-infisical-sync.yaml`) | marketing-ingest CronJob and marketing-lead sidecar only | **NO - gap** | `/marketing-ingest` (exactly these keys) |
 | DISCORD_BOT_TOKEN | company-ops-secrets | hermes-gateway | yes | `/hermes` |
 | DISCORD_ALLOWED_CHANNELS, DISCORD_ALLOW_ALL_USERS, DISCORD_ANNOUNCE_CHANNEL, DISCORD_BLOG_CHANNEL, DISCORD_HIL_CHANNEL, DISCORD_FINANCE_CHANNEL, DISCORD_DM_USER | company-ops-secrets | hermes-gateway, company_ops/human_interface.py | yes | `/hermes` |
 | NOUS_API_KEY | company-ops-secrets | hermes model inference | yes | `/hermes` |
@@ -93,10 +93,10 @@ already present in `/hermes`. pm-agent uses neither. A stale `PM_DATABASE_URL`
 may survive in the live `company-ops-secrets` as drift from an older sync; it is
 no longer consumed by anything and can be removed.
 
-Project **Build My house**, environment **dev**, folders **`/publisher`** and **`/marketing-ingest`** (each syncs every key into its own Secret, so create exactly these keys):
+Project **Build My house**, environment **dev**, folders **`/marketing-lead`** and **`/marketing-ingest`** (each syncs every key into its own Secret, so create exactly these keys):
 
-- `/publisher`: `GITHUB_TOKEN`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `PUBLISHER_DATABASE_URL` (publisher_reader DSN), `HINDSIGHT_API_KEY`.
-- `/marketing-ingest`: `MARKETING_INGEST_DATABASE_URL` (marketing_ingest DSN), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GA4_PROPERTY_ID`, `GSC_SITE_URL`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `SUBSTACK_PUBLICATION_URL`, `SUBSTACK_SESSION_TOKEN`, `SUBSTACK_USER_ID`.
+- `/marketing-lead`: `GITHUB_TOKEN`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `PUBLISHER_DATABASE_URL` (publisher_reader DSN), `HINDSIGHT_API_KEY`.
+- `/marketing-ingest`: `MARKETING_INGEST_DATABASE_URL` (marketing_ingest DSN), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GA4_PROPERTY_ID`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `SUBSTACK_PUBLICATION_URL`, `SUBSTACK_SESSION_TOKEN`, `SUBSTACK_USER_ID`.
 - Role passwords for `scripts/provision-db-roles.sh` go in `/hermes`: `MARKETING_INGEST_PASSWORD`, `PUBLISHER_READER_PASSWORD`.
 - `SUBSTACK_SESSION_TOKEN` is a browser session cookie (equivalent to a password); it expires and must be re-created by hand.
 

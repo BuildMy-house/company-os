@@ -1,8 +1,11 @@
 """Deterministic marketing-analytics ingester.
 
-Pulls aggregate data from GA4, Search Console, Reddit and Substack (via the
+Pulls aggregate data from GA4, Reddit and Substack (via the
 pinned, allowlisted substack-mcp bridge) and upserts it into the ``marketing`` schema (sql/marketing_schema.sql).
 No LLM is involved. Run daily by k8s/base/marketing-ingest.
+
+Search Console is NOT ingested here: ``company_ops/seo_gsc_ingest.py`` (service
+account, ``marketing.gsc_search_analytics``) is the single GSC source.
 
 Rules:
 - Each source is independent: a failure is recorded in ``marketing.ingest_runs``
@@ -21,7 +24,7 @@ Rules:
   module never logs or stores them.
 
 Run: ``python -m company_ops.marketing_ingest [--days N] [--source NAME]``.
-The same ``run`` code path backs the publisher's ``marketing-ingest`` tool
+The same ``run`` code path backs the marketing-lead's ``marketing-ingest`` tool
 (company_ops/marketing_sidecar.py).
 """
 
@@ -39,7 +42,7 @@ import requests
 
 from company_ops import substack_bridge
 
-SOURCES = ("ga4", "gsc", "reddit", "substack")
+SOURCES = ("ga4", "reddit", "substack")
 HTTP_TIMEOUT = 30
 USER_AGENT = "buildmy-house-marketing-ingest/1.0 (read-only analytics)"
 
@@ -130,44 +133,6 @@ def fetch_ga4(env: dict, http, start: date, end: date) -> tuple[str, list[dict]]
         if not page or offset >= int(data.get("rowCount", 0)):
             break
     return "ga4_daily", rows
-
-
-def fetch_gsc(env: dict, http, start: date, end: date) -> tuple[str, list[dict]]:
-    _need(env, GOOGLE_ENV + ("GSC_SITE_URL",))
-    site = env["GSC_SITE_URL"]
-    token = google_access_token(env, http)
-    url = f"https://www.googleapis.com/webmasters/v3/sites/{quote(site, safe='')}/searchAnalytics/query"
-    rows: list[dict] = []
-    start_row = 0
-    while True:
-        body = {
-            "startDate": start.isoformat(),
-            "endDate": end.isoformat(),
-            "dimensions": ["date", "page", "query"],
-            "rowLimit": 25000,
-            "startRow": start_row,
-        }
-        data = _check(
-            http.post(url, json=body, headers={"Authorization": f"Bearer {token}"}, timeout=HTTP_TIMEOUT),
-            "gsc searchAnalytics",
-        )
-        page = data.get("rows", [])
-        for r in page:
-            k = r["keys"]
-            rows.append({
-                "date": date.fromisoformat(k[0]),
-                "site_url": site,
-                "page": k[1],
-                "query": k[2],
-                "clicks": int(r.get("clicks", 0)),
-                "impressions": int(r.get("impressions", 0)),
-                "ctr": float(r.get("ctr", 0)),
-                "position": float(r.get("position", 0)),
-            })
-        start_row += len(page)
-        if len(page) < 25000:
-            break
-    return "gsc_daily", rows
 
 
 def fetch_reddit(env: dict, http, start: date, end: date) -> tuple[str, list[dict]]:
@@ -269,7 +234,6 @@ def fetch_substack(env: dict, http, start: date, end: date, call=None):
 
 FETCHERS: dict[str, Callable] = {
     "ga4": fetch_ga4,
-    "gsc": fetch_gsc,
     "reddit": fetch_reddit,
     "substack": fetch_substack,
 }
@@ -277,7 +241,6 @@ FETCHERS: dict[str, Callable] = {
 # table -> primary-key columns (must match sql/marketing_schema.sql)
 KEYS = {
     "ga4_daily": ("date", "property_id", "page_path", "channel_group"),
-    "gsc_daily": ("date", "site_url", "page", "query"),
     "reddit_posts_daily": ("snapshot_date", "subreddit", "post_id"),
     "substack_publication_daily": ("snapshot_date", "publication"),
     "substack_post_stats": ("snapshot_date", "publication", "post_id"),
@@ -293,11 +256,6 @@ SPEC: dict[str, dict[str, tuple]] = {
         "date": ("date",), "property_id": ("str",), "page_path": ("str",), "channel_group": ("str",),
         "sessions": ("int", 0, BIG), "total_users": ("int", 0, BIG),
         "screen_page_views": ("int", 0, BIG), "engaged_sessions": ("int", 0, BIG),
-    },
-    "gsc_daily": {
-        "date": ("date",), "site_url": ("str",), "page": ("str",), "query": ("str",),
-        "clicks": ("int", 0, BIG), "impressions": ("int", 0, BIG),
-        "ctr": ("float", 0, 1), "position": ("float", 0, 10000),
     },
     "reddit_posts_daily": {
         "snapshot_date": ("date",), "subreddit": ("str",), "post_id": ("str",), "title": ("str",),
@@ -329,7 +287,7 @@ NULLABLE = {
 }
 # date columns that must fall inside the pulled window (snapshots are stamped
 # with the window end, so they must equal it; event dates must be in-window).
-WINDOW_DATE_COLS = {"ga4_daily": "date", "gsc_daily": "date"}
+WINDOW_DATE_COLS = {"ga4_daily": "date"}
 SNAPSHOT_TABLES = {"reddit_posts_daily", "substack_publication_daily", "substack_post_stats"}
 
 
@@ -393,8 +351,6 @@ def validate_rows(table: str, rows: list[dict], start: date, end: date) -> list[
             raise ValidationError(f"{table}[{n}].{wc}: {clean[wc]} outside window {start}..{end}")
         if table in SNAPSHOT_TABLES and clean["snapshot_date"] != end:
             raise ValidationError(f"{table}[{n}].snapshot_date must equal window end {end}")
-        if table == "gsc_daily" and clean["clicks"] > clean["impressions"]:
-            raise ValidationError(f"{table}[{n}]: clicks exceed impressions")
         out.append(clean)
     return out
 
