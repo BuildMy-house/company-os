@@ -37,21 +37,49 @@ front door serves only `/chat` and `/healthz`.
 
 | # | Criterion | Enforcement | Evidence |
 |---|---|---|---|
-| 1 | Own secret, two keys only, no `company-ops-secrets` | `k8s/base/pm-agent/pm-agent.yaml` env from `pm-agent-secrets` keys `PM_DATABASE_URL`, `PM_AGENT_LLM_API_KEY`; `envFrom` removed; `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml` syncs Infisical `/pm-agent` into it | `ManifestSecurityTest.test_own_secret_only_no_envfrom_company_ops`, `test_infisical_sync_targets_only_pm_agent_secret` |
+| 1 | Own secret, three keys only, no `company-ops-secrets` | `k8s/base/pm-agent/pm-agent.yaml` env from `pm-agent-secrets` keys `PM_DATABASE_URL`, `PM_AGENT_LLM_API_KEY`, and the optional `HINDSIGHT_API_KEY` (memory, see "Long-term memory"); `envFrom` removed; `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml` syncs Infisical `/pm-agent` into it | `ManifestSecurityTest.test_own_secret_only_no_envfrom_company_ops`, `test_infisical_sync_targets_only_pm_agent_secret` |
 | 2 | No Axiom | No Axiom env, plugin, or code; Hermes `plugins.enabled: []`; structured JSON logs to stdout | `test_no_axiom_credentials_or_env`, `test_no_axiom_anywhere_in_pm_agent_code` |
 | 3 | No SA token, dedicated SA, no RBAC | `ServiceAccount pm-agent`, `automountServiceAccountToken: false` on SA and pod, no Role/Binding | `test_dedicated_service_account_no_token_no_rbac` |
-| 4 | NetworkPolicy | Egress: hive-coordinator:4100, postgres:5432, kube-dns:53, public HTTPS:443 (LLM). Ingress: pm-agent-gateway:4200 only | `test_network_policy_*` (see enforcement finding below) |
-| 5 | Tool allowlist + AST ban | Hermes: one MCP server, `tools.include` = the two tools, one toolset; AST test bans privileged imports and dangerous calls over every `pm-agent/*.py` | `HermesConfigAllowlistTest`, `McpServerTest.test_advertises_exactly_the_allowlist`, `ForbiddenCodeTest` |
+| 4 | NetworkPolicy | Egress: hive-coordinator:4100, postgres:5432, hindsight:8888, kube-dns:53, public HTTPS:443 (LLM). Ingress: pm-agent-gateway:4200 only | `test_network_policy_*` (see enforcement finding below) |
+| 5 | Tool allowlist + AST ban | Hermes: one MCP server, `tools.include` = the four tools (`find_similar_signal`, `file_feedback_work`, `recall_lessons`, `retain_lesson`), one toolset; AST test bans privileged imports and dangerous calls over every `pm-agent/*.py` | `HermesConfigAllowlistTest`, `McpServerTest.test_advertises_exactly_the_allowlist`, `ForbiddenCodeTest` |
 | 6 | Prompt-injection v1 | `guard.py`: random-nonce delimited envelope, marker stripping, control/bidi stripping, 2000-char message cap (413), 16 KiB body cap, plain-text-only replies (links, URLs, markdown, HTML removed), fixed refusal (`OUT_OF_SCOPE` sentinel or secret-in-reply), 20 chats/user/hour, 3 filings/user/hour and 20 filings/hour globally, filed title/description capped and prefixed/headed "user-reported (untrusted)", every exchange and tool call logged to `pm_conversations` | `AdversarialInputTest`, `ChatServiceTest`, `ToolsTest` |
 | 7 | `pm_agent_writer` stays SELECT/INSERT/UPDATE on two tables | Unchanged by this work (PR #15 owns the UPDATE grant) | `RoleGrantTest` accepts the grant with or without UPDATE, rejects anything beyond |
 
 Steward read-only `query_memories`/`query_specs` are part of the allowlist but
 are deliberately not wired in v1: they need a Steward credential, and criterion
-1 limits `pm-agent-secrets` to two keys. If a read-only Steward token is later
+1 limits `pm-agent-secrets` to its three keys. If a read-only Steward token is later
 provisioned, add a `steward` server to `hermes-config.yaml` with
 `tools: {include: [query_memories, query_specs]}` (the test already enforces
 that exact list for any server named `*steward*`) and extend the secret and the
 NetworkPolicy deliberately.
+
+## Long-term memory (Hindsight bank `pm-lead`)
+
+pm-agent keeps a small notebook of lessons, so it gets better at taking reports,
+without carrying anything about people between users. It is not Hermes' built-in
+memory (still off) and not a Hermes plugin: it is two extra tools on the same
+`pm_tools` MCP server, implemented in `pm-agent/hindsight_memory.py`.
+
+- `recall_lessons(query)`: read-only search of bank `pm-lead`; the persona calls it
+  once at the start of a new feedback conversation. Results are capped (5 x 300
+  chars) and returned flagged as untrusted hints.
+- `retain_lesson(lesson, outcome, [topic])`: one short neutral lesson at the end
+  (what worked, what the user corrected, outcome). Text is normalised, URLs and
+  emails stripped, refused if it looks like a credential, capped at 400 chars, and
+  limited to 5 per user per hour and 40 globally.
+- `file_feedback_work` also writes one deterministic outcome note on
+  `filed_new` / `escalated` (topic + outcome only; never user ids, the summary, or
+  the quote).
+- The bank is fixed by `HINDSIGHT_BANK_ID` (default and manifest value `pm-lead`)
+  and is never a tool argument. Hindsight has one shared API key, so separation is
+  by bank name in code (see docs/HINDSIGHT-BANKS.md).
+- Fail-soft: with no `HINDSIGHT_API_KEY` (the secret key is `optional`) or with
+  Hindsight down, both tools return an unavailable/not-retained result and chat
+  continues. Tests: `tests/test_pm_agent_hindsight.py`.
+- Residual risk: lessons are derived from anonymous end-user chat, so a hostile
+  user can try to plant a misleading lesson. Mitigations are the filters above,
+  the per-user rate limit, the "untrusted hint" framing on recall, and that memory
+  can only influence how questions are asked, not tools, scope, or filing rules.
 
 ## NetworkPolicy enforcement finding
 
@@ -188,10 +216,10 @@ The in-cluster engineering agent should, via the hive:
 
 1. Build the image at the merged SHA and push it to the in-cluster registry.
    The build fails fast if `hermes` is not on PATH in the base image.
-2. Confirm the Infisical `/pm-agent` folder holds exactly the two secrets (user
+2. Confirm the Infisical `/pm-agent` folder holds exactly the three secrets, including `HINDSIGHT_API_KEY` (user
    action below), then apply `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml` (it is not in
    `k8s/overlays/buildmy-prod`, like `k8s/base/infisical-sync/infisical-sync.yaml`, because it needs
-   the operator CRDs) and confirm `pm-agent-secrets` exists with two keys.
+   the operator CRDs) and confirm `pm-agent-secrets` exists with three keys.
 3. Set the image tag in `k8s/base/pm-agent/pm-agent.yaml` to the built tag/digest and apply it
    (replacing `:latest`), then verify: pod Ready, `/healthz` 200, hive agent list
    shows `pm-agent`, a test `/chat` through the gateway returns a plain-text

@@ -24,7 +24,7 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | POSTGRES_PASSWORD | company-ops-secrets | postgres.yaml, entrypoint.sh | yes | Build My house `/hermes` |
 | COMPANY_PASSWORD, OBSERVER_PASSWORD, ANALYTICS_PASSWORD, PM_AGENT_WRITER_PASSWORD (each role's `password_key` in `sql/roles.d/*.yaml`) | read by `scripts/provision-db-roles.sh` from env or Infisical | role provisioning (see below) | yes | `/hermes` (NOT `/infra`) |
 | COMPANY_DATABASE_URL, OBSERVER_DATABASE_URL, ANALYTICS_DATABASE_URL | company-ops-secrets | hermes-gateway, engineering pods | yes | `/hermes` |
-| PM_DATABASE_URL, PM_AGENT_LLM_API_KEY | `pm-agent-secrets` (own Secret, `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml`; pm-agent no longer reads company-ops-secrets) | pm-agent only (docs/PM-AGENT-HERMES.md) | **NO — gap** | `/pm-agent` (exactly these two keys) |
+| PM_DATABASE_URL, PM_AGENT_LLM_API_KEY, HINDSIGHT_API_KEY (optional) | `pm-agent-secrets` (own Secret, `k8s/base/pm-agent-secrets-sync/pm-agent-infisical-sync.yaml`; pm-agent no longer reads company-ops-secrets) | pm-agent only (docs/PM-AGENT-HERMES.md) | **NO — gap** | `/pm-agent` (exactly these three keys) |
 | GITHUB_TOKEN, REDDIT_* (publish), PUBLISHER_DATABASE_URL, HINDSIGHT_API_KEY | `publisher-secrets` (`k8s/base/publisher-secrets-sync/publisher-infisical-sync.yaml`) | publisher pod main container (docs/PUBLISHER.md) | **NO - gap** | `/publisher` (exactly these keys) |
 | MARKETING_INGEST_DATABASE_URL, GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN, GA4_PROPERTY_ID, GSC_SITE_URL, REDDIT_* (read), SUBSTACK_PUBLICATION_URL, SUBSTACK_SESSION_TOKEN, SUBSTACK_USER_ID | `marketing-ingest-secrets` (`.../marketing-ingest-infisical-sync.yaml`) | marketing-ingest CronJob and publisher sidecar only | **NO - gap** | `/marketing-ingest` (exactly these keys) |
 | DISCORD_BOT_TOKEN | company-ops-secrets | hermes-gateway | yes | `/hermes` |
@@ -82,10 +82,11 @@ placeholder, so a blank secret can never clear a live role's password.
 
 ## Gap list — add these to Infisical (Nahar action, Infisical UI/CLI)
 
-Project **Build My house**, environment **dev**, new folder **`/pm-agent`** — create exactly these two keys (nothing else; the sync copies every key in the folder into `pm-agent-secrets`):
+Project **Build My house**, environment **dev**, new folder **`/pm-agent`** — create exactly these three keys (nothing else; the sync copies every key in the folder into `pm-agent-secrets`):
 
 1. `PM_DATABASE_URL` (DSN for the `pm_agent_writer` role)
 2. `PM_AGENT_LLM_API_KEY` (dedicated, spend-capped LLM key for pm-agent only)
+3. `HINDSIGHT_API_KEY` (the same value as in `/hermes`; Hindsight has one shared bearer, so this is not a separate credential. Optional at runtime: pm-agent starts without it, memory just stays off)
 
 `AXIOM_DATASET` (`bmh-company`) and `AXIOM_ENDPOINT` (`https://api.axiom.co`) are
 already present in `/hermes`. pm-agent uses neither. A stale `PM_DATABASE_URL`
