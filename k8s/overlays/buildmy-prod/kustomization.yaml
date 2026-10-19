@@ -13,4 +13,5 @@ resources:
   - ../../base/hive
   - ../../base/pm-agent
   - ../../base/backups
+  - ../../base/hindsight-dream
   - ../../base/dns-healthcheck

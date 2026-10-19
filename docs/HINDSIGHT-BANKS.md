@@ -11,7 +11,7 @@ before acting); a bank that is only written to teaches nothing.
 |---|---|---|---|---|
 | CEO (Hermes) | `ceo` | `hermes/hindsight/config.json` (`bank_id`), seeded to `$HERMES_HOME/hindsight/config.json` | `hindsight_retain` tool (SOUL.md "Long-term memory"); dream-audit in apply mode | `hindsight_recall` tool (SOUL.md); dream-audit dedupe |
 | PM lead (pm-agent) | `pm-lead` | `HINDSIGHT_BANK_ID` in `k8s/base/pm-agent/pm-agent.yaml` (code default `pm-lead`) | `retain_lesson` tool + automatic outcome note on filing | `recall_lessons` tool |
-| Marketing lead (was `publisher`) | `marketing-lead` | owned by the marketing-lead manager (`publisher/config/*`, not in this change) | their own | their own |
+| Marketing lead (was `publisher`) | `marketing-lead` | `marketing-lead/config/marketing-lead.json`, `k8s/base/marketing-lead/marketing-lead.yaml` | their own | their own |
 
 Rules:
 
@@ -52,6 +52,28 @@ switches) and once after (to catch anything retained in between). The old `herme
 bank can be left in place; it is covered by the daily `hindsight-data-backup`
 CronJob like every other bank. Copied memories are re-embedded; the extraction mode
 is `verbatim`, so no extra LLM spend beyond embedding.
+
+## Dream pass: injection / planted-lesson scan
+
+One shared key means anything able to retain into a bank can plant a "lesson" the
+agent later recalls. `company_ops/hindsight_dream.py` (stdlib only) is the scheduled
+pass over a bank: it lists valid memories, flags those matching rules
+(`override_instructions`, `instruction_to_agent`, `tool_request`,
+`credential_request`, `url`, `credential_like`; plus `anonymous_behaviour` for pm-lead,
+i.e. a model-written lesson that changes future behaviour) and, in apply mode,
+quarantines them by setting `state=invalidated` (PATCH `.../memories/{id}`). That is
+reversible (`state=valid`), kept for audit, and excluded from recall; the API has no
+per-memory delete. It logs only counts, rule names and ids, never memory text or the key.
+Hindsight's own server-side consolidation of observations is unchanged.
+
+| Agent / bank | Runs as | Schedule | Default mode |
+|---|---|---|---|
+| pm-lead | CronJob `hindsight-dream-pm-lead` (`--behaviour-check`) | 04:15 UTC daily | apply |
+| marketing-lead | CronJob `hindsight-dream-marketing-lead` | 04:30 UTC daily | apply |
+| ceo (Hermes) | `dream-audit-prepare.sh` pre-run step of the `dream-audit` cron (06:00/18:00 BTT) | twice daily | follows `$HERMES_HOME/dream-audit.mode`: audit (report only) until the Board sets `apply` |
+
+Review quarantined ids with `GET .../memories/list?state=invalidated`; restore a false
+positive with PATCH `{"state": "valid"}`. A Job's logs contain only the JSON summary.
 
 ## Operations
 

@@ -3,7 +3,10 @@
 # do the file work Hermes cannot: agent.disabled_toolsets includes file/terminal).
 #  1. reads the mode flag (default audit)   2. snapshots MEMORY.md/USER.md
 #  3. harvests the previous run's diary block into DREAMS.md
-#  4. prints the final {"wakeAgent": true, "context": {...}} line.
+#  4. runs the Hindsight injection scan on bank `ceo` (company_ops/hindsight_dream.py):
+#     audit mode only reports counts+ids, apply mode also quarantines flagged memories
+#     (never prints memory text)
+#  5. prints the final {"wakeAgent": true, "context": {...}} line.
 set -euo pipefail
 H="${HERMES_HOME:-/opt/data}"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -32,8 +35,15 @@ for out in $prev; do
   fi
 done
 
+# Injection scan of the CEO bank, gated by the same mode flag. Fails soft.
+DREAM_PY="${COMPANY_OPS_DIR:-/opt/company-ops}/company_ops/hindsight_dream.py"
+SCAN_ARGS=(--bank "${HINDSIGHT_BANK_ID:-ceo}")
+[ "$MODE" = "apply" ] && SCAN_ARGS+=(--apply)
+SCAN="$(timeout 120 python3 "$DREAM_PY" "${SCAN_ARGS[@]}" 2>/dev/null | tail -n 1 || true)"
+case "$SCAN" in "{"*"}") ;; *) SCAN='{"error": "scan_unavailable"}' ;; esac
+
 date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE"
 mc=$(wc -c < "$H/memories/MEMORY.md" 2>/dev/null || echo 0)
 uc=$(wc -c < "$H/memories/USER.md" 2>/dev/null || echo 0)
-printf '{"wakeAgent": true, "context": {"mode": "%s", "run_dir": "%s", "since": "%s", "snapshot_ok": %s, "memory_chars": %s, "user_chars": %s}}\n' \
-  "$MODE" "$RUN_DIR" "$SINCE" "$ok" "$mc" "$uc"
+printf '{"wakeAgent": true, "context": {"mode": "%s", "run_dir": "%s", "since": "%s", "snapshot_ok": %s, "memory_chars": %s, "user_chars": %s, "injection_scan": %s}}\n' \
+  "$MODE" "$RUN_DIR" "$SINCE" "$ok" "$mc" "$uc" "$SCAN"
