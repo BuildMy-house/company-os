@@ -10,7 +10,11 @@ from this repo by `scripts/seed-ceo-behavior.sh`.
 Git (source of truth, baked into the company-os image):
 
 - `hermes/skills/ceo-status-update/`, `hermes/skills/blog-draft-builder/`,
-  `hermes/skills/report-request/` — the skill definitions.
+  `hermes/skills/report-request/`, `hermes/skills/seo/` — the skill
+  definitions. The `seo` skill backs the CEO's weekly SEO job (see
+  `hermes-operations/domains/marketing/knowledge/seo-playbook.md`); it is
+  seeded but no seo cron job is wired yet, so it runs on explicit request
+  until that job exists.
 - `hermes/scripts/ceo-status-prepare.sh` — pre-run script for
   ceo-status-update; it prints the final `{"wakeAgent": true, "context": ...}`
   JSON line the cron session reads (Hermes has no file/terminal tools).
@@ -35,8 +39,8 @@ The PVC (`$HERMES_HOME`, `/opt/data` in the container) owns runtime state:
 Every container start, `entrypoint.sh` runs `seed-ceo-behavior.sh`
 (`|| true`; the seeder always exits 0 and never fails the boot). It:
 
-1. Copies the three CEO skills from the image into `$HERMES_HOME/skills/`
-   (only those three, overwritten; every other skill is left alone) and
+1. Copies the four CEO skills from the image into `$HERMES_HOME/skills/`
+   (only those four, overwritten; every other skill is left alone) and
    installs `ceo-status-prepare.sh` into `$HERMES_HOME/scripts/`.
 2. Overwrites
    `$HERMES_HOME/memory/decisions/2026-10-18-pricing-free-core-render-credits.md`

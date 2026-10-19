@@ -11,7 +11,7 @@ LOG="[ceo-behavior]"
 DECISION_FILE="2026-10-18-pricing-free-core-render-credits.md"
 
 # 1. Skills + pre-run script: overwrite ONLY these; never touch other skills.
-for skill in ceo-status-update blog-draft-builder report-request; do
+for skill in ceo-status-update blog-draft-builder report-request seo; do
   if [ -d "$CEO_SRC/skills/$skill" ]; then
     mkdir -p "$H/skills"
     rm -rf "$H/skills/$skill"

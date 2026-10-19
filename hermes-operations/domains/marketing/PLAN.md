@@ -26,6 +26,6 @@ Only the manager sets `done`. Blocked: set status + reason.
 
 Accumulated marketing knowledge lives in `knowledge/`:
 - `knowledge/brand-guide.md` — Brand voice and visual guidelines
-- `knowledge/seo-playbook.md` — SEO best practices for Homely
+- `knowledge/seo-playbook.md` — SEO playbook: title standard, CWV thresholds, structured data, intent buckets, and the weekly experiment log
 - `knowledge/content-calendar.md` — Upcoming content schedule
 - `knowledge/analytics-baseline.md` — Performance benchmarks
