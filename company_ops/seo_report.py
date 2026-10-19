@@ -185,9 +185,12 @@ def render_ticket_checklist(sections: dict[str, str]) -> str:
 
 
 def expected_ctr(position: float) -> float:
-    """Documented heuristic curve: pos1 ~28%, pos2 ~15%, pos3 ~10%, 4-5 ~6%, 6-10 ~3%, beyond ~1%."""
+    """Documented heuristic curve: pos1 ~28%, pos2 ~15%, pos3 ~10%, 4-5 ~6%, 6-10 ~3%, beyond ~1%.
+
+    GSC positions are averages, so bucket by the rounded rank (1.4 behaves like 1)."""
+    rank = max(1, round(position))
     for max_pos, ctr in EXPECTED_CTR_CURVE:
-        if max_pos is None or position <= max_pos:
+        if max_pos is None or rank <= max_pos:
             return ctr
     return EXPECTED_CTR_CURVE[-1][1]
 
@@ -354,7 +357,6 @@ def git_content_changes(repo_path: Path | None, since: date) -> list[dict[str, A
         "log",
         "--numstat",
         "--date=iso",
-        f"--since={since.isoformat()}",
         "--pretty=format:COMMIT:%H|%ad|%s",
         "--",
         "src/pages",
@@ -365,13 +367,17 @@ def git_content_changes(repo_path: Path | None, since: date) -> list[dict[str, A
         proc = subprocess.run(args, capture_output=True, text=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []
+    # Filter by committer date here instead of `git log --since`: git stops
+    # traversal at the first commit older than the given date, which hides
+    # non-monotonic histories (e.g. rebased/backdated commits).
     changes = []
     for record in parse_git_log(proc.stdout):
         try:
             record["committed_date"] = datetime.fromisoformat(record["committed_at"]).date().isoformat()
         except ValueError:
             record["committed_date"] = record["committed_at"]
-        changes.append(record)
+        if record["committed_date"] >= since.isoformat():
+            changes.append(record)
     return changes
 
 
