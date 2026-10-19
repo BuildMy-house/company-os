@@ -4,7 +4,7 @@ Status: proposal for a human decision. Nothing here has been registered, deploye
 
 ## Finding
 
-No marketing agent exists in Hive today. The only marketing-adjacent agents are the CEO (Hermes) and the designed-but-undeployed publisher (`docs/PUBLISHER.md`). Nobody currently owns search work, so the SEO playbook, `seo` skill, GSC ingest (`docs/SEO-GSC-INGEST.md`) and weekly loop (`docs/SEO-LEARNING-LOOP.md`) would have no runner.
+No marketing agent exists in Hive today. The only marketing-adjacent agents are the CEO (Hermes) and the designed-but-undeployed marketing-lead (`docs/MARKETING-LEAD.md`). Nobody currently owns search work, so the SEO playbook, `seo` skill, GSC ingest (`docs/SEO-GSC-INGEST.md`) and weekly loop (`docs/SEO-LEARNING-LOOP.md`) would have no runner.
 
 ## Recommendation
 
@@ -16,7 +16,7 @@ No marketing agent exists in Hive today. The only marketing-adjacent agents are 
 Per `docs/AGENT-CONTRACT.md` and `docs/TICKET-STANDARD.md`:
 
 - A distinct pod and identity registering via `POST /agents/register` through the MCP member adapter, with `profile`, `modes` (execute) and `capabilities.tools` set from `AGENT_TOOLS`.
-- Tools it should declare: `github-pr` (open PRs on the website and playbook), `marketing-db-read` (read `marketing.gsc_search_analytics`), `browser` (page checks). It should not declare `marketing-ingest`, `reddit-publish` or `substack-publish`; those stay with the publisher.
+- Tools it should declare: `github-pr` (open PRs on the website and playbook), `marketing-db-read` (read `marketing.gsc_search_analytics`), `browser` (page checks). It should not declare `marketing-ingest`, `reddit-publish` or `substack-publish`; those stay with the marketing-lead.
 - A read-only database DSN (`hermes_analytics` or `publisher_reader` role; entry in `sql/roles.d`), with no write grant. The ingest CronJob keeps `marketing_ingest`.
 - The `seo` skill mounted into its skills directory, and the playbook path readable.
 - Git guard: pushes limited to `seo/*` branches on company-os and `blog/<slug>` or `seo/*` branches on the website; no push to `main`; merge stays human.

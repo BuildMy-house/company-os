@@ -1,0 +1,92 @@
+#!/usr/bin/env node
+// Marketing-lead CLI: the one entry point the agent uses (see AGENTS.md). Each subcommand maps to a
+// declared tool (AGENT_TOOLS) and fails closed when its prerequisites are absent.
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Ledger, Refused, requireApproval } from "../lib/approval.mjs";
+import { analyzePost, formatReport, parseFrontMatter } from "../lib/analyze.mjs";
+import { openBlogPr, renderPost } from "../lib/blog.mjs";
+import { findRepo, openSitePr, startBranch, syncRepo, verifyCommands } from "../lib/sites.mjs";
+import { QUERIES, buildSql } from "../lib/dbq.mjs";
+import { hindsight } from "../lib/memory.mjs";
+import { publishReddit } from "../lib/reddit.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const env = process.env;
+const cfg = JSON.parse(readFileSync(env.MARKETING_LEAD_CONFIG || join(HERE, "..", "config", "marketing-lead.json"), "utf8"));
+const ledger = new Ledger(env.MARKETING_LEAD_LEDGER_FILE || "/var/lib/marketing-lead/ledger.jsonl");
+const SIDECAR = `http://127.0.0.1:${env.MARKETING_SIDECAR_PORT || 8099}`;
+const WORK = env.MARKETING_LEAD_WORKDIR || "/workspace";
+const out = (v) => console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
+const flags = (args) => { const f = {}; const pos = []; for (let i = 0; i < args.length; i++) { if (args[i].startsWith("--")) f[args[i].slice(2)] = args[++i]; else pos.push(args[i]); } return { f, pos }; };
+const need = (name) => { if (!env[name]) throw new Refused(`${name} is not set; this tool is unavailable in this pod`); return env[name]; };
+const git = (a, o) => execFileSync("git", a, { stdio: ["ignore", "pipe", "inherit"], ...o });
+async function sidecar(path, body) {
+  const r = await fetch(SIDECAR + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Refused(`sidecar ${path}: ${j.error || r.status}`);
+  return j;
+}
+const isClean = (dir) => execFileSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8" }).trim() === "";
+const syncSite = (name) => { mkdirSync(WORK, { recursive: true }); return syncRepo({ r: findRepo(cfg, name), work: WORK, run: git, exists: existsSync, clean: isClean }); };
+// blog pr fetches but keeps any in-progress checkout: openBlogPr resets its own branch from origin/base.
+function cloneBlog(repo) {
+  const r = findRepo(cfg, repo);
+  const dir = join(WORK, r.name);
+  if (existsSync(join(dir, ".git"))) git(["fetch", "origin"], { cwd: dir }); else syncSite(r.name);
+  return dir;
+}
+const existingPosts = (dir) => { const d = join(dir, cfg.blog.contentDir); return existsSync(d) ? readdirSync(d).filter((n) => n.endsWith(".md")).map((n) => { const { fm, body } = parseFrontMatter(readFileSync(join(d, n), "utf8")); return { slug: n, title: fm.title, body }; }) : []; };
+
+const [cmd, sub, ...rest] = process.argv.slice(2);
+try {
+  if (cmd === "analyze") { // marketing-lead analyze <post.md>
+    const dir = existsSync(join(WORK, findRepo(cfg, cfg.blog.repo).name, ".git")) ? join(WORK, findRepo(cfg, cfg.blog.repo).name) : null;
+    out(formatReport(analyzePost(readFileSync(sub, "utf8"), { existing: dir ? existingPosts(dir) : [], ...cfg.blog })));
+  } else if (cmd === "blog" && sub === "pr") { // marketing-lead blog pr --file draft.json  (json: title,category,tags,excerpt,body[,slug,date])
+    const { f } = flags(rest);
+    const rendered = renderPost(JSON.parse(readFileSync(f.file, "utf8")), cfg);
+    const repoDir = cloneBlog(cfg.blog.repo);
+    const report = analyzePost(rendered.content, { existing: existingPosts(repoDir), ...cfg.blog });
+    if (!report.ok) throw new Refused("blog pr refused until blocking findings are fixed:\n" + formatReport(report));
+    out(await openBlogPr({ rendered, repoDir, cfg, token: need("GITHUB_TOKEN"), run: git, write: (p, c) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, c); } }));
+  } else if (cmd === "repo") { // marketing-lead repo list|sync <name>|branch <name> blog/<slug>|verify <name>|pr <name> --branch blog/<slug> --message m [--title t --body b]
+    const { f, pos } = flags(rest);
+    if (sub === "list") out(cfg.repos.map(({ name, repo, baseBranch, verify, deploy, notes }) => ({ name, repo, baseBranch, verify, deploy, notes, dir: join(WORK, name) })));
+    else if (sub === "sync") out(syncSite(pos[0]));
+    else if (sub === "branch") out(startBranch({ r: findRepo(cfg, pos[0]), work: WORK, run: git, branch: pos[1] }));
+    else if (sub === "verify") {
+      const r = findRepo(cfg, pos[0]); const dir = join(WORK, r.name); const results = [];
+      for (const [c, ...a] of verifyCommands(r)) { const p = spawnSync(c, a, { cwd: dir, encoding: "utf8" }); results.push({ cmd: [c, ...a].join(" "), status: p.status, tail: `${p.stdout}${p.stderr}`.trim().split("\n").slice(-8).join("\n") }); if (p.status !== 0) break; }
+      out({ ok: results.length > 0 && results.every((x) => x.status === 0), results });
+    } else if (sub === "pr") {
+      const r = findRepo(cfg, pos[0]);
+      out(await openSitePr({ r, work: WORK, run: git, branch: f.branch, message: f.message, title: f.title, body: f.body, token: need("GITHUB_TOKEN"), hasChanges: (d) => !isClean(d) }));
+    } else throw new Refused("usage: marketing-lead repo list|sync <name>|branch <name> blog/<slug>|verify <name>|pr <name> --branch blog/<slug> --message m");
+  } else if (cmd === "reddit" && sub === "post") { // marketing-lead reddit post --subreddit x --title t --text body|--url u --approval-ref R
+    const { f } = flags(rest);
+    for (const n of ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USERNAME", "REDDIT_PASSWORD"]) need(n);
+    out(await publishReddit({ subreddit: f.subreddit, title: f.title, text: f.text, url: f.url, approvalRef: f["approval-ref"] }, cfg, ledger, env));
+  } else if (cmd === "substack") { // marketing-lead substack draft|publish|list ...
+    const { f } = flags(rest);
+    if (sub === "draft") out(await sidecar("/substack/call", { tool: "create_draft_post", arguments: { title: f.title, subtitle: f.subtitle || "", body: f.body } }));
+    else if (sub === "list") out(await sidecar("/substack/call", { tool: "list_posts", arguments: { status: f.status || "drafts" } }));
+    else if (sub === "publish") out(await sidecar("/substack/call", { tool: "publish_draft", arguments: { draft_id: Number(f["draft-id"]) }, approval_ref: requireApproval(f["approval-ref"], "substack publish") }));
+    else throw new Refused("usage: marketing-lead substack draft|list|publish");
+  } else if (cmd === "ingest") { // marketing-lead ingest <ga4|gsc|reddit|substack> [days]
+    out(await sidecar("/ingest", { source: sub, days: rest[0] ? Number(rest[0]) : 7 }));
+  } else if (cmd === "db") { // marketing-lead db <query-name> [--days N --limit N]
+    const { f } = flags(rest);
+    const params = Object.fromEntries(Object.entries(f).map(([k, v]) => [k, Number(v)]));
+    out(execFileSync("psql", [need("PUBLISHER_DATABASE_URL"), "-X", "--no-psqlrc", "-A", "-F", "\t", "-c", buildSql(sub, params)], { encoding: "utf8" }));
+  } else if (cmd === "db-queries") out(Object.keys(QUERIES));
+  else if (cmd === "memory" && (sub === "retain" || sub === "recall")) {
+    const h = hindsight(cfg, env);
+    out(sub === "retain" ? await h.retain(rest.join(" "), "marketing-lead") : await h.recall(rest.join(" ")));
+  } else throw new Refused("usage: marketing-lead analyze|blog pr|repo list|sync|branch|verify|pr|reddit post|substack draft|list|publish|ingest|db|db-queries|memory retain|recall");
+} catch (e) {
+  console.error(e instanceof Refused ? e.message : `error: ${e.message}`);
+  process.exit(e instanceof Refused ? 3 : 1);
+}

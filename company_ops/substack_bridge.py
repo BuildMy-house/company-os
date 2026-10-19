@@ -7,8 +7,8 @@ This module is the only place that spawns it. It speaks MCP over stdio
 (newline-delimited JSON-RPC) and exposes exactly three kinds of call:
 
 - READ_TOOLS: aggregate stats and the post list (used by the ingester).
-- DRAFT_TOOLS: create a draft (publisher agent, no approval needed).
-- PUBLISH_TOOLS: publish a draft (publisher agent, behind the approval gate
+- DRAFT_TOOLS: create a draft (marketing-lead agent, no approval needed).
+- PUBLISH_TOOLS: publish a draft (marketing-lead agent, behind the approval gate
   enforced by the sidecar; ``send`` is forced to false here so no email is
   ever sent from code).
 

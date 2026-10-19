@@ -88,7 +88,7 @@ Find the job id:
 kubectl -n company-ops exec deploy/hermes-gateway -- hermes cron list
 ```
 
-To re-enable once the publisher agent is deployed (run by an in-cluster
+To re-enable once the marketing-lead agent is deployed (run by an in-cluster
 agent with container-manager/kubectl access):
 
 ```

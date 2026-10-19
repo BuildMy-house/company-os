@@ -1,4 +1,4 @@
-"""Sidecar for the publisher pod: the only holder of the ingest DSN and the
+"""Sidecar for the marketing-lead pod: the only holder of the ingest DSN and the
 Substack session cookie. The agent (main container) reaches it on 127.0.0.1.
 
 Endpoints (JSON in, JSON out, loopback only):
@@ -87,7 +87,7 @@ def handle_substack(body: dict, env: dict, ledger: Ledger, call=None, now: datet
         ref = body.get("approval_ref")
         if not isinstance(ref, str) or not APPROVAL_REF_RE.match(ref):
             raise Refused("publish refused: a valid approval_ref from Hermes is required; draft only")
-        cap = int(env.get("PUBLISHER_SUBSTACK_DAILY_CAP", "1"))
+        cap = int(env.get("MARKETING_LEAD_SUBSTACK_DAILY_CAP", "1"))
         ledger.check_publish(ref, cap, now)
         result = call(tool, args)
         ledger.append({"ts": now.isoformat(), "channel": "substack", "approval_ref": ref, "tool": tool,
@@ -185,7 +185,7 @@ def make_handler(env: dict, ledger: Ledger):
 
 def main() -> int:
     env = dict(os.environ)
-    ledger = Ledger(env.get("PUBLISHER_LEDGER_FILE", "/var/lib/publisher/ledger.jsonl"))
+    ledger = Ledger(env.get("MARKETING_LEAD_LEDGER_FILE", "/var/lib/marketing-lead/ledger.jsonl"))
     if not write_ready(env):
         print("sidecar: not ready (DB DSN/ready-file missing or DB unreachable); marketing-ingest stays undeclared",
               file=sys.stderr)

@@ -1,6 +1,6 @@
 -- marketing_schema.sql: aggregate marketing analytics, filled by the
 -- deterministic ingester (company_ops/marketing_ingest.py), read by the
--- publisher agent (publisher_reader) and Hermes (hermes_analytics).
+-- marketing-lead agent (publisher_reader) and Hermes (hermes_analytics).
 -- Aggregate data only: no user-level rows, no PII columns.
 -- Run with: psql -f marketing_schema.sql <connection-string>
 -- Idempotent: safe to run multiple times.

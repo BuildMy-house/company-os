@@ -1,0 +1,38 @@
+#!/usr/bin/env node
+// Guarded git wrapper, installed first on PATH (/usr/local/bin/git). Refuses any push that is
+// not blog/<slug>, then execs the real git with the pre-push hook forced on.
+// Defense in depth, not a boundary: see lib/guard.mjs and docs/MARKETING-LEAD.md.
+import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { checkConfigArgs, checkPushArgs, checkSubcommand, parseGlobalArgs } from "../lib/guard.mjs";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const realGit = process.env.MARKETING_LEAD_REAL_GIT || "/usr/bin/git";
+const hooksDir = process.env.MARKETING_LEAD_HOOKS_DIR || join(here, "..", "hooks");
+
+function git(args, opts = {}) {
+  return spawnSync(realGit, args, { encoding: "utf8", ...opts });
+}
+
+try {
+  const { globals, rest } = parseGlobalArgs(process.argv.slice(2));
+  const [sub, ...subArgs] = rest;
+  checkSubcommand(sub);
+  if (sub === "push") {
+    checkPushArgs(subArgs, () => {
+      const r = git([...globals, "symbolic-ref", "--short", "HEAD"]);
+      if (r.status !== 0) throw Object.assign(new Error("push refused: HEAD is detached; name the branch explicitly."), { guard: true });
+      return r.stdout.trim();
+    });
+  } else if (sub === "config") {
+    checkConfigArgs(subArgs);
+  }
+  const final = ["-c", `core.hooksPath=${hooksDir}`, ...globals, ...rest];
+  const r = spawnSync(realGit, final, { stdio: "inherit" });
+  process.exit(r.status ?? 1);
+} catch (e) {
+  if (!e.guard) throw e;
+  console.error(`[marketing-lead-git-guard] ${e.message}`);
+  process.exit(77);
+}

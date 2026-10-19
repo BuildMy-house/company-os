@@ -2,7 +2,7 @@
 # Deterministic, no LLM. Writes the `marketing` schema as role marketing_ingest.
 #
 # NOT in the buildmy-prod overlay on purpose: it needs Secret
-# `marketing-ingest-secrets`, which a human creates first (see docs/PUBLISHER.md).
+# `marketing-ingest-secrets`, which a human creates first (see docs/MARKETING-LEAD.md).
 # Apply once by hand after that: kubectl apply -k k8s/base/marketing-ingest
 #
 # Secret `marketing-ingest-secrets` keys (names only; values are never in git).
@@ -43,10 +43,10 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: ingest
-              # Must be the PUBLISHER image (Dockerfile.publisher): it carries
+              # Must be the MARKETING-LEAD image (Dockerfile.marketing-lead): it carries
               # company_ops, python, node and the pinned substack-mcp. The digest
               # below is a stale placeholder (the postgres-backup pin); a human
-              # replaces it with the built publisher image digest (docs/IMAGES.md)
+              # replaces it with the built marketing-lead image digest (docs/IMAGES.md)
               # before the first run.
               image: localhost:30500/company-os-publisher@sha256:ec3a00c848c3f0335c60f834dc11e5b963bc01c00dc8e0f676df1d9f75a2ad90
               imagePullPolicy: Always

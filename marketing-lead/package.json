@@ -1,0 +1,6 @@
+{
+  "name": "marketing-lead-agent",
+  "private": true,
+  "type": "module",
+  "description": "Marketing-lead agent tooling. Zero dependencies; node:test only."
+}

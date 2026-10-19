@@ -108,7 +108,7 @@ file).
 Nothing below has been applied. These are the changes a human should review
 and apply after the Infisical entries exist. The layout follows
 `k8s/base/marketing-ingest/` (one directory, one `kustomization.yaml`, one
-manifest) and the dedicated-Secret pattern in `k8s/base/publisher-secrets-sync/`.
+manifest) and the dedicated-Secret pattern in `k8s/base/marketing-lead-secrets-sync/`.
 
 ### 1. Secrets: dedicated Secret, prod environment, `/seo`
 
@@ -196,7 +196,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: ingest
-              # Same image as marketing-ingest (Dockerfile.publisher carries
+              # Same image as marketing-ingest (Dockerfile.marketing-lead carries
               # company_ops + the venv). Replace the digest with the current
               # built image before applying (docs/IMAGES.md).
               image: localhost:30500/company-os-publisher@sha256:ec3a00c848c3f0335c60f834dc11e5b963bc01c00dc8e0f676df1d9f75a2ad90

@@ -21,7 +21,7 @@ Rules:
   module never logs or stores them.
 
 Run: ``python -m company_ops.marketing_ingest [--days N] [--source NAME]``.
-The same ``run`` code path backs the publisher's ``marketing-ingest`` tool
+The same ``run`` code path backs the marketing-lead's ``marketing-ingest`` tool
 (company_ops/marketing_sidecar.py).
 """
 
