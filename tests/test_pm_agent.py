@@ -1315,7 +1315,7 @@ class ManifestSecurityTest(unittest.TestCase):
             for e in self.container["env"]
             if "valueFrom" in e
         }
-        self.assertEqual(keys, {"PM_DATABASE_URL", "PM_AGENT_LLM_API_KEY"})
+        self.assertEqual(keys, {"PM_DATABASE_URL", "PM_AGENT_LLM_API_KEY", "HINDSIGHT_API_KEY"})
         manifest_code = "\n".join(
             line
             for line in (REPO / "k8s/base/pm-agent/pm-agent.yaml").read_text().splitlines()
@@ -1417,6 +1417,7 @@ class ManifestSecurityTest(unittest.TestCase):
         }
         self.assertEqual(pods["hive-coordinator"], [4100])
         self.assertEqual(pods["postgres"], [5432])
+        self.assertEqual(pods["hindsight"], [8888])
         self.assertEqual(pods["kube-dns"], [53, 53])
         ip_rules = [(peer, ports) for peer, ports in flat if "ipBlock" in peer]
         self.assertEqual(len(ip_rules), 1)
@@ -1424,7 +1425,7 @@ class ManifestSecurityTest(unittest.TestCase):
         self.assertEqual(ports, [443])  # LLM endpoint only
         for private in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"):
             self.assertIn(private, peer["ipBlock"]["except"])
-        self.assertEqual(len(flat), 4)  # nothing else
+        self.assertEqual(len(flat), 5)  # nothing else
 
     def test_gateway_unchanged_and_still_fronts_pm_agent(self):
         text = (REPO / "k8s/base/pm-agent/pm-agent-gateway.yaml").read_text()
@@ -1487,7 +1488,10 @@ class HermesConfigAllowlistTest(unittest.TestCase):
         env = self.cfg["mcp_servers"]["pm_tools"]["env"]
         self.assertEqual(
             set(env),
-            {"PM_DATABASE_URL", "HIVE_URL", "PM_CONTEXT_PATH", "PYTHONPATH"},
+            {
+                "PM_DATABASE_URL", "HIVE_URL", "PM_CONTEXT_PATH", "PYTHONPATH",
+                "HINDSIGHT_URL", "HINDSIGHT_API_KEY", "HINDSIGHT_BANK_ID",
+            },
         )
 
     def test_dockerfile_is_minimal_and_nonroot(self):

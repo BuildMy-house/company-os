@@ -54,7 +54,9 @@ custom_providers:
         - user=pm-agent
 
 # No auxiliary models, no plugins (the axiom_usage plugin is NOT enabled:
-# telemetry is structured stdout logs only), no memory across users.
+# telemetry is structured stdout logs only). Hermes' built-in memory stays off;
+# the only long-term memory is the two Hindsight tools on pm_tools (bank pm-lead,
+# user-free lessons only; never per-user data).
 plugins:
   enabled: []
 
@@ -113,9 +115,14 @@ mcp_servers:
       PM_DATABASE_URL: "${PM_DATABASE_URL}"
       HIVE_URL: "${HIVE_URL}"
       PM_CONTEXT_PATH: "/run/pm-agent/context.json"
+      # Long-term memory (pm-agent/hindsight_memory.py): the bank is fixed here,
+      # never a tool argument. Unset key = memory tools soft-disabled.
+      HINDSIGHT_URL: "${HINDSIGHT_URL}"
+      HINDSIGHT_API_KEY: "${HINDSIGHT_API_KEY}"
+      HINDSIGHT_BANK_ID: "${HINDSIGHT_BANK_ID}"
       PYTHONPATH: "/opt/company-ops:/opt/company-ops/pm-agent"
     tools:
-      include: [find_similar_signal, file_feedback_work]
+      include: [find_similar_signal, file_feedback_work, recall_lessons, retain_lesson]
       prompts: false
       resources: false
     connect_timeout: 30
