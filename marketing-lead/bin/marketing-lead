@@ -75,7 +75,7 @@ try {
     else if (sub === "list") out(await sidecar("/substack/call", { tool: "list_posts", arguments: { status: f.status || "drafts" } }));
     else if (sub === "publish") out(await sidecar("/substack/call", { tool: "publish_draft", arguments: { draft_id: Number(f["draft-id"]) }, approval_ref: requireApproval(f["approval-ref"], "substack publish") }));
     else throw new Refused("usage: marketing-lead substack draft|list|publish");
-  } else if (cmd === "ingest") { // marketing-lead ingest <ga4|gsc|reddit|substack> [days]
+  } else if (cmd === "ingest") { // marketing-lead ingest <ga4|reddit|substack> [days]
     out(await sidecar("/ingest", { source: sub, days: rest[0] ? Number(rest[0]) : 7 }));
   } else if (cmd === "db") { // marketing-lead db <query-name> [--days N --limit N]
     const { f } = flags(rest);

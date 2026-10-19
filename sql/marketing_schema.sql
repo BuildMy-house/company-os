@@ -21,20 +21,6 @@ CREATE TABLE IF NOT EXISTS marketing.ga4_daily (
   PRIMARY KEY (date, property_id, page_path, channel_group)
 );
 
--- Search Console searchanalytics: one row per day, page and query.
-CREATE TABLE IF NOT EXISTS marketing.gsc_daily (
-  date DATE NOT NULL,
-  site_url TEXT NOT NULL,
-  page TEXT NOT NULL,
-  query TEXT NOT NULL,
-  clicks BIGINT NOT NULL DEFAULT 0,
-  impressions BIGINT NOT NULL DEFAULT 0,
-  ctr DOUBLE PRECISION NOT NULL DEFAULT 0,
-  position DOUBLE PRECISION NOT NULL DEFAULT 0,
-  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (date, site_url, page, query)
-);
-
 -- Reddit: daily snapshot of score/comments for posts our own account made.
 CREATE TABLE IF NOT EXISTS marketing.reddit_posts_daily (
   snapshot_date DATE NOT NULL,
@@ -102,9 +88,9 @@ CREATE INDEX IF NOT EXISTS ingest_runs_source_started_idx
   ON marketing.ingest_runs (source, started_at DESC);
 
 -- Search Console searchanalytics with the full dimension set, filled by
--- company_ops/seo_gsc_ingest.py (service account, 16-month backfill).
--- The older marketing.gsc_daily (OAuth, no country/device) is untouched;
--- see docs/SEO-GSC-INGEST.md for the overlap and which one to keep.
+-- company_ops/seo_gsc_ingest.py (service account, 16-month backfill). This is the
+-- single Search Console table; the old OAuth-fed marketing.gsc_daily was dropped
+-- (sql/marketing_schema_v2_drop_gsc_daily.sql).
 CREATE TABLE IF NOT EXISTS marketing.gsc_search_analytics (
   site_url TEXT NOT NULL,
   date DATE NOT NULL,

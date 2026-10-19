@@ -2,7 +2,7 @@
 Substack session cookie. The agent (main container) reaches it on 127.0.0.1.
 
 Endpoints (JSON in, JSON out, loopback only):
-  POST /ingest          {"source": "ga4|gsc|reddit|substack", "days": 1..90}
+  POST /ingest          {"source": "ga4|reddit|substack", "days": 1..90}
       Runs the SAME code path as the daily CronJob (company_ops.marketing_ingest.run)
       for one named source: fetch, validate, upsert, record ingest_runs.
       The agent supplies no SQL and no row data, only a source name.

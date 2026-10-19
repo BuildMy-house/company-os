@@ -49,29 +49,20 @@ Environment variables:
 Nothing ever logs the key, the signed assertion, or the access token.
 Errors carry only a URL, status code and a short body prefix.
 
-## Overlap with `marketing_ingest.py`'s GSC fetcher
+## Single Search Console source
 
-| | `marketing.gsc_daily` (existing) | `marketing.gsc_search_analytics` (this job) |
-|---|---|---|
-| Auth | OAuth refresh token (`GOOGLE_REFRESH_TOKEN`) | service account (RS256 JWT) |
-| Dimensions | date, page, query | date, query, page, country, device |
-| Window | trailing 7 days, daily | trailing 7 days daily + 16-month backfill |
-| Schedule | `marketing-ingest` CronJob, 04:15 UTC | `seo-gsc-ingest` CronJob, 05:30 UTC |
-| PK | `(date, site_url, page, query)` | `(site_url, date, query, page, country, device)` |
-
-Both write from the same API and the aggregate numbers agree, but the row
-grains differ, so they cannot be merged without losing `country`/`device`.
-Recommendation: **keep `gsc_search_analytics` as the analytics source of
-truth** (richer dimensions, backfill, service-account auth independent of a
-refresh token that can be revoked) and retire the `gsc` source from
-`marketing_ingest.py` once downstream consumers (`publisher_reader`,
-`hermes_analytics`) have moved. That retirement is a separate change —
-`marketing.gsc_daily` and `fetch_gsc` are deliberately left in place here.
-Nothing in this ticket deletes them.
+`marketing.gsc_search_analytics` (this job, service account) is the **only**
+Search Console source. The older OAuth-fed path is removed: `fetch_gsc`, the
+`gsc` source and the `gsc_daily` validation are gone from
+`company_ops/marketing_ingest.py`, the `GSC_SITE_URL` key is no longer needed in
+`marketing-ingest-secrets`, and the marketing-lead's named db queries
+(`top-queries`, `gsc-top-pages`, `gsc-query-pages`, `gsc-low-ctr`) read
+`gsc_search_analytics`. `marketing.gsc_daily` is dropped by
+`sql/marketing_schema_v2_drop_gsc_daily.sql` (written, not applied; see Rollout).
 
 ## Migration
 
-The DDL is appended to `sql/marketing_schema.sql` (idempotent,
+The DDL lives in `sql/marketing_schema.sql` (idempotent,
 `CREATE TABLE IF NOT EXISTS`). Apply it as the role owner/admin:
 
 ```sh
