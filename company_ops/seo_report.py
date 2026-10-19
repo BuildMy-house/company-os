@@ -1,6 +1,6 @@
 """Weekly SEO learning loop (service: seo_report).
 
-Reads Google Search Console rows ingested into `public.seo_gsc_search_analytics`
+Reads Google Search Console rows ingested into `marketing.gsc_search_analytics`
 by `company_ops.seo_gsc_ingest` (READ-only here), compares the last 7 days
 against the prior 7 days, and emits:
 
@@ -56,15 +56,16 @@ EXPECTED_CTR_CURVE: tuple[tuple[float | None, float], ...] = (
 
 PAGE_QUERY_GRAIN_SQL = """
 SELECT query, page, sum(clicks) AS clicks, sum(impressions) AS impressions
-FROM public.seo_gsc_search_analytics
+FROM marketing.gsc_search_analytics
 WHERE date >= %s AND date <= %s
   AND (%s::text IS NULL OR site_url = %s)
 GROUP BY query, page
 """
 
 INGEST_HEALTH_SQL = """
-SELECT status, error, rows_fetched, finished_at
-FROM public.seo_gsc_ingest_runs
+SELECT status, error, rows_upserted, finished_at
+FROM marketing.ingest_runs
+WHERE source = 'gsc'
 ORDER BY started_at DESC
 LIMIT 1
 """
@@ -498,7 +499,7 @@ def title_rewrite_ticket(gap: dict[str, Any]) -> dict[str, Any]:
         points=2,
         sections={
             "Owner files": f"- `src/pages{page}` title/head block (website checkout)",
-            "Dependencies": "- None; GSC data is already ingested in seo_gsc_search_analytics.",
+            "Dependencies": "- None; GSC data is already ingested in marketing.gsc_search_analytics.",
             "Root cause / context": (
                 f"Weekly analysis (company_ops.seo_report, week ending report) found CTR {gap['ctr'] * 100:.1f}% at average position "
                 f"{gap['position']:.1f} over {gap['impressions']} impressions; the documented heuristic curve expects "
@@ -629,13 +630,25 @@ def build_analysis(rows_current: list[dict[str, Any]], rows_prior: list[dict[str
     }
 
 
+DSN_ENVS = ("TEST_ANALYTICS_DATABASE_URL", "ANALYTICS_DATABASE_URL", "MARKETING_INGEST_DATABASE_URL")
+
+
+def _report_dsn() -> str | None:
+    """Read-only DSN: prefer the hermes_analytics reader, fall back to the ingest role."""
+    for name in DSN_ENVS:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
 def fetch_grain_rows(week_ending: date, site_url: str | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     (cur_start, cur_end), (pri_start, pri_end) = week_windows(week_ending)
     ingest_health: dict[str, Any] = {"available": False}
     rows_current: list[dict[str, Any]] = []
     rows_prior: list[dict[str, Any]] = []
     try:
-        with _get_connection(resolve_dsn()) as conn, conn.cursor() as cur:
+        with _get_connection(resolve_dsn(_report_dsn() or '')) as conn, conn.cursor() as cur:
             cur.execute(PAGE_QUERY_GRAIN_SQL, (cur_start, cur_end, site_url, site_url))
             rows_current = cur.fetchall()
             cur.execute(PAGE_QUERY_GRAIN_SQL, (pri_start, pri_end, site_url, site_url))
@@ -695,7 +708,7 @@ def format_report_markdown(report: dict[str, Any], entries_count: int | None = N
     ]
     ingest = report["ingest_health"]
     if ingest.get("available"):
-        lines.append(f"Latest ingest run: status {ingest.get('status')!r}, rows {ingest.get('rows_fetched')}, finished {ingest.get('finished_at')}.")
+        lines.append(f"Latest ingest run: status {ingest.get('status')!r}, rows {ingest.get('rows_upserted')}, finished {ingest.get('finished_at')}.")
         lines.append("")
     if not report["has_data"]:
         lines += [
@@ -792,10 +805,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     week_ending = date.fromisoformat(args.week_ending) if args.week_ending else date.today() - timedelta(days=3)
     site_url = os.environ.get(SITE_URL_ENV, "").strip() or None
-    dsn = os.environ.get("TEST_COMPANY_DATABASE_URL") or os.environ.get("COMPANY_DATABASE_URL")
+    dsn = _report_dsn()
     if args.dry_run:
         if not dsn:
-            print(f"DB not configured: set COMPANY_DATABASE_URL (or TEST_COMPANY_DATABASE_URL) to run the SEO learning loop (exit {DB_NOT_CONFIGURED_EXIT}).")
+            print(f"DB not configured: set ANALYTICS_DATABASE_URL (or MARKETING_INGEST_DATABASE_URL) to run the SEO learning loop (exit {DB_NOT_CONFIGURED_EXIT}).")
             return DB_NOT_CONFIGURED_EXIT
         report = compile_seo_report(week_ending, site_url, args.repo_path)
         print(format_report_markdown(report))
@@ -809,11 +822,11 @@ def main(argv: list[str] | None = None) -> int:
                 print("  ", " ".join(cmd))
         return 0
     if not dsn:
-        print(f"DB not configured: set COMPANY_DATABASE_URL (or TEST_COMPANY_DATABASE_URL) to run the SEO learning loop (exit {DB_NOT_CONFIGURED_EXIT}).")
+        print(f"DB not configured: set ANALYTICS_DATABASE_URL (or MARKETING_INGEST_DATABASE_URL) to run the SEO learning loop (exit {DB_NOT_CONFIGURED_EXIT}).")
         return DB_NOT_CONFIGURED_EXIT
     report = compile_seo_report(week_ending, site_url, args.repo_path)
     if not report["has_data"]:
-        print("No data yet in seo_gsc_search_analytics for the window; nothing to learn this week.")
+        print("No data yet in marketing.gsc_search_analytics for the window; nothing to learn this week.")
     args.out.mkdir(parents=True, exist_ok=True)
     appended = append_learning(args.playbook, learnings_entry_from_report(report))
     report_path = args.out / f"seo-report-{week_ending.isoformat()}.md"

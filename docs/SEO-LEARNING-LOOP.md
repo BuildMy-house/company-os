@@ -6,7 +6,7 @@ exercised only from the company-os runtime.
 
 ## Sources
 
-- `company` schema tables `seo_gsc_search_analytics` and `seo_gsc_ingest_runs`
+- `marketing` schema tables `marketing.gsc_search_analytics` and `marketing.ingest_runs` (`source = 'gsc'`)
   (owned and populated by `seo_gsc_ingest.py`; this module reads them
   read-only).
 - Website git history (`src/pages`, `src/layouts`, `src/content`) from the
@@ -53,7 +53,7 @@ python -m company_ops.seo_report --week-ending 2026-10-17 --repo-path /srv/websi
 | Code | Meaning |
 |---|---|
 | 0 | Report written (or "no data yet") |
-| 3 | Database not configured (`COMPANY_DATABASE_URL` / `TEST_COMPANY_DATABASE_URL`) |
+| 3 | Database not configured (`ANALYTICS_DATABASE_URL` read-only reader, falling back to `MARKETING_INGEST_DATABASE_URL`) |
 | 4 | Ticket filing failed |
 
 `--file-tickets` and `--open-pr` never run automatically. They exist as opt-in
