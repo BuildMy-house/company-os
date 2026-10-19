@@ -87,7 +87,7 @@ run). Never start it on your own from a conversation.
    (runtime copy lives on the PVC, mirrors `company-os/memory/`, one dated file
    per note), and large knowledge to Steward (`save_memory`, `skill_save`).
    In `apply` mode also `hindsight_retain` each promoted item as one short atomic
-   statement (tags `hermes`, `dream`) with its `Source:` pointer. Never retain a
+   statement (tags `ceo`, `dream`) with its `Source:` pointer. Never retain a
    secret or a rejected item.
 6. AUDIT MODE: stop here. Do not write. Output the proposal (format below).
 7. APPLY MODE: the pre-run script already snapshotted MEMORY.md and USER.md to

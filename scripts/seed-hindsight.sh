@@ -23,6 +23,23 @@ fi
 mkdir -p "$H/hindsight"
 if [ -s "$DEST" ]; then
   echo "[hindsight] config already present; leaving as is"
+  # One-time bank rename (docs/HINDSIGHT-BANKS.md): the original default bank
+  # was "hermes"; the CEO's bank is now "ceo". Only that exact old default is
+  # rewritten; any other operator value is left alone. Copy the old bank's
+  # memories across first with scripts/hindsight-copy-bank.py.
+  python3 - "$DEST" <<'PY' || echo "[hindsight] WARN: bank migration skipped" >&2
+import json, sys
+path = sys.argv[1]
+cfg = json.load(open(path))
+if cfg.get("bank_id") == "hermes":
+    cfg["bank_id"] = "ceo"
+    if cfg.get("retain_tags") == ["hermes", "explicit"]:
+        cfg["retain_tags"] = ["ceo", "explicit"]
+    if cfg.get("retain_source") == "hermes":
+        cfg["retain_source"] = "ceo"
+    json.dump(cfg, open(path, "w"), indent=2)
+    print("[hindsight] migrated bank_id hermes -> ceo")
+PY
 else
   cp "$SRC/config.json" "$DEST"
   echo "[hindsight] seeded $DEST"
