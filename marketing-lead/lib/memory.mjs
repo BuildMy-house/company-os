@@ -15,6 +15,14 @@ export function hindsight(cfg, env, fetchImpl = fetch) {
   };
 }
 
+// One 2-3 day cycle as a single retained entry: hypothesis, change, measured result, lesson. The result of the
+// PREVIOUS cycle's experiment is retained as `result` once it is measured; recall at cycle start finds it by topic.
+export function formatCycle({ date, hypothesis, change, result, lesson }) {
+  const miss = Object.entries({ date, hypothesis, change, result, lesson }).filter(([, v]) => !String(v ?? "").trim()).map(([k]) => k);
+  if (miss.length) throw new Error(`cycle entry needs: ${miss.join(", ")} (use "pending" for a result not yet measurable)`);
+  return `SEO cycle ${date}\nHypothesis: ${hypothesis}\nChange: ${change}\nResult: ${result}\nLesson: ${lesson}`;
+}
+
 // Memory must hold decisions and learnings, never credentials or raw analytics rows.
 export function assertNoSecrets(text) {
   if (/(ghp_|github_pat_|xox[bp]-|AKIA[0-9A-Z]{12}|-----BEGIN [A-Z ]*PRIVATE KEY|postgres(ql)?:\/\/[^\s:]+:[^\s@]+@|Bearer\s+[A-Za-z0-9._-]{20,}|(password|secret|token|cookie)\s*[:=]\s*\S{6,})/i.test(text)) throw new Error("memory refused: content looks like a credential");

@@ -9,7 +9,7 @@ description: How to change the three site repos safely
 3. `marketing-lead repo branch <name> blog/<slug>` branches off origin/main. Only blog/<slug> can be pushed.
 4. Edit files under /workspace/<name>. Never put credentials, emails or subscriber data in a repo.
 5. `marketing-lead repo verify <name>` runs the repo's own CI (lint, check, build). Fix failures first.
-6. `marketing-lead repo pr <name> --branch blog/<slug> --message "..."` commits, pushes, opens the PR.
+6. `marketing-lead repo pr <name> --branch seo/<slug> --message "..."` commits, pushes, opens the PR.
 7. Blog posts: use `marketing-lead blog pr` (hermees-diary), not this flow.
 8. Do not merge. Merging is the human decision and may publish the site; say in the hand-back
    what is unverified (no live deploy path is confirmed for any of the three).

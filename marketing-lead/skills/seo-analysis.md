@@ -11,3 +11,7 @@ description: How to read analytics and the analysis tool to improve a post
 5. Do not duplicate an existing post: if analyze reports phrase overlap, extend that post instead.
 6. Report only what the data shows. State the source, date range and row counts. If a source
    was skipped or unavailable (marketing-lead db ingest-status), say that analysis is untested for it.
+7. Cycle (every 2-3 days): `marketing-lead db gsc-low-ctr` (CTR under 3% at average position 10 or better),
+   `gsc-query-pages` (queries with impressions and which page they land on; no good page means a
+   new post), `gsc-top-pages`. Pick one change, log the hypothesis in the playbook experiment log
+   before changing anything, and judge the previous experiment only past the playbook thresholds.

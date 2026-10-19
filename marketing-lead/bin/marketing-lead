@@ -10,7 +10,7 @@ import { analyzePost, formatReport, parseFrontMatter } from "../lib/analyze.mjs"
 import { openBlogPr, renderPost } from "../lib/blog.mjs";
 import { findRepo, openSitePr, startBranch, syncRepo, verifyCommands } from "../lib/sites.mjs";
 import { QUERIES, buildSql } from "../lib/dbq.mjs";
-import { hindsight } from "../lib/memory.mjs";
+import { formatCycle, hindsight } from "../lib/memory.mjs";
 import { publishReddit } from "../lib/reddit.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -82,10 +82,13 @@ try {
     const params = Object.fromEntries(Object.entries(f).map(([k, v]) => [k, Number(v)]));
     out(execFileSync("psql", [need("PUBLISHER_DATABASE_URL"), "-X", "--no-psqlrc", "-A", "-F", "\t", "-c", buildSql(sub, params)], { encoding: "utf8" }));
   } else if (cmd === "db-queries") out(Object.keys(QUERIES));
-  else if (cmd === "memory" && (sub === "retain" || sub === "recall")) {
+  else if (cmd === "memory" && sub === "retain-cycle") { // memory retain-cycle --date D --hypothesis .. --change .. --result .. --lesson ..
+    const { f } = flags(rest);
+    out(await hindsight(cfg, env).retain(formatCycle(f), "seo-cycle"));
+  } else if (cmd === "memory" && (sub === "retain" || sub === "recall")) {
     const h = hindsight(cfg, env);
     out(sub === "retain" ? await h.retain(rest.join(" "), "marketing-lead") : await h.recall(rest.join(" ")));
-  } else throw new Refused("usage: marketing-lead analyze|blog pr|repo list|sync|branch|verify|pr|reddit post|substack draft|list|publish|ingest|db|db-queries|memory retain|recall");
+  } else throw new Refused("usage: marketing-lead analyze|blog pr|repo list|sync|branch|verify|pr|reddit post|substack draft|list|publish|ingest|db|db-queries|memory retain|retain-cycle|recall");
 } catch (e) {
   console.error(e instanceof Refused ? e.message : `error: ${e.message}`);
   process.exit(e instanceof Refused ? 3 : 1);

@@ -7,7 +7,7 @@ import { Ledger, Refused, requireApproval } from "../lib/approval.mjs";
 import { analyzePost } from "../lib/analyze.mjs";
 import { openBlogPr, renderPost, slugify } from "../lib/blog.mjs";
 import { buildSql } from "../lib/dbq.mjs";
-import { assertNoSecrets } from "../lib/memory.mjs";
+import { assertNoSecrets, formatCycle, hindsight } from "../lib/memory.mjs";
 import { checkRedditPost, publishReddit } from "../lib/reddit.mjs";
 
 const cfg = JSON.parse(readFileSync(new URL("../config/marketing-lead.json", import.meta.url)));
@@ -91,4 +91,20 @@ test("memory: refuses credentials and bloated entries", () => {
   assert.throws(() => assertNoSecrets("postgresql://u:pw@h/db"), /credential/);
   assert.throws(() => assertNoSecrets("x\n".repeat(80)), /too long/);
   assertNoSecrets("Decision: lead with the 3D editor in post titles.");
+});
+
+test("memory: cycle retain/recall hit the marketing-lead bank with the bearer key, and refuse secrets", async () => {
+  const cfg = { hindsight: { url: "http://hindsight:8888/", bank: "marketing-lead" } };
+  const calls = [];
+  const fakeFetch = async (url, init) => { calls.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; };
+  const h = hindsight(cfg, { HINDSIGHT_API_KEY: "k-test" }, fakeFetch);
+  const entry = formatCycle({ date: "2026-10-19", hypothesis: "h", change: "c", result: "pending", lesson: "l" });
+  await h.retain(entry, "seo-cycle");
+  await h.recall("last experiment result");
+  assert.equal(calls[0].url, "http://hindsight:8888/v1/default/banks/marketing-lead/memories");
+  assert.equal(calls[1].url, "http://hindsight:8888/v1/default/banks/marketing-lead/memories/recall");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer k-test");
+  assert.match(JSON.parse(calls[0].init.body).items[0].content, /Hypothesis: h\nChange: c\nResult: pending\nLesson: l/);
+  assert.throws(() => formatCycle({ date: "d", hypothesis: "h" }), /needs: change, result, lesson/);
+  await assert.rejects(async () => h.retain("token: abcdef123456", "x"), /credential/);
 });
