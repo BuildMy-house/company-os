@@ -100,3 +100,28 @@ CREATE TABLE IF NOT EXISTS marketing.ingest_runs (
 
 CREATE INDEX IF NOT EXISTS ingest_runs_source_started_idx
   ON marketing.ingest_runs (source, started_at DESC);
+
+-- Search Console searchanalytics with the full dimension set, filled by
+-- company_ops/seo_gsc_ingest.py (service account, 16-month backfill).
+-- The older marketing.gsc_daily (OAuth, no country/device) is untouched;
+-- see docs/SEO-GSC-INGEST.md for the overlap and which one to keep.
+CREATE TABLE IF NOT EXISTS marketing.gsc_search_analytics (
+  site_url TEXT NOT NULL,
+  date DATE NOT NULL,
+  query TEXT NOT NULL,
+  page TEXT NOT NULL,
+  country TEXT NOT NULL,
+  device TEXT NOT NULL,
+  clicks INTEGER NOT NULL DEFAULT 0,
+  impressions INTEGER NOT NULL DEFAULT 0,
+  ctr DOUBLE PRECISION NOT NULL DEFAULT 0,
+  position DOUBLE PRECISION NOT NULL DEFAULT 0,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (site_url, date, query, page, country, device)
+);
+
+CREATE INDEX IF NOT EXISTS gsc_search_analytics_site_date_idx
+  ON marketing.gsc_search_analytics (site_url, date);
+
+CREATE INDEX IF NOT EXISTS gsc_search_analytics_site_page_idx
+  ON marketing.gsc_search_analytics (site_url, page);
