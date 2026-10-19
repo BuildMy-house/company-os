@@ -20,7 +20,7 @@ Only from the weekly SEO job, or on explicit Board request. Never start on your 
 
 - buildmy.house (House Designer for the Homely brand) is a free browser-based home, floor-plan, and 3D house-design tool. Anyone can start designing without an account or payment.
 - The marketing site is a static Astro site deployed to Cloudflare Pages. It is new — expect small numbers and short histories.
-- The Google Search Console property is `sc-domain:buildmy.house`. GSC data is ingested weekly into the ops Postgres `google_search_console` schema: `seo_gsc_search_analytics` (query/page metrics) and `seo_gsc_ingest_runs` (ingest health).
+- The Google Search Console property is `sc-domain:buildmy.house`. GSC data is ingested daily into the ops Postgres `marketing` schema: `marketing.gsc_search_analytics` (query/page metrics) and `marketing.ingest_runs` with `source = 'gsc'` (ingest health).
 - The site's title standard is `<Page> · buildmy.house`; thresholds and rules live in the playbook, not in this skill.
 
 ## HARD RULES (override everything else)
@@ -34,8 +34,8 @@ Only from the weekly SEO job, or on explicit Board request. Never start on your 
 
 ## Procedure
 
-1. **Check ingest health.** Query `seo_gsc_ingest_runs` (schema `google_search_console`) for the most recent `run_date` per `tool_slug`. If the latest run is missing or older than ~7 days, stop and file an ingest bug before reading analytics — below-threshold data from a broken ingest is worse than no data.
-2. **Run the report.** `python -m company_ops.seo_report`. It summarizes clicks, impressions, CTR, and position from `seo_gsc_search_analytics`. GSC data lags ~3 days — only compare windows that have fully settled.
+1. **Check ingest health.** Query `marketing.ingest_runs` where `source = 'gsc'` for the most recent run. If the latest run is missing or older than ~7 days, stop and file an ingest bug before reading analytics — below-threshold data from a broken ingest is worse than no data.
+2. **Run the report.** `python -m company_ops.seo_report`. It summarizes clicks, impressions, CTR, and position from `marketing.gsc_search_analytics`. GSC data lags ~3 days — only compare windows that have fully settled.
 3. **Pick at most 1–3 experiments** for the week. Prefer: a page with impressions but weak CTR-vs-position (title/snippet work), a page type missing structured data per playbook Section 5, or an intent bucket (Section 7) that deserves a new page — subject to the programmatic gates in Section 8.
 4. **Write the hypothesis BEFORE the change exists.** A change without a prior hypothesis is not an experiment.
 5. **Append the experiment-log entry** to `hermes-operations/domains/marketing/knowledge/seo-playbook.md` in the exact parseable format (`### YYYY-MM-DD <short title>`, then `- Hypothesis:`, `- Change:`, `- Metric:`, `- Result:`, `- Learning:`, `- Status: open|confirmed|refuted|inconclusive`). New entries get `Status: open`.

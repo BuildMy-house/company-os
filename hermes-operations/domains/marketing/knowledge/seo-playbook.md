@@ -60,7 +60,7 @@ This playbook is the CEO agent's single source of truth for SEO work on buildmy.
 
 ## 7. Keyword and intent buckets
 
-**Our hypothesis** — the buckets below are untitled territory: we have no keyword-volume tool access and no GSC data yet, so every term is an **unverified hypothesis** to be validated against real GSC queries once data exists (Section 9). Never quote volumes; there are none to quote.
+**Our hypothesis** — the buckets below are unvalidated territory: we have no keyword-volume tool access and no GSC data yet, so every term is an **unverified hypothesis** to be validated against real GSC queries once data exists (Section 9). Never quote volumes; there are none to quote.
 
 | Bucket | Example queries | Page type | CTA posture |
 |---|---|---|---|
@@ -87,9 +87,9 @@ There is no third way: each page either adds real value or it does not get built
 
 ## 9. Measurement
 
-Data source: Google Search Console (property `sc-domain:buildmy.house`), ingested weekly into the `google_search_console` schema of the ops Postgres — tables `seo_gsc_search_analytics` (query/page/clicks/impressions/CTR/position rows) and `seo_gsc_ingest_runs` (ingest health: `run_date`, `tool_slug`, `last_updated`). The weekly report command is `python -m company_ops.seo_report`.
+Data source: Google Search Console (property `sc-domain:buildmy.house`), ingested daily (3-day lag) into the `marketing` schema of the ops Postgres — table `marketing.gsc_search_analytics` (date/query/page/country/device rows with clicks/impressions/CTR/position) and `marketing.ingest_runs` where `source = 'gsc'` (ingest health). The weekly report command is `python -m company_ops.seo_report`.
 
-**Google says** the four metrics are clicks, impressions, CTR, and average position; data has roughly a ~3-day lag; Search Console impression counts are GOOGLE SEARCH impressions, not actual users [6-derived; see also GSC help]. **Practitioner heuristic / our standard**:
+**Google says** the four metrics are clicks, impressions, CTR, and average position; data has roughly a ~3-day lag; Search Console impression counts are GOOGLE SEARCH impressions, not actual users (Search Console performance-report definitions; not separately fetched — treat as practitioner knowledge). **Practitioner heuristic / our standard**:
 
 - CTR is only meaningful **relative to position** on queries with adequate impressions. A 2% CTR at position 1 is a problem; 2% at position 12 is fine.
 - Minimum thresholds before declaring a result (our decision, scaled for a new low-traffic site): a comparison window needs ≥2 weeks of post-change data and both windows ≥ a few hundred impressions on the affected pages/queries; below that the result is logged as `inconclusive`, not `confirmed`.
