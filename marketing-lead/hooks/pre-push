@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+// pre-push hook: second layer behind bin/git. Git calls it for every push, including pushes made
+// with /usr/bin/git when core.hooksPath comes from /etc/gitconfig. Args: <remote name> <remote url>.
+import { readFileSync } from "node:fs";
+import { checkRefLines, checkRemoteUrl } from "../lib/guard.mjs";
+
+try {
+  const allowed = String(process.env.MARKETING_LEAD_ALLOWED_REMOTES || "").split(",").map((s) => s.trim());
+  checkRemoteUrl(process.argv[3], allowed);
+  checkRefLines(readFileSync(0, "utf8"));
+} catch (e) {
+  if (!e.guard) throw e;
+  console.error(`[marketing-lead-pre-push] ${e.message}`);
+  process.exit(1);
+}

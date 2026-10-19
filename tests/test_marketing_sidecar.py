@@ -32,7 +32,7 @@ class SubstackGateTests(unittest.TestCase):
         self.go({"tool": "publish_draft", "arguments": {"draft_id": 5}, "approval_ref": REF})
         self.assertEqual(len(self.calls), 1)
         with self.assertRaises(sc.Refused):  # same ref reused
-            self.go({"tool": "publish_draft", "arguments": {"draft_id": 6}, "approval_ref": REF}, {"PUBLISHER_SUBSTACK_DAILY_CAP": "5"})
+            self.go({"tool": "publish_draft", "arguments": {"draft_id": 6}, "approval_ref": REF}, {"MARKETING_LEAD_SUBSTACK_DAILY_CAP": "5"})
 
     def test_daily_cap(self):
         self.go({"tool": "publish_draft", "arguments": {"draft_id": 5}, "approval_ref": REF})

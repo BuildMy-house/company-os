@@ -1,6 +1,6 @@
 # SEO Learning Loop
 
-Weekly analysis of Google Search Console data to turn ranking/CTR movement into
+Analysis, every 2-3 days, of Google Search Console data to turn ranking/CTR movement into
 documented learnings and follow-up tickets. Built by `company_ops/seo_report.py`,
 exercised only from the company-os runtime.
 
@@ -13,9 +13,9 @@ exercised only from the company-os runtime.
   checkout passed via `--repo-path`, used to correlate metric changes with
   content changes. Correlation only — no causation is claimed.
 
-## Weekly run
+## Cycle run
 
-Run the report job once a week:
+The marketing-lead agent owns the cycle and runs the report job every 2-3 days (ingest stays daily). The report always compares the last 7 settled days with the prior 7, so consecutive runs overlap; judge experiments only past the playbook thresholds:
 
 ```sh
 python -m company_ops.seo_report --week-ending 2026-10-17 --repo-path /srv/website --out seo-reports
@@ -62,7 +62,7 @@ effects.
 
 ## Scheduling (proposed, not applied)
 
-A weekly CronJob (Monday 06:00 UTC), modeled on
+A CronJob every 3 days at 06:00 UTC, modeled on
 `k8s/base/dns-healthcheck/dns-healthcheck.yaml`:
 
 ```yaml
@@ -72,7 +72,7 @@ metadata:
   name: seo-learning-loop
   namespace: company-ops
 spec:
-  schedule: "0 6 * * 1"
+  schedule: "0 6 */3 * *"
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:

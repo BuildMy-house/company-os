@@ -1,0 +1,13 @@
+# Installed as /etc/gitconfig. The git wrapper (/usr/local/bin/git) also injects core.hooksPath,
+# so the agent's -c overrides cannot disable the pre-push hook.
+[user]
+	name = buildmy.house marketing-lead
+	email = marketing-lead@buildmy.house
+[core]
+	hooksPath = /opt/marketing-lead/hooks
+[credential "https://github.com"]
+	helper = /opt/marketing-lead/bin/git-credential-marketing-lead
+[push]
+	default = nothing
+[init]
+	defaultBranch = main

@@ -1,4 +1,4 @@
-# Publisher agent: read-only on marketing. Cannot see company or observer.
+# Marketing-lead agent: read-only on marketing. Cannot see company or observer.
 name: publisher_reader
 login: true
 password_key: PUBLISHER_READER_PASSWORD
