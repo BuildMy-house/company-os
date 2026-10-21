@@ -353,4 +353,137 @@ defmodule Hive.SelectionTest do
       assert Selection.agent_tools(%{"capabilities" => %{"tools" => "browser"}}) == []
     end
   end
+
+  describe "repo scoping" do
+    defp repo_agent(repos), do: %{"capabilities" => %{"repos" => repos}}
+
+    defp rank_with_repo(bids, required_repo, agents, cfg \\ @cfg) do
+      ctx = Selection.context([], agents, "w1", [], @now, cfg, [], required_repo)
+      Selection.rank(bids, ctx, cfg)
+    end
+
+    test "a bidder missing the required repo is ineligible with reason repo_mismatch, before scoring" do
+      agents = %{"wrong" => repo_agent(["other"]), "right" => repo_agent(["smashlock"])}
+
+      result =
+        rank_with_repo(
+          [bid("wrong", cost: 0.05, confidence: 0.95), bid("right", cost: 1.0)],
+          "smashlock",
+          agents
+        )
+
+      assert result.winner["agent_id"] == "right"
+      assert result.mode == "cheapest_eligible"
+      wrong = Enum.find(result.ordered, &(&1["agent_id"] == "wrong"))
+      assert "repo_mismatch" in wrong["ineligible_reasons"]
+      assert wrong["worker_repos"] == ["other"]
+      refute wrong["eligible"]
+      refute wrong["selected"]
+    end
+
+    test "repo matching is case-insensitive and trims whitespace" do
+      agents = %{"a" => repo_agent(["SMASHLOCK"]), "b" => repo_agent(["  house-designer  "])}
+
+      result_a = rank_with_repo([bid("a"), bid("b")], "smashlock", agents)
+      assert result_a.winner["agent_id"] == "a"
+
+      result_b = rank_with_repo([bid("a"), bid("b")], "house-designer", agents)
+      assert result_b.winner["agent_id"] == "b"
+    end
+
+    test "an agent with no repos declared serves all repos (backward compatible)" do
+      agents = %{"universal" => repo_agent([]), "specific" => repo_agent(["smashlock"])}
+
+      result = rank_with_repo([bid("universal"), bid("specific")], "smashlock", agents)
+
+      assert result.winner["agent_id"] == "universal"
+      assert result.mode == "cheapest_eligible"
+    end
+
+    test "an agent with empty repos list serves all repos (backward compatible)" do
+      agents = %{"universal" => repo_agent([]), "specific" => repo_agent(["smashlock"])}
+
+      result = rank_with_repo([bid("universal"), bid("specific")], "other-repo", agents)
+
+      assert result.winner["agent_id"] == "universal"
+    end
+
+    test "work without repo is unscoped and any worker may bid" do
+      agents = %{"a" => repo_agent(["smashlock"]), "b" => repo_agent(["other"])}
+
+      result = rank_with_repo([bid("a"), bid("b")], nil, agents)
+
+      assert result.mode == "cheapest_eligible"
+      assert Enum.all?(result.ordered, &(&1["ineligible_reasons"] == []))
+      assert Enum.all?(result.ordered, &(&1["worker_repos"] == []))
+    end
+
+    test "score_fallback never picks a bidder that lacks the required repo" do
+      agents = %{"wrong" => repo_agent(["other"]), "right" => repo_agent(["smashlock"])}
+
+      # Both are below the confidence floor, so nothing is eligible and the old score
+      # ranking would apply; the wrong-repo one scores higher but is still hard-blocked.
+      result =
+        rank_with_repo(
+          [
+            bid("wrong", confidence: 0.2, score: 9.0),
+            bid("right", confidence: 0.2, score: 1.0)
+          ],
+          "smashlock",
+          agents
+        )
+
+      assert result.mode == "score_fallback"
+      assert result.winner["agent_id"] == "right"
+    end
+
+    test "when nobody declares the repo there is no winner at all, even in score mode" do
+      agents = %{"a" => repo_agent(["other1"]), "b" => repo_agent(["other2"])}
+      score_cfg = %{@cfg | selection_mode: "score"}
+
+      assert rank_with_repo([bid("a"), bid("b")], "smashlock", agents).winner == nil
+      assert rank_with_repo([bid("a"), bid("b")], "smashlock", agents, score_cfg).winner == nil
+    end
+
+    test "worker_repos annotation shows the agent's declared repos" do
+      agents = %{"partial" => repo_agent(["smashlock", "house-designer"])}
+
+      result = rank_with_repo([bid("partial")], "smashlock", agents)
+
+      partial = hd(result.ordered)
+      assert partial["worker_repos"] == ["house-designer", "smashlock"]
+    end
+
+    test "required_repo and repo_match? helpers work correctly" do
+      assert Selection.required_repo(%{"repo" => "smashlock"}) == "smashlock"
+      assert Selection.required_repo(%{}) == nil
+      assert Selection.required_repo(nil) == nil
+
+      agent = %{"capabilities" => %{"repos" => ["smashlock", "house-designer"]}}
+      assert Selection.repo_match?(agent, "smashlock")
+      assert Selection.repo_match?(agent, "SMASHLOCK")
+      assert Selection.repo_match?(agent, "  smashlock  ")
+      refute Selection.repo_match?(agent, "other")
+
+      universal = %{"capabilities" => %{"repos" => []}}
+      assert Selection.repo_match?(universal, "any-repo")
+
+      no_repos = %{"capabilities" => %{}}
+      assert Selection.repo_match?(no_repos, "any-repo")
+
+      nil_agent = nil
+      assert Selection.repo_match?(nil_agent, "any-repo")
+    end
+
+    test "agent_repos helper normalizes and filters" do
+      assert Selection.agent_repos(%{"capabilities" => %{"repos" => ["a", "b", "a", ""]}}) == [
+               "a",
+               "b"
+             ]
+
+      assert Selection.agent_repos(%{"capabilities" => %{"repos" => "not-a-list"}}) == []
+      assert Selection.agent_repos(%{}) == []
+      assert Selection.agent_repos(nil) == []
+    end
+  end
 end

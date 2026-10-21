@@ -122,7 +122,12 @@ defmodule Hive.RouterTest do
         "method" => "message/send",
         "params" => %{
           "message" => %{"parts" => [%{"text" => "points-item"}]},
-          "metadata" => %{"slug" => "points-item", "type" => "bug", "points" => 6, "base_points" => 3}
+          "metadata" => %{
+            "slug" => "points-item",
+            "type" => "bug",
+            "points" => 6,
+            "base_points" => 3
+          }
         }
       })
     )
@@ -130,6 +135,7 @@ defmodule Hive.RouterTest do
     |> Hive.Router.call(@opts)
 
     {:ok, work} = Hive.Work.available(100)
+
     by_slug =
       Map.new(work, fn item ->
         payload = item[:payload] || item["payload"]
@@ -169,6 +175,179 @@ defmodule Hive.RouterTest do
     assert submit.(invalid).status == 422
   end
 
+  test "rejects invalid repo type in metadata" do
+    submit = fn params ->
+      conn(
+        :post,
+        "/",
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "message/send",
+          "params" => params
+        })
+      )
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+    end
+
+    valid = %{
+      "message" => %{"parts" => [%{"text" => "repo-test-valid"}]},
+      "metadata" => %{"repo" => "smashlock"}
+    }
+
+    assert submit.(valid).status == 200
+
+    invalid_type = put_in(valid, ["metadata", "repo"], 123)
+    response = submit.(invalid_type)
+    assert response.status == 422
+
+    assert Jason.decode!(response.resp_body)["error"]["message"] =~
+             "repo must be a non-empty string"
+
+    empty_string = %{
+      "message" => %{"parts" => [%{"text" => "repo-test-empty"}]},
+      "metadata" => %{"repo" => ""}
+    }
+
+    assert submit.(empty_string).status == 200
+
+    whitespace_only = %{
+      "message" => %{"parts" => [%{"text" => "repo-test-whitespace"}]},
+      "metadata" => %{"repo" => "   "}
+    }
+
+    assert submit.(whitespace_only).status == 200
+  end
+
+  test "stores repo on work payload and filters bids by repo" do
+    # Register agents with different repo capabilities
+    :ok =
+      Hive.Work.register_agent(%{
+        "id" => "smashlock-worker",
+        "endpoint" => "http://a:1",
+        "capabilities" => %{"repos" => ["smashlock"]}
+      })
+
+    :ok =
+      Hive.Work.register_agent(%{
+        "id" => "house-worker",
+        "endpoint" => "http://b:1",
+        "capabilities" => %{"repos" => ["house-designer"]}
+      })
+
+    :ok =
+      Hive.Work.register_agent(%{
+        "id" => "universal-worker",
+        "endpoint" => "http://c:1",
+        "capabilities" => %{}
+      })
+
+    # Submit work scoped to smashlock
+    body =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "message/send",
+        "params" => %{
+          "message" => %{"parts" => [%{"text" => "smashlock-task"}]},
+          "metadata" => %{"repo" => "smashlock"}
+        }
+      })
+
+    conn =
+      conn(:post, "/", body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+
+    assert conn.status == 200
+    task_id = Jason.decode!(conn.resp_body)["result"]["id"]
+
+    # All three agents bid
+    for agent <- ["smashlock-worker", "house-worker", "universal-worker"] do
+      bid =
+        post_json("/work/#{task_id}/bids", %{
+          "agent_id" => agent,
+          "confidence" => 0.9,
+          "approach" => "test",
+          "estimated_cost" => 1,
+          "expected_benefit" => 3
+        })
+
+      assert bid.status == 201
+    end
+
+    # Check ranked bids - house-worker should be ineligible with repo_mismatch
+    conn = conn(:get, "/work/#{task_id}/bids") |> Hive.Router.call(@opts)
+    assert conn.status == 200
+    bids = Jason.decode!(conn.resp_body)["bids"]
+    house_bid = Enum.find(bids, &(&1["agent_id"] == "house-worker"))
+    assert house_bid["ineligible_reasons"] == ["repo_mismatch"]
+    assert house_bid["worker_repos"] == ["house-designer"]
+    refute house_bid["eligible"]
+
+    # smashlock-worker and universal-worker should be eligible
+    smashlock_bid = Enum.find(bids, &(&1["agent_id"] == "smashlock-worker"))
+    assert smashlock_bid["eligible"]
+    assert smashlock_bid["ineligible_reasons"] == []
+
+    universal_bid = Enum.find(bids, &(&1["agent_id"] == "universal-worker"))
+    assert universal_bid["eligible"]
+    assert universal_bid["ineligible_reasons"] == []
+  end
+
+  test "work without repo is unscoped and any worker may bid" do
+    :ok =
+      Hive.Work.register_agent(%{
+        "id" => "smashlock-worker",
+        "endpoint" => "http://a:1",
+        "capabilities" => %{"repos" => ["smashlock"]}
+      })
+
+    :ok =
+      Hive.Work.register_agent(%{
+        "id" => "house-worker",
+        "endpoint" => "http://b:1",
+        "capabilities" => %{"repos" => ["house-designer"]}
+      })
+
+    body =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "message/send",
+        # no repo in metadata
+        "params" => %{"message" => %{"parts" => [%{"text" => "unscoped-task"}]}}
+      })
+
+    conn =
+      conn(:post, "/", body)
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Hive.Router.call(@opts)
+
+    assert conn.status == 200
+    task_id = Jason.decode!(conn.resp_body)["result"]["id"]
+
+    for agent <- ["smashlock-worker", "house-worker"] do
+      bid =
+        post_json("/work/#{task_id}/bids", %{
+          "agent_id" => agent,
+          "confidence" => 0.9,
+          "approach" => "test",
+          "estimated_cost" => 1,
+          "expected_benefit" => 3
+        })
+
+      assert bid.status == 201
+    end
+
+    conn = conn(:get, "/work/#{task_id}/bids") |> Hive.Router.call(@opts)
+    bids = Jason.decode!(conn.resp_body)["bids"]
+    assert Enum.all?(bids, &(&1["eligible"] == true))
+    assert Enum.all?(bids, &(&1["ineligible_reasons"] == []))
+    assert Enum.all?(bids, &(&1["worker_repos"] == []))
+  end
+
   test "lists registered agents with endpoint and capabilities" do
     :ok =
       Hive.Work.register_agent(%{
@@ -180,7 +359,9 @@ defmodule Hive.RouterTest do
     conn = conn(:get, "/agents") |> Hive.Router.call(@opts)
     assert conn.status == 200
     agents = Jason.decode!(conn.resp_body)["agents"]
-    assert %{"endpoint" => "http://listed-worker:8001"} = Enum.find(agents, &(&1["id"] == "listed-worker"))
+
+    assert %{"endpoint" => "http://listed-worker:8001"} =
+             Enum.find(agents, &(&1["id"] == "listed-worker"))
   end
 
   test "bids and lifecycle events accept the readable slug" do
@@ -198,7 +379,10 @@ defmodule Hive.RouterTest do
   end
 
   test "GET bids for unknown work returns 404 instead of 500" do
-    for work_id <- ["no-such-work-slug", "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)] do
+    for work_id <- [
+          "no-such-work-slug",
+          "task_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+        ] do
       conn = conn(:get, "/work/#{work_id}/bids") |> Hive.Router.call(@opts)
       assert conn.status == 404
       assert Jason.decode!(conn.resp_body) == %{"error" => "work not found"}
@@ -455,7 +639,11 @@ defmodule Hive.RouterTest do
 
   test "complete rejects missing feedback with 422 before touching the lease" do
     body =
-      Jason.encode!(%{"agent_id" => "agent-1", "state" => "completed", "result" => %{"ok" => true}})
+      Jason.encode!(%{
+        "agent_id" => "agent-1",
+        "state" => "completed",
+        "result" => %{"ok" => true}
+      })
 
     conn =
       conn(:post, "/work/never-claimed/complete", body)
@@ -472,7 +660,9 @@ defmodule Hive.RouterTest do
       Jason.encode!(%{
         "agent_id" => "agent-1",
         "state" => "completed",
-        "result" => %{"feedback" => %{"calibration" => %{"estimated_cost" => 1}, "friction" => ""}}
+        "result" => %{
+          "feedback" => %{"calibration" => %{"estimated_cost" => 1}, "friction" => ""}
+        }
       })
 
     conn =
@@ -582,17 +772,17 @@ defmodule Hive.RouterTest do
 
     assert decline.status == 201
 
-    assert {:ok, worker_one} = Hive.Work.available_for("worker-one", 10)
+    assert {:ok, worker_one} = Hive.Work.available_for("worker-one", 500)
     worker_one_ids = Enum.map(worker_one, & &1.id)
     assert other_task in worker_one_ids
     refute declined_task in worker_one_ids
 
-    assert {:ok, worker_two} = Hive.Work.available_for("worker-two", 10)
+    assert {:ok, worker_two} = Hive.Work.available_for("worker-two", 500)
     worker_two_ids = Enum.map(worker_two, & &1.id)
     assert declined_task in worker_two_ids
     assert other_task in worker_two_ids
 
-    assert {:ok, all_available} = Hive.Work.available(10)
+    assert {:ok, all_available} = Hive.Work.available(500)
     all_ids = Enum.map(all_available, & &1.id)
 
     assert declined_task in all_ids

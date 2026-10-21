@@ -11,6 +11,10 @@ defmodule Hive.Reoffer do
   # Work with `requires_tools` is stricter: when no registered worker declares every
   # required tool it escalates at once (reason `missing_tools`, naming the tools) instead
   # of being re-offered, and the tier is never lowered to get around the tool filter.
+  #
+  # Work with `repo` is equally strict: when no registered worker declares the required
+  # repo it escalates at once (reason `missing_repo`, naming the repo) instead of being
+  # re-offered, and the tier is never lowered to get around the repo filter.
 
   @lower %{"power" => "standard", "standard" => "cheap", "cheap" => "cheap"}
   @incentive_step 0.5
@@ -34,24 +38,43 @@ defmodule Hive.Reoffer do
   nobody registered can do it at all.
   """
   def stale?(payload, interested_agent_ids, agents) do
-    case Hive.Selection.required_tools(payload) do
-      [] ->
-        interested_agent_ids == []
+    required = Hive.Selection.required_tools(payload)
+    repo = Hive.Selection.required_repo(payload)
 
-      required ->
-        case capable_workers(required, agents) do
+    cond do
+      required != [] ->
+        case capable_workers(required, agents, repo) do
           [] -> true
           capable -> not Enum.any?(interested_agent_ids, &(&1 in capable))
         end
+
+      repo != nil ->
+        case capable_workers_repo(repo, agents) do
+          [] -> true
+          capable -> not Enum.any?(interested_agent_ids, &(&1 in capable))
+        end
+
+      true ->
+        interested_agent_ids == []
     end
   end
 
   # Registered agents that can take work (execute mode, or no modes declared) and
   # declare every required tool.
-  defp capable_workers(required, agents) do
+  defp capable_workers(required, agents, repo) do
     for {id, agent} <- agents,
         worker?(agent),
         Hive.Selection.missing_tools(agent, required) == [],
+        Hive.Selection.repo_match?(agent, repo),
+        do: id
+  end
+
+  # Registered agents that can take work and declare the required repo
+  # (case-insensitive match).
+  defp capable_workers_repo(required_repo, agents) do
+    for {id, agent} <- agents,
+        worker?(agent),
+        Hive.Selection.repo_match?(agent, required_repo),
         do: id
   end
 
@@ -79,22 +102,34 @@ defmodule Hive.Reoffer do
     slug = payload["slug"]
     tier = payload["tier"] || "standard"
     required = Hive.Selection.required_tools(payload)
+    repo = Hive.Selection.required_repo(payload)
 
-    if required != [] and capable_workers(required, agents) == [] do
-      {:escalate,
-       %{
-         "reason" => "missing_tools",
-         "required_tools" => required,
-         "missing_tools" => missing_for_all(required, agents),
-         "reoffers" => done,
-         "slug" => slug
-       }}
-    else
-      plan_reoffer(payload, done, slug, tier, required != [])
+    cond do
+      required != [] and capable_workers(required, agents, repo) == [] ->
+        {:escalate,
+         %{
+           "reason" => "missing_tools",
+           "required_tools" => required,
+           "missing_tools" => missing_for_all(required, agents),
+           "reoffers" => done,
+           "slug" => slug
+         }}
+
+      repo != nil and capable_workers_repo(repo, agents) == [] ->
+        {:escalate,
+         %{
+           "reason" => "missing_repo",
+           "required_repo" => repo,
+           "reoffers" => done,
+           "slug" => slug
+         }}
+
+      true ->
+        plan_reoffer(payload, done, slug, tier, required != [] or repo != nil)
     end
   end
 
-  defp plan_reoffer(payload, done, slug, tier, tools_required?) do
+  defp plan_reoffer(payload, done, slug, tier, tools_or_repo_required?) do
     if done >= max_reoffers() do
       {:escalate,
        %{
@@ -106,8 +141,8 @@ defmodule Hive.Reoffer do
     else
       next = done + 1
       # Lowering the tier widens the pool of cheap bidders; for work that needs specific
-      # tools it must never be a way around the tool filter, so the tier is held.
-      new_tier = if tools_required?, do: tier, else: Map.get(@lower, tier, tier)
+      # tools or a specific repo it must never be a way around the filter, so the tier is held.
+      new_tier = if tools_or_repo_required?, do: tier, else: Map.get(@lower, tier, tier)
       incentive = 1.0 + @incentive_step * next
 
       updated =

@@ -507,13 +507,13 @@ defmodule Hive.Work do
 
   def handle_call({:prompt, id, requester_id}, _from, %{memory: memory} = state) do
     case memory.work[id] do
-      %{state: "available"} ->
+      %{state: "available"} = work ->
         existing_bids =
           memory.bids
           |> Enum.filter(fn {{work_id, _agent_id}, _bid} -> work_id == id end)
           |> Enum.map(fn {{_work_id, agent_id}, _bid} -> agent_id end)
 
-        prompt_subscribers(id, requester_id, existing_bids)
+        prompt_subscribers(work, requester_id, existing_bids, memory.agents)
         |> then(&{:reply, {:ok, &1}, state})
 
       nil ->
@@ -526,7 +526,7 @@ defmodule Hive.Work do
 
   def handle_call({:prompt, id, requester_id}, _from, %{db: db} = state) do
     case get_db(db, id) do
-      {:ok, %{"state" => "available"}} ->
+      {:ok, %{"state" => "available"} = work} ->
         existing_bids =
           Postgrex.query!(db, "SELECT agent_id FROM company.hive_work_bids WHERE work_id = $1", [
             id
@@ -534,7 +534,16 @@ defmodule Hive.Work do
           |> rows()
           |> Enum.map(& &1["agent_id"])
 
-        prompt_subscribers(id, requester_id, existing_bids)
+        agents =
+          Postgrex.query!(
+            db,
+            "SELECT id, endpoint, capabilities, last_seen_at FROM company.hive_agents",
+            []
+          )
+          |> rows()
+          |> Map.new(&{&1["id"], &1})
+
+        prompt_subscribers(work, requester_id, existing_bids, agents)
         |> then(&{:reply, {:ok, &1}, state})
 
       {:ok, _work} ->
@@ -1425,7 +1434,9 @@ defmodule Hive.Work do
       |> Enum.filter(fn {{id, _agent}, _bid} -> id == work_id end)
       |> Enum.map(fn {_key, bid} -> Map.put(bid, "score", score(bid, memory.scoring)) end)
 
-    required = Hive.Selection.required_tools(get_in(memory.work, [work_id, :payload]))
+    payload = get_in(memory.work, [work_id, :payload])
+    required = Hive.Selection.required_tools(payload)
+    repo = Hive.Selection.required_repo(payload)
 
     ctx =
       Hive.Selection.context(
@@ -1435,7 +1446,8 @@ defmodule Hive.Work do
         live_agent_ids(),
         now,
         cfg,
-        required
+        required,
+        repo
       )
 
     Hive.Selection.rank(bids, ctx, cfg)
@@ -1494,16 +1506,20 @@ defmodule Hive.Work do
       )
       |> rows()
 
-    required =
+    payload =
       case Postgrex.query!(db, "SELECT payload FROM company.hive_work_items WHERE id = $1", [
              work_id
            ])
            |> rows() do
-        [%{"payload" => payload}] -> Hive.Selection.required_tools(payload)
-        _ -> []
+        [%{"payload" => payload}] -> payload
+        _ -> %{}
       end
 
-    ctx = Hive.Selection.context(events, agents, work_id, live_agent_ids(), now, cfg, required)
+    required = Hive.Selection.required_tools(payload)
+    repo = Hive.Selection.required_repo(payload)
+
+    ctx =
+      Hive.Selection.context(events, agents, work_id, live_agent_ids(), now, cfg, required, repo)
 
     Hive.Selection.rank(bids, ctx, cfg)
     |> Map.put(:agents, agents)
@@ -1702,8 +1718,9 @@ defmodule Hive.Work do
     Postgrex.query!(db, query, params) |> rows()
   end
 
-  defp prompt_subscribers(work_id, requester_id, existing_bids) do
+  defp prompt_subscribers(work, requester_id, existing_bids, agents) do
     already_bid = MapSet.new(existing_bids)
+    repo = get_in(work, [:payload, "repo"])
 
     agent_ids =
       :ets.tab2list(:hive_subscribers)
@@ -1713,14 +1730,25 @@ defmodule Hive.Work do
       end)
       |> Enum.uniq()
 
-    prompted = Enum.reject(agent_ids, &MapSet.member?(already_bid, &1))
+    # Filter out agents that are repo-ineligible (mirroring how tools are handled)
+    repo_eligible =
+      if repo,
+        do: fn agent_id ->
+          Hive.Selection.repo_match?(Map.get(agents, agent_id), repo)
+        end,
+        else: fn _ -> true end
+
+    prompted =
+      agent_ids
+      |> Enum.reject(&MapSet.member?(already_bid, &1))
+      |> Enum.filter(repo_eligible)
 
     for {:work, pid, agent_id} <- :ets.tab2list(:hive_subscribers),
         agent_id in prompted,
-        do: send(pid, {:hive_work_prompt, work_id})
+        do: send(pid, {:hive_work_prompt, work.id})
 
     %{
-      "task_id" => work_id,
+      "task_id" => work.id,
       "prompted_agent_ids" => prompted,
       "already_bid_agent_ids" => Enum.filter(agent_ids, &MapSet.member?(already_bid, &1))
     }
@@ -1772,15 +1800,41 @@ defmodule Hive.Work do
 
       # Tool requirements (docs/TICKET-STANDARD.md "Requiring tools"): stored only when the
       # ticket names some, so tickets without `requires_tools` keep their old payload shape.
+      # Repo scoping: work metadata key `repo` (string) lands in payload as `repo`.
+      # Absent stays absent; non-empty string is trimmed and stored. Invalid type -> 4xx.
       case requires_tools(metadata["requires_tools"]) do
-        {:ok, []} -> {:ok, payload}
-        {:ok, tools} -> {:ok, Map.put(payload, "requires_tools", tools)}
-        :error -> {:error, :invalid_requires_tools}
+        {:ok, []} ->
+          case requires_repo(metadata["repo"]) do
+            {:ok, nil} -> {:ok, payload}
+            {:ok, repo} -> {:ok, Map.put(payload, "repo", repo)}
+            :error -> {:error, :invalid_repo}
+          end
+
+        {:ok, tools} ->
+          payload_with_tools = Map.put(payload, "requires_tools", tools)
+
+          case requires_repo(metadata["repo"]) do
+            {:ok, nil} -> {:ok, payload_with_tools}
+            {:ok, repo} -> {:ok, Map.put(payload_with_tools, "repo", repo)}
+            :error -> {:error, :invalid_repo}
+          end
+
+        :error ->
+          {:error, :invalid_requires_tools}
       end
     else
       {:error, :invalid_slug}
     end
   end
+
+  defp requires_repo(nil), do: {:ok, nil}
+
+  defp requires_repo(repo) when is_binary(repo) do
+    trimmed = String.trim(repo)
+    if trimmed != "", do: {:ok, trimmed}, else: {:ok, nil}
+  end
+
+  defp requires_repo(_), do: :error
 
   defp requires_tools(nil), do: {:ok, []}
 
