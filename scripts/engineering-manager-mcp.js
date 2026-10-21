@@ -872,7 +872,7 @@ export async function runHiveWork(candidate, deps = {}) {
   if (!repoAllowed(candidate, repos)) {
     const repo = workRepoOf(candidate);
     const served = normalizeRepos(repos);
-    console.error(`hive work skipped: repo=${repo} is not served by this worker (AGENT_REPOS=${served.length ? served.join(",") : "all"})`);
+    console.error(`hive work skipped: reason=repo_not_served repo=${repo} is not served by this worker (AGENT_REPOS=${served.length ? served.join(",") : "all"})`);
     await recordDecline(hiveCallDep, candidate, "repo_not_served");
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: "repo_not_served", repo });
     return;
@@ -1055,7 +1055,7 @@ export async function handleBidPrompt(request, deps = {}) {
   if (!repoAllowed(work, repos)) {
     const repo = workRepoOf(work);
     const served = normalizeRepos(repos);
-    console.error(`hive work declined: repo=${repo} is not served by this worker (AGENT_REPOS=${served.length ? served.join(",") : "all"})`);
+    console.error(`hive work declined: reason=repo_not_served repo=${repo} is not served by this worker (AGENT_REPOS=${served.length ? served.join(",") : "all"})`);
     return { outcome: "declined", worker_id: agentId, reason: "repo_not_served" };
   }
   let assessment = null;
