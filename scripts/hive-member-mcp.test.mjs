@@ -628,3 +628,126 @@ test("hive_submit validates requires_tools and leaves tool-free tickets unchange
   await submit({ message: "empty", metadata: { ...ticket, requires_tools: [] } });
   assert.equal("requires_tools" in submitted[2].params.metadata, false);
 });
+
+test("registration declares capabilities.repos only for the repos the worker serves", async (t) => {
+  async function registeredCapabilities(env) {
+    let captured;
+    const server = createServer(async (request, response) => {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      if (request.url === "/agents/register") captured = JSON.parse(body).capabilities;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const childEnv = { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "repos-test", AGENT_TOOLS: "", ...env };
+    if (!("AGENT_REPOS" in env)) delete childEnv.AGENT_REPOS;
+    const child = spawn(process.execPath, [memberScript], { env: childEnv, stdio: ["pipe", "pipe", "ignore"] });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    child.kill();
+    server.closeAllConnections();
+    server.close();
+    return captured;
+  }
+
+  assert.equal("repos" in (await registeredCapabilities({})), false, "no AGENT_REPOS declares no repos");
+  assert.equal("repos" in (await registeredCapabilities({ AGENT_REPOS: "" })), false, "an empty AGENT_REPOS declares no repos");
+  assert.equal("repos" in (await registeredCapabilities({ AGENT_REPOS: " , " })), false, "a blank AGENT_REPOS declares no repos");
+  assert.deepEqual((await registeredCapabilities({ AGENT_REPOS: "smashlock" })).repos, ["smashlock"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_REPOS: " SmashLock , other ,smashlock,," })).repos, ["other", "smashlock"]);
+});
+
+test("hive_submit validates metadata.repo and passes it through to Hive", async (t) => {
+  const submitted = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    if (request.method === "POST" && request.url === "/") submitted.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"result":{"id":"task_test"}}');
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "repo-ticket-test", HIVE_REGISTER: "false" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    waiters.get(message.id)?.(message);
+    waiters.delete(message.id);
+  });
+  let nextId = 1;
+  const submit = (args) => new Promise((resolve) => {
+    const id = nextId++;
+    waiters.set(id, resolve);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "hive_submit", arguments: args } })}\n`);
+  });
+  const ticket = { type: "chore", points: 2, goal: "Ship it.", acceptance_criteria: ["test passes"], scope: "repo smashlock, src/ only" };
+
+  const notString = await submit({ message: "qa", metadata: { ...ticket, repo: 42 } });
+  assert.match(notString.error.message, /TICKET-STANDARD/);
+  assert.match(notString.error.message, /metadata\.repo must be a string/);
+  const notList = await submit({ message: "qa", metadata: { ...ticket, repo: ["smashlock"] } });
+  assert.match(notList.error.message, /metadata\.repo must be a string/);
+  const blank = await submit({ message: "qa", metadata: { ...ticket, repo: "   " } });
+  assert.match(blank.error.message, /metadata\.repo must name a repo/);
+  assert.equal(submitted.length, 0, "an invalid repo never reaches Hive");
+
+  await submit({ message: "qa", metadata: { ...ticket, repo: " smashlock " } });
+  assert.equal(submitted[0].params.metadata.repo, "smashlock");
+
+  await submit({ message: "plain", metadata: ticket });
+  assert.equal("repo" in submitted[1].params.metadata, false, "a ticket without a repo stays unscoped");
+});
+
+test("instructions and tool descriptions document repo scoping", async (t) => {
+  const server = createServer((request, response) => {
+    if (request.method === "POST" && request.url === "/agents/register") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "repo-docs-test" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    waiters.get(message.id)?.(message);
+    waiters.delete(message.id);
+  });
+  const call = (id, method, params = {}) => new Promise((resolve) => {
+    waiters.set(id, resolve);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  });
+
+  const initialized = await call(1, "initialize", { protocolVersion: "2025-03-26" });
+  assert.match(initialized.result.instructions, /metadata\.repo/);
+  assert.match(initialized.result.instructions, /AGENT_REPOS/);
+
+  const listed = await call(2, "tools/list");
+  const byName = new Map(listed.result.tools.map((tool) => [tool.name, tool]));
+  assert.match(byName.get("hive_submit").description, /metadata\.repo/);
+  assert.match(byName.get("hive_submit").description, /AGENT_REPOS/);
+  assert.equal(byName.get("hive_submit").inputSchema.properties.metadata.properties.repo.type, "string");
+  assert.match(byName.get("hive_bid").description, /AGENT_REPOS/);
+});
+

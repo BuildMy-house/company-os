@@ -56,6 +56,14 @@ export function resolveAgentTools(env = process.env, hasChromium = defaultHasChr
   return tools.sort();
 }
 
+// Repo scoping (same shape as the requires_tools / capabilities.tools mechanism):
+// a worker declares the repos it serves in AGENT_REPOS (comma-separated, trimmed,
+// lowercased, deduped). Unset or empty means "serves every repo", so every worker
+// registered before this key existed stays eligible for every repo.
+export function resolveRepos(env = process.env) {
+  return [...new Set(String(env.AGENT_REPOS || "").split(",").map((r) => r.trim().toLowerCase()).filter(Boolean))].sort();
+}
+
 function defaultHasChromium(env) {
   const dir = env.PLAYWRIGHT_BROWSERS_PATH || "/opt/ms-playwright";
   try {
@@ -70,6 +78,9 @@ async function registerWithHive() {
   for (;;) {
     attempt += 1;
     try {
+      // Repos this worker serves. Declared only when non-empty: an empty list would
+      // read as "serves no repo" instead of the backward-compatible "serves all".
+      const repos = resolveRepos();
       await request("/agents/register", {
         method: "POST",
         body: JSON.stringify({
@@ -84,6 +95,7 @@ async function registerWithHive() {
             tier: ["cheap", "standard", "power"].includes(process.env.AGENT_TIER) ? process.env.AGENT_TIER : undefined,
             cost_factor: Number(process.env.AGENT_COST_FACTOR) > 0 ? Number(process.env.AGENT_COST_FACTOR) : undefined,
             tools: resolveAgentTools(),
+            ...(repos.length ? { repos } : {}),
           },
         }),
       });
@@ -145,6 +157,12 @@ export function applyTicketStandard(args) {
     if (unknown === null) problems.push("metadata.requires_tools must be an array of tool names");
     else if (unknown.length) problems.push(`metadata.requires_tools has unknown tool(s) ${unknown.map((t) => JSON.stringify(t)).join(", ")}; known tools: ${KNOWN_TOOLS.join(", ")}`);
   }
+  // Repo scoping: optional metadata.repo names the repo the ticket belongs to. It must be
+  // a plain string (the repo name), so a ticket cannot smuggle structure through it.
+  if (metadata.repo !== undefined) {
+    if (typeof metadata.repo !== "string") problems.push('metadata.repo must be a string (e.g. "smashlock") or omitted');
+    else if (metadata.repo.trim() === "") problems.push("metadata.repo must name a repo, not be empty");
+  }
   if (problems.length) throw new Error(`hive_submit rejected, ticket does not meet docs/TICKET-STANDARD.md: ${problems.join("; ")}`);
 
   const bumps = metadata.type === "bug" ? [...new Set(metadata.bug_modifiers || [])].reduce((sum, m) => sum + BUG_BUMPS[m], 0) : 0;
@@ -160,9 +178,12 @@ export function applyTicketStandard(args) {
   ].join("\n\n");
   // An explicit tier still wins, so a submitter can force power for work the points understate.
   const tier = ["cheap", "standard", "power"].includes(metadata.tier) ? metadata.tier : tierForPoints(points);
-  const { bug_modifiers, requires_tools, ...rest } = metadata;
+  const { bug_modifiers, requires_tools, repo, ...rest } = metadata;
   const tools = requires_tools?.length ? { requires_tools: [...new Set(requires_tools)].sort() } : {};
-  return { message, metadata: { ...rest, ...tools, points, base_points: metadata.points, tier } };
+  // Repo is passed through untouched (trimmed) so Hive stores it on the work payload;
+  // an unset repo stays unset, which means the work is unscoped.
+  const scoped = typeof repo === "string" && repo.trim() !== "" ? { repo: repo.trim() } : {};
+  return { message, metadata: { ...rest, ...tools, ...scoped, points, base_points: metadata.points, tier } };
 }
 
 // Client-side fail-fast for the hive_complete feedback contract
@@ -329,11 +350,11 @@ async function waitForEvent(taskId, timeoutSeconds = 900) {
 
 // Lifecycle guidance sent in the initialize response (HIVE-GUIDANCE-FEEDBACK.md
 // section 1, plus the dynamic-guidance directive from the Phase 1 ticket).
-const instructions = `Hive member tools for the company-os coordination service (Elixir/Postgres work, leases, durable events). Lifecycle: 1) hive_available_work lists open work; bid with hive_bid (confidence, approach, estimated_cost, expected_benefit). 2) Block, never poll: idle members wait inside hive_next_work; members awaiting a specific task wait inside hive_wait(task_id) — do NOT loop hive_status (one-off inspection only) or hive_available_work. 3) While holding a lease, renew with hive_heartbeat every few minutes and always before lease_seconds elapse (default 900) — an expired lease lets the task be re-allocated. 4) hive_complete is terminal: exactly one call per task with state completed|failed and a result.feedback object; after it the lease is gone and hive_wait returns. When any stream call errors, call hive_diagnostics first. hive_events replays durable history; hive_status reads current state; hive_work_bids audits who won and why. When Steward MCP tools are available, call generate_guidance_packet(scope_path: "hive") against Steward to fetch shared guidance before bidding (hive_bid).`;
+const instructions = `Hive member tools for the company-os coordination service (Elixir/Postgres work, leases, durable events). Lifecycle: 1) hive_available_work lists open work; bid with hive_bid (confidence, approach, estimated_cost, expected_benefit). 2) Block, never poll: idle members wait inside hive_next_work; members awaiting a specific task wait inside hive_wait(task_id) — do NOT loop hive_status (one-off inspection only) or hive_available_work. 3) While holding a lease, renew with hive_heartbeat every few minutes and always before lease_seconds elapse (default 900) — an expired lease lets the task be re-allocated. 4) hive_complete is terminal: exactly one call per task with state completed|failed and a result.feedback object; after it the lease is gone and hive_wait returns. When any stream call errors, call hive_diagnostics first. hive_events replays durable history; hive_status reads current state; hive_work_bids audits who won and why. When Steward MCP tools are available, call generate_guidance_packet(scope_path: "hive") against Steward to fetch shared guidance before bidding (hive_bid). Repo scoping: a ticket may name its repo with metadata.repo (string, e.g. "smashlock"); it lands in the work payload and only workers that serve that repo bid on it. This worker's served repos come from the AGENT_REPOS env (comma-separated); unset means it serves every repo.`;
 
 const tools = [
-  { name: "hive_submit", description: "Submit work to Hive and return its durable task id. Tickets must follow docs/TICKET-STANDARD.md or are rejected: metadata.type (feature|bug|chore), metadata.points (1,2,3,5,8,13), metadata.goal, metadata.acceptance_criteria (array), metadata.scope; bugs may add metadata.bug_modifiers (needs_diagnosis +2, touches_production +1). Optional metadata.requires_tools (known: browser, hindsight, kubectl-deploy, image-build, hermes-data, postgres-admin, github-pr, reddit-publish, substack-publish, marketing-db-read, marketing-ingest) routes the ticket only to agents declaring all of them; if none exists it escalates to a human instead of dropping tier. Points set the tier unless metadata.tier is given. After submitting, block on hive_wait(task_id) for the outcome — never poll hive_status.", inputSchema: { type: "object", required: ["message", "metadata"], properties: { message: { type: "string" }, metadata: { type: "object", required: ["type", "points", "goal", "acceptance_criteria", "scope"], properties: { type: { type: "string", enum: TICKET_TYPES }, points: { type: "integer", enum: FIBONACCI_POINTS }, goal: { type: "string" }, acceptance_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, scope: { type: "string" }, bug_modifiers: { type: "array", items: { type: "string", enum: Object.keys(BUG_BUMPS) } }, tier: { type: "string", enum: ["cheap", "standard", "power"] }, requires_tools: { type: "array", items: { type: "string", enum: KNOWN_TOOLS } }, approval_ref: { type: "string", description: "Board/Hermes approval reference; the marketing-lead agent refuses to publish to Reddit or Substack without it (docs/MARKETING-LEAD.md)." } } } }, additionalProperties: false } },
-  { name: "hive_bid", description: "Submit or update this agent's bid for Hive work (confidence, approach, estimated_cost, expected_benefit). After bidding, wait for allocation via hive_next_work or hive_wait(work_id); once allocated, hive_heartbeat the task while working.", inputSchema: { type: "object", required: ["work_id", "confidence", "approach", "estimated_cost", "expected_benefit"], properties: { work_id: { type: "string" }, interested: { type: "boolean" }, confidence: { type: "number", minimum: 0, maximum: 1 }, approach: { type: "string" }, estimated_cost: { type: "number", minimum: 0 }, expected_benefit: { type: "number", minimum: 0 }, risk: { type: "string" }, evidence: { type: "string" } }, additionalProperties: false } },
+  { name: "hive_submit", description: "Submit work to Hive and return its durable task id. Tickets must follow docs/TICKET-STANDARD.md or are rejected: metadata.type (feature|bug|chore), metadata.points (1,2,3,5,8,13), metadata.goal, metadata.acceptance_criteria (array), metadata.scope; bugs may add metadata.bug_modifiers (needs_diagnosis +2, touches_production +1). Optional metadata.requires_tools (known: browser, hindsight, kubectl-deploy, image-build, hermes-data, postgres-admin, github-pr, reddit-publish, substack-publish, marketing-db-read, marketing-ingest) routes the ticket only to agents declaring all of them; if none exists it escalates to a human instead of dropping tier. Optional metadata.repo (string, e.g. \"smashlock\") scopes the ticket to that repo: only workers that declare it in their AGENT_REPOS bid on it; omit it for repo-agnostic work that any worker may take. Points set the tier unless metadata.tier is given. After submitting, block on hive_wait(task_id) for the outcome — never poll hive_status.", inputSchema: { type: "object", required: ["message", "metadata"], properties: { message: { type: "string" }, metadata: { type: "object", required: ["type", "points", "goal", "acceptance_criteria", "scope"], properties: { type: { type: "string", enum: TICKET_TYPES }, points: { type: "integer", enum: FIBONACCI_POINTS }, goal: { type: "string" }, acceptance_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, scope: { type: "string" }, bug_modifiers: { type: "array", items: { type: "string", enum: Object.keys(BUG_BUMPS) } }, tier: { type: "string", enum: ["cheap", "standard", "power"] }, requires_tools: { type: "array", items: { type: "string", enum: KNOWN_TOOLS } }, repo: { type: "string", description: "Repo this ticket belongs to (e.g. \"smashlock\"). Only workers declaring it in AGENT_REPOS bid on it; omit for work any repo may take." }, approval_ref: { type: "string", description: "Board/Hermes approval reference; the marketing-lead agent refuses to publish to Reddit or Substack without it (docs/MARKETING-LEAD.md)." } } } }, additionalProperties: false } },
+  { name: "hive_bid", description: "Submit or update this agent's bid for Hive work (confidence, approach, estimated_cost, expected_benefit). Only bid on work this worker serves: work naming a repo (metadata.repo) is eligible only when the repo is in this worker's AGENT_REPOS; repo-less work is open to every worker. After bidding, wait for allocation via hive_next_work or hive_wait(work_id); once allocated, hive_heartbeat the task while working.", inputSchema: { type: "object", required: ["work_id", "confidence", "approach", "estimated_cost", "expected_benefit"], properties: { work_id: { type: "string" }, interested: { type: "boolean" }, confidence: { type: "number", minimum: 0, maximum: 1 }, approach: { type: "string" }, estimated_cost: { type: "number", minimum: 0 }, expected_benefit: { type: "number", minimum: 0 }, risk: { type: "string" }, evidence: { type: "string" } }, additionalProperties: false } },
   { name: "hive_work_bids", description: "Read the ranked bids for Hive work, by id, slug or task id (work_id, work_slug and task_id are interchangeable). Order is the allocation order: eligible bids cheapest first, each with eligible/ineligible_reasons/selected and the bidder's stored rationale. Call before hive_allocate to sanity-check the ranking, or after allocation to audit why a bidder won.", inputSchema: { type: "object", properties: { work_id: { type: "string" }, work_slug: { type: "string" }, task_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
   { name: "hive_cost_ledger", description: "Read-only cost ledger: per-agent allocations, failures (failed, lease_expired, escalated), runtime and total estimated cost, plus the most recent allocation rows with outcome. Use it to see whether cost-aware allocation is working; pair with hive_work_bids for one task.", inputSchema: { type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 365 }, limit: { type: "integer", minimum: 1, maximum: 200 } }, additionalProperties: false } },
   { name: "hive_available_work", description: "List currently available Hive work items (id, slug, payload). Pick items worth bidding on and call hive_bid; to learn of new arrivals, wait inside hive_next_work instead of re-calling this in a loop.", inputSchema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
