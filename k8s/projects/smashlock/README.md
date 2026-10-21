@@ -24,9 +24,6 @@ A human must create the following keys in the Infisical folder `/smashlock`
 | Key | Description |
 |-----|-------------|
 | `GITHUB_TOKEN` | Fine-grained PAT scoped to **exactly** `BuildMy-house/SmashLock` with `contents:write` + `pull_requests:write` |
-| `STEWARD_CLIENT_ID` | Steward machine identity client ID for `smashlock-opencode` agent |
-| `STEWARD_CLIENT_SECRET` | Steward machine identity client secret for `smashlock-opencode` agent |
-| `STEWARD_API_URL` | Steward API URL (e.g. `http://steward-api:8080`) |
 | `AXIOM_API_KEY` | Axiom API key for `smashlock-opencode-k8s` service |
 | `AXIOM_DATASET` | Axiom dataset name (e.g. `smashlock-logs`) |
 | `TOKENROUTER_API_KEY` | TokenRouter API key for `oc-tokenrouter/z-ai/glm-5.3-free` model |
@@ -36,8 +33,8 @@ InfisicalStaticSecret `smashlock-sync` copies the entire folder into the
 Kubernetes Secret `smashlock-secrets` in `company-ops`.
 
 A second InfisicalStaticSecret (`company-ops-steward-smashlock-opencode`)
-syncs the Steward identity from `/infra/steward/smashlock-opencode` into its
-own Secret `company-ops-steward-smashlock-opencode`, mirroring the pattern for
+syncs the Steward identity (keys `STEWARD_MCP_URL` and `STEWARD_TOKEN`) from
+`/infra/steward/smashlock-opencode` into its own Secret `company-ops-steward-smashlock-opencode`, mirroring the pattern for
 `engineering-opencode`.
 
 ## Steward Repo Identity
@@ -76,3 +73,13 @@ python3 -c "import yaml,sys; list(yaml.safe_load_all(open(sys.argv[1])))" k8s/pr
 # Human-approved, via builder-gw / container-manager-gw
 kubectl apply -k k8s/projects/smashlock
 ```
+
+## Open items before first apply
+
+- The pinned image `company-os-engineering:ticket-std-714c938` predates the
+  `SmashLock` case added to `scripts/sync-repo.sh`; rebuild the image (via
+  builder-gw, human-approved) or workers cannot `sync-repo.sh SmashLock`.
+- Steward tenant: SmashLock's own docs currently use `Repo: fucklock` on
+  `anantha.stewardacs.xyz`; the worker identity here points at whatever
+  `STEWARD_MCP_URL` is stored in `/infra/steward/smashlock-opencode`. Decide
+  the tenant and repo name before creating that secret.

@@ -3,6 +3,9 @@ kind: Deployment
 metadata:
   name: smashlock-reviewer
   namespace: company-ops
+  labels:
+    app: smashlock-reviewer
+    repos: smashlock
 spec:
   replicas: 1
   strategy:
@@ -14,6 +17,7 @@ spec:
     metadata:
       labels:
         app: smashlock-reviewer
+        repos: smashlock
     spec:
       serviceAccountName: company-ops
       securityContext:
@@ -65,7 +69,7 @@ spec:
               value: smashlock
             - name: RUNNER_AGENT
               value: opencode
-            # TokenRouter first per workspace policy; mimo-v2.6-flash-free is the fallback
+            # TokenRouter first per workspace policy; if it returns 503, switch to oc-opencode/mimo-v2.6-flash-free (as engineering-opencode does)
             - name: RUNNER_MODEL
               value: oc-tokenrouter/z-ai/glm-5.3-free
             - name: CODEX_HOME
