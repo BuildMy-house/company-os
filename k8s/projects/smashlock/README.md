@@ -11,7 +11,7 @@ human-approved step.
 |------|---------|
 | `smashlock-opencode.yaml` | Cheap-tier opencode worker (`AGENT_ROLE=worker`, `AGENT_TIER=cheap`, `AGENT_REPOS=smashlock`) |
 | `smashlock-reviewer.yaml` | Reviewer pool worker (`AGENT_CAPABILITIES=review`, replicas=1) |
-| `smashlock-infisical-sync.yaml` | InfisicalStaticSecret syncs for `smashlock-secrets` and Steward identity |
+| `smashlock-infisical-sync.yaml` | InfisicalStaticSecret sync for the Steward identity |
 
 All Deployments reuse the existing `company-ops` ServiceAccount. No additional
 RBAC is required.
