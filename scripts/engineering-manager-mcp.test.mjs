@@ -29,6 +29,10 @@ import {
   TELEMETRY_FIELD_ALLOWLIST,
   sanitizeTelemetryEvent,
   withApprovalRef,
+  normalizeRepos,
+  reposFromEnv,
+  workRepoOf,
+  repoAllowed,
 } from "./engineering-manager-mcp.js";
 
 // Checks execute at top level when this file is loaded, so `node --test`
@@ -846,6 +850,106 @@ check("runHiveWork gives up on a bid window that never closes instead of looping
     assessTaskFit: async () => validAssessment,
   });
   assert.equal(allocateCalls, 4);
+});
+
+// --- repo scoping ----------------------------------------------------------
+
+check("repo: AGENT_REPOS normalizes to trimmed, lowercased, deduped repo names", () => {
+  assert.deepEqual(normalizeRepos("smashlock"), ["smashlock"]);
+  assert.deepEqual(normalizeRepos(" SmashLock , other ,smashlock,,"), ["other", "smashlock"]);
+  assert.deepEqual(normalizeRepos(""), []);
+  assert.deepEqual(normalizeRepos(undefined), []);
+  assert.deepEqual(normalizeRepos(" , ,"), []);
+  assert.deepEqual(reposFromEnv({ AGENT_REPOS: "SmashLock, other" }), ["other", "smashlock"]);
+  assert.deepEqual(reposFromEnv({}), []);
+});
+
+check("repo: repoAllowed follows the frozen scoping rules", () => {
+  const scoped = { payload: { repo: "smashlock" } };
+  assert.equal(repoAllowed(scoped, ["smashlock"]), true);
+  assert.equal(repoAllowed(scoped, ["SMASHLOCK"]), true, "the comparison is case-insensitive");
+  assert.equal(repoAllowed({ payload: { repo: " Smashlock " } }, ["smashlock"]), true, "the work repo is trimmed");
+  assert.equal(repoAllowed(scoped, ["other"]), false);
+  assert.equal(repoAllowed(scoped, []), true, "a worker without repos serves every repo");
+  assert.equal(repoAllowed({ payload: {} }, ["other"]), true, "work without a repo is unscoped");
+  assert.equal(repoAllowed({}, ["other"]), true);
+  assert.equal(workRepoOf(scoped), "smashlock");
+  assert.equal(workRepoOf({ payload: { metadata: { repo: "other" } } }), "other");
+  assert.equal(workRepoOf({}), "");
+});
+
+check("repo: runHiveWork declines work for a repo this worker does not serve", async () => {
+  const hive = fakeHive();
+  let assessed = false;
+  const errors = [];
+  const previousError = console.error;
+  console.error = (...args) => errors.push(args.join(" "));
+  try {
+    await runHiveWork({ id: "work-repo", payload: { repo: "smashlock", parts: [{ text: "do it" }] } }, {
+      ...healthyDeps,
+      repos: ["other"],
+      hiveCall: hive.hiveCall,
+      assessTaskFit: async () => { assessed = true; return validAssessment; },
+    });
+  } finally {
+    console.error = previousError;
+  }
+  assert.equal(assessed, false, "work for another repo is never assessed");
+  assert.equal(hive.calls.length, 1);
+  assert.equal(hive.calls[0].name, "hive_bid");
+  assert.equal(hive.calls[0].args.interested, false, "the decline is recorded so Hive stops re-offering the item");
+  assert.match(hive.calls[0].args.risk, /repo_not_served/);
+  assert.ok(errors.some((line) => /reason=repo_not_served/.test(line) && /repo=smashlock/.test(line)), `expected a logged reason, got ${JSON.stringify(errors)}`);
+});
+
+check("repo: runHiveWork bids on work whose repo this worker serves", async () => {
+  const hive = fakeHive("other-agent");
+  await runHiveWork({ id: "work-repo", payload: { repo: "smashlock", parts: [{ text: "do it" }] } }, {
+    ...healthyDeps,
+    repos: ["smashlock"],
+    hiveCall: hive.hiveCall,
+    assessTaskFit: async () => validAssessment,
+  });
+  const bid = hive.calls.find((call) => call.name === "hive_bid");
+  assert.ok(bid, "expected a bid on work for a served repo");
+  assert.equal(bid.args.interested, true);
+});
+
+check("repo: runHiveWork bids on unscoped work even when the worker is scoped", async () => {
+  const hive = fakeHive("other-agent");
+  await runHiveWork(candidate, {
+    ...healthyDeps,
+    repos: ["smashlock"],
+    hiveCall: hive.hiveCall,
+    assessTaskFit: async () => validAssessment,
+  });
+  const bid = hive.calls.find((call) => call.name === "hive_bid");
+  assert.ok(bid, "work without a repo stays open to every worker");
+  assert.equal(bid.args.interested, true);
+});
+
+check("repo: handleBidPrompt declines work for a repo this worker does not serve", async () => {
+  const hive = fakeHiveFor([], [{ id: "work-repo", slug: "repo-work", payload: { repo: "smashlock", parts: [{ text: "do it" }] } }]);
+  const errors = [];
+  const previousError = console.error;
+  console.error = (...args) => errors.push(args.join(" "));
+  let out;
+  try {
+    out = await handleBidPrompt({ work_id: "work-repo", worker_id: "w1" }, workerDeps(hive, "w1", { repos: ["other"] }));
+  } finally {
+    console.error = previousError;
+  }
+  assert.equal(out.outcome, "declined");
+  assert.equal(out.reason, "repo_not_served");
+  assert.equal(hive.bids.size, 0, "a declined prompt writes no bid");
+  assert.ok(errors.some((line) => /reason=repo_not_served/.test(line)), `expected a logged reason, got ${JSON.stringify(errors)}`);
+});
+
+check("repo: handleBidPrompt bids on work for a repo this worker serves", async () => {
+  const hive = fakeHiveFor([], [{ id: "work-repo", slug: "repo-work", payload: { repo: "smashlock", parts: [{ text: "do it" }] } }]);
+  const out = await handleBidPrompt({ work_id: "work-repo", worker_id: "w1" }, workerDeps(hive, "w1", { repos: ["smashlock"] }));
+  assert.equal(out.outcome, "bid");
+  assert.equal(hive.bids.get("w1").interested, true);
 });
 
 const failures = [];
