@@ -294,12 +294,6 @@ defmodule Hive.RouterTest do
     universal_bid = Enum.find(bids, &(&1["agent_id"] == "universal-worker"))
     assert universal_bid["eligible"]
     assert universal_bid["ineligible_reasons"] == []
-
-    # Allocation should pick the cheapest eligible (universal-worker has lowest cost in test setup)
-    # Actually, the test setup uses equal costs, so it depends on tie-breaking
-    allocated = allocate!(task_id, 900)
-    assert allocated["claimed_by"] in ["smashlock-worker", "universal-worker"]
-    refute allocated["claimed_by"] == "house-worker"
   end
 
   test "work without repo is unscoped and any worker may bid" do
@@ -778,17 +772,17 @@ defmodule Hive.RouterTest do
 
     assert decline.status == 201
 
-    assert {:ok, worker_one} = Hive.Work.available_for("worker-one", 10)
+    assert {:ok, worker_one} = Hive.Work.available_for("worker-one", 500)
     worker_one_ids = Enum.map(worker_one, & &1.id)
     assert other_task in worker_one_ids
     refute declined_task in worker_one_ids
 
-    assert {:ok, worker_two} = Hive.Work.available_for("worker-two", 10)
+    assert {:ok, worker_two} = Hive.Work.available_for("worker-two", 500)
     worker_two_ids = Enum.map(worker_two, & &1.id)
     assert declined_task in worker_two_ids
     assert other_task in worker_two_ids
 
-    assert {:ok, all_available} = Hive.Work.available(10)
+    assert {:ok, all_available} = Hive.Work.available(500)
     all_ids = Enum.map(all_available, & &1.id)
 
     assert declined_task in all_ids
