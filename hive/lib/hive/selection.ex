@@ -98,7 +98,16 @@ defmodule Hive.Selection do
     * `outcomes`     - agent id => `{completed, failed}` counts inside the history
       window, feeding the completion-rate estimate and exploration
   """
-  def context(events, agents, work_id, live_ids, now, cfg, required_tools \\ []) do
+  def context(
+        events,
+        agents,
+        work_id,
+        live_ids,
+        now,
+        cfg,
+        required_tools \\ [],
+        required_repo \\ nil
+      ) do
     cutoff = DateTime.add(now, -cfg.strike_window_seconds, :second)
     expired = Enum.filter(events, &lease_expired?/1)
 
@@ -127,7 +136,8 @@ defmodule Hive.Selection do
       outcomes: outcomes(events, now, cfg),
       agents: agents,
       live_ids: MapSet.new(live_ids),
-      required_tools: required_tools
+      required_tools: required_tools,
+      required_repo: required_repo
     }
   end
 
@@ -138,6 +148,26 @@ defmodule Hive.Selection do
       _ -> []
     end
   end
+
+  @doc "Repo names an agent declared in `capabilities.repos` (always a list of strings)."
+  def agent_repos(agent) do
+    case get_in(agent || %{}, ["capabilities", "repos"]) do
+      repos when is_list(repos) -> normalize_repos(repos)
+      _ -> []
+    end
+  end
+
+  @doc "Normalizes a repo list (registration or ticket input) to sorted unique non-empty strings."
+  def normalize_repos(repos) when is_list(repos) do
+    repos
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  def normalize_repos(_), do: []
 
   @doc "Normalizes a tool list (registration or ticket input) to sorted unique non-empty strings."
   def normalize_tools(tools) when is_list(tools) do
@@ -153,6 +183,32 @@ defmodule Hive.Selection do
 
   @doc "Required tools the agent does not declare, in required order."
   def missing_tools(agent, required), do: required -- agent_tools(agent)
+
+  @doc "Repo a work item needs (`repo` on its payload), `nil` when it names none."
+  def required_repo(payload), do: get_in(payload || %{}, ["repo"])
+
+  @doc "Whether the agent's declared repos cover the work's required repo (case-insensitive after trimming)."
+  def repo_match?(agent, required_repo) do
+    case required_repo do
+      nil ->
+        true
+
+      repo ->
+        trimmed = String.trim(repo)
+
+        if trimmed == "" do
+          true
+        else
+          repos = agent_repos(agent)
+
+          if repos == [] do
+            true
+          else
+            Enum.any?(repos, &(String.downcase(&1) == String.downcase(trimmed)))
+          end
+        end
+    end
+  end
 
   @doc "Tools a work item needs (`requires_tools` on its payload), `[]` when it names none."
   def required_tools(payload), do: normalize_tools(get_in(payload || %{}, ["requires_tools"]))
@@ -202,15 +258,22 @@ defmodule Hive.Selection do
 
         bid
         |> Map.put("missing_tools", bid_missing_tools(bid, ctx))
+        |> Map.put("worker_repos", bid_worker_repos(bid, ctx))
         |> Map.put("eligible", reasons == [])
         |> Map.put("ineligible_reasons", reasons)
         |> Map.put("p_complete", p_complete(bid, ctx, cfg))
         |> Map.put("effective_cost", effective_cost(bid, ctx, cfg))
       end)
 
-    # A bid from an agent lacking a required tool is hard-blocked: it can neither win
+    # A bid from an agent lacking a required tool or repo is hard-blocked: it can neither win
     # nor be the score fallback. It stays in the ranking (last) so the reason is visible.
-    {blocked, capable} = Enum.split_with(annotated, &(&1["missing_tools"] != []))
+    {blocked, capable} =
+      Enum.split_with(
+        annotated,
+        &(&1["missing_tools"] != [] or &1["ineligible_reasons"] == ["repo_mismatch"] or
+            Enum.member?(&1["ineligible_reasons"], "repo_mismatch"))
+      )
+
     {interested, declined} = Enum.split_with(capable, & &1["interested"])
     eligible = Enum.filter(interested, & &1["eligible"])
 
@@ -260,6 +323,7 @@ defmodule Hive.Selection do
 
     [
       {bid_missing_tools(bid, ctx) != [], "missing_tools"},
+      {bid_repo_mismatch?(bid, ctx), "repo_mismatch"},
       {not bid["interested"], "not_interested"},
       {bid["confidence"] < cfg.min_confidence, "low_confidence"},
       {not seen_recently?(bid, ctx, cfg), "unhealthy"},
@@ -273,6 +337,23 @@ defmodule Hive.Selection do
     case Map.get(ctx, :required_tools, []) do
       [] -> []
       required -> missing_tools(Map.get(ctx.agents, bid["agent_id"]), required)
+    end
+  end
+
+  defp bid_repo_mismatch?(bid, ctx) do
+    case Map.get(ctx, :required_repo) do
+      nil ->
+        false
+
+      repo ->
+        not repo_match?(Map.get(ctx.agents, bid["agent_id"]), repo)
+    end
+  end
+
+  defp bid_worker_repos(bid, ctx) do
+    case Map.get(ctx, :required_repo) do
+      nil -> []
+      _ -> agent_repos(Map.get(ctx.agents, bid["agent_id"]))
     end
   end
 
