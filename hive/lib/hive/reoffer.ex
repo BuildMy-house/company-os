@@ -43,7 +43,7 @@ defmodule Hive.Reoffer do
 
     cond do
       required != [] ->
-        case capable_workers(required, agents) do
+        case capable_workers(required, agents, repo) do
           [] -> true
           capable -> not Enum.any?(interested_agent_ids, &(&1 in capable))
         end
@@ -61,10 +61,11 @@ defmodule Hive.Reoffer do
 
   # Registered agents that can take work (execute mode, or no modes declared) and
   # declare every required tool.
-  defp capable_workers(required, agents) do
+  defp capable_workers(required, agents, repo) do
     for {id, agent} <- agents,
         worker?(agent),
         Hive.Selection.missing_tools(agent, required) == [],
+        Hive.Selection.repo_match?(agent, repo),
         do: id
   end
 
@@ -104,7 +105,7 @@ defmodule Hive.Reoffer do
     repo = Hive.Selection.required_repo(payload)
 
     cond do
-      required != [] and capable_workers(required, agents) == [] ->
+      required != [] and capable_workers(required, agents, repo) == [] ->
         {:escalate,
          %{
            "reason" => "missing_tools",

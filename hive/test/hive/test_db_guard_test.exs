@@ -21,11 +21,7 @@ defmodule Hive.TestDbGuardTest do
   end
 
   test "rejects the production schema" do
-    for query <- [
-          "schema=company",
-          "search_path=company,public",
-          "options=-csearch_path%3Dcompany"
-        ] do
+    for query <- ["schema=company", "search_path=company,public", "options=-csearch_path%3Dcompany"] do
       assert {:error, reason} = TestDbGuard.check("postgresql://u:p@localhost/hive_test?#{query}")
       assert reason =~ "'company'"
     end
