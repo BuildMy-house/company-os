@@ -16,26 +16,17 @@ human-approved step.
 All Deployments reuse the existing `company-ops` ServiceAccount. No additional
 RBAC is required.
 
-## Infisical `/smashlock` Folder (dev environment)
+## Secrets
 
-A human must create the following keys in the Infisical folder `/smashlock`
-(project "Build My house", environment `dev`) before applying:
+Axiom, TokenRouter and the GitHub App (installation covers all org repos, including
+SmashLock) come from the shared `company-ops-secrets` Secret via `envFrom`; nothing
+SmashLock-specific is needed for them.
 
-| Key | Description |
-|-----|-------------|
-| `GITHUB_TOKEN` | Fine-grained PAT scoped to **exactly** `BuildMy-house/SmashLock` with `contents:write` + `pull_requests:write` |
-| `AXIOM_API_KEY` | Axiom API key for `smashlock-opencode-k8s` service |
-| `AXIOM_DATASET` | Axiom dataset name (e.g. `smashlock-logs`) |
-| `TOKENROUTER_API_KEY` | TokenRouter API key for `oc-tokenrouter/z-ai/glm-5.3-free` model |
-
-The folder must contain **exactly** these keys — no more, no less. The
-InfisicalStaticSecret `smashlock-sync` copies the entire folder into the
-Kubernetes Secret `smashlock-secrets` in `company-ops`.
-
-A second InfisicalStaticSecret (`company-ops-steward-smashlock-opencode`)
-syncs the Steward identity (keys `STEWARD_MCP_URL` and `STEWARD_TOKEN`) from
-`/infra/steward/smashlock-opencode` into its own Secret `company-ops-steward-smashlock-opencode`, mirroring the pattern for
-`engineering-opencode`.
+The only new secret is the Steward identity: the InfisicalStaticSecret
+`company-ops-steward-smashlock-opencode` syncs `/infra/steward/smashlock-opencode`
+(project "Build My house", environment `dev`, keys `STEWARD_MCP_URL` and `STEWARD_TOKEN`)
+into a Secret of the same name, mirroring `engineering-opencode`. The token is a
+collaborator key minted with `generate_developer_key(developer_name: "smashlock-opencode")`.
 
 ## Steward Repo Identity
 
