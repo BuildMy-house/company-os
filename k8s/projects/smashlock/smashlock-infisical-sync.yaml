@@ -1,0 +1,60 @@
+# Syncs the Infisical folder /smashlock (project "Build My house", environment dev)
+# into its OWN Secret, smashlock-secrets, in company-ops. Every key in the folder is
+# copied, so the folder must contain exactly the keys below (manual
+# invariant; no test can see Infisical):
+#   GITHUB_TOKEN            fine-grained PAT scoped to exactly BuildMy-house/SmashLock contents:write + pull_requests:write
+#   STEWARD_CLIENT_ID       Steward machine identity client ID for smashlock-opencode agent
+#   STEWARD_CLIENT_SECRET   Steward machine identity client secret for smashlock-opencode agent
+#   STEWARD_API_URL         Steward API URL (e.g. http://steward-api:8080)
+#   AXIOM_API_KEY           Axiom API key for smashlock-opencode-k8s service
+#   AXIOM_DATASET           Axiom dataset name (e.g. smashlock-logs)
+#   TOKENROUTER_API_KEY     TokenRouter API key for oc-tokenrouter/z-ai/glm-5.3-free model
+# Uses the existing infisical-auth in company-ops (k8s/base/infisical-sync/infisical-sync.yaml).
+# No value is committed here.
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: smashlock-sync
+  namespace: company-ops
+spec:
+  infisicalAuthRef:
+    name: infisical-auth
+    namespace: company-ops
+  syncOptions:
+    refreshInterval: 60s
+  sources:
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /smashlock
+  targets:
+    - name: smashlock-secrets
+      namespace: company-ops
+      kind: Secret
+      creationPolicy: Owner
+---
+# Steward identity for the smashlock-opencode agent, mirroring
+# company-ops-steward-engineering-opencode in k8s/base/infisical-sync/infisical-sync.yaml.
+# The folder /infra/steward/smashlock-opencode must contain exactly:
+#   STEWARD_CLIENT_ID, STEWARD_CLIENT_SECRET, STEWARD_API_URL
+# as separate keys. The operator creates Secret
+# company-ops-steward-smashlock-opencode in company-ops.
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: company-ops-steward-smashlock-opencode
+  namespace: company-ops
+spec:
+  infisicalAuthRef:
+    name: infisical-auth
+    namespace: company-ops
+  syncOptions:
+    refreshInterval: 60s
+  sources:
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /infra/steward/smashlock-opencode
+  targets:
+    - name: company-ops-steward-smashlock-opencode
+      namespace: company-ops
+      kind: Secret
+      creationPolicy: Owner
