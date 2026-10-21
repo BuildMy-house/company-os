@@ -50,9 +50,28 @@ export const normalizeTier = (value, fallback = "standard") => {
   const tier = String(value ?? "").trim().toLowerCase();
   return TIERS.includes(tier) ? tier : fallback;
 };
+
+// Repo scoping, same shape as the requires_tools / capabilities.tools mechanism:
+// a worker declares the repos it serves with AGENT_REPOS (comma-separated, trimmed,
+// lowercased, deduped). Work that names a repo (payload.repo) is only eligible for
+// workers that serve it; work without a repo and workers without repos stay open to
+// everyone, so nothing changes for the pools registered before this key existed.
+export const normalizeRepo = (value) => String(value ?? "").trim().toLowerCase();
+export const normalizeRepos = (value) => [...new Set(String(value ?? "").split(",").map(normalizeRepo).filter(Boolean))].sort();
+export const reposFromEnv = (env = process.env) => normalizeRepos(env.AGENT_REPOS);
+export const workRepoOf = (candidate) => normalizeRepo(candidate?.payload?.repo ?? candidate?.payload?.metadata?.repo);
+export const repoAllowed = (candidate, repos = []) => {
+  const repo = workRepoOf(candidate);
+  if (!repo) return true; // unscoped work: any worker may bid
+  const served = normalizeRepos(repos);
+  if (!served.length) return true; // unscoped worker: serves every repo
+  return served.includes(repo);
+};
 const positiveNumber = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
 const POOL_TIER = normalizeTier(process.env.AGENT_TIER, process.env.AGENT_FLAVOR === "opencode" ? "cheap" : "power");
 const POOL_COST_FACTOR = positiveNumber(process.env.AGENT_COST_FACTOR, process.env.AGENT_FLAVOR === "opencode" ? 0.1 : 1);
+// Repos this pool serves. Empty means it serves every repo (backward compatible).
+const POOL_REPOS = reposFromEnv(process.env);
 // Hive holds allocation open (deferred) while connected pool workers have not bid; each
 // retry waits at most 10s, so this bounds the wait at roughly 2-4 minutes.
 const ALLOCATE_MAX_ATTEMPTS = 24;
@@ -842,15 +861,26 @@ const assessmentFailures = new Map();
 const ASSESSMENT_FAILURE_WARN_THRESHOLD = 5;
 export async function runHiveWork(candidate, deps = {}) {
   if (!candidate?.id) return;
-  if (!acquireHiveSlot()) {
-    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "deferred", reason: "worker_busy" });
-    return;
-  }
   const hiveCallDep = deps.hiveCall ?? hiveCall;
   const healthDep = deps.health ?? health;
   const telemetryDep = deps.telemetry ?? telemetry;
   const assessDep = deps.assessTaskFit ?? assessTaskFit;
   const agentId = deps.agentId ?? (process.env.HIVE_AGENT_ID || "engineering-agent");
+  // Repo scoping: work that names a repo this worker does not serve is never bid on.
+  // The decline is recorded so Hive stops re-offering the same item to this worker.
+  const repos = deps.repos ?? POOL_REPOS;
+  if (!repoAllowed(candidate, repos)) {
+    const repo = workRepoOf(candidate);
+    const served = normalizeRepos(repos);
+    console.error(`hive work skipped: repo=${repo} is not served by this worker (AGENT_REPOS=${served.length ? served.join(",") : "all"})`);
+    await recordDecline(hiveCallDep, candidate, "repo_not_served");
+    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: "repo_not_served", repo });
+    return;
+  }
+  if (!acquireHiveSlot()) {
+    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "deferred", reason: "worker_busy" });
+    return;
+  }
   let keepBusy = false;
   try {
     const healthState = healthDep();
@@ -1020,6 +1050,14 @@ export async function handleBidPrompt(request, deps = {}) {
     work = (available?.work || []).find((item) => workMatches(item, request.work_id));
   } catch { return unavailable("hive_unavailable"); }
   if (!work) return unavailable("work_not_available");
+  // Repo scoping: this worker declines work for a repo it does not serve.
+  const repos = deps.repos ?? POOL_REPOS;
+  if (!repoAllowed(work, repos)) {
+    const repo = workRepoOf(work);
+    const served = normalizeRepos(repos);
+    console.error(`hive work declined: repo=${repo} is not served by this worker (AGENT_REPOS=${served.length ? served.join(",") : "all"})`);
+    return { outcome: "declined", worker_id: agentId, reason: "repo_not_served" };
+  }
   let assessment = null;
   if (!decisionBusy && healthState.status === "healthy") {
     try {
