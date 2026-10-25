@@ -2,6 +2,10 @@
 timezone: UTC
 
 agent:
+  # Nous free models regularly answer 429 "at capacity upstream". The default
+  # of 3 app-level retries with 30s waits stalled a CEO reply for minutes
+  # before reaching the glm-5.3-flash fallback; 1 fails over after one retry.
+  api_max_retries: 1
   disabled_toolsets:
     - code_execution
     - file
