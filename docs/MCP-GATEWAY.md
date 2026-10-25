@@ -51,8 +51,7 @@ than by a child. Plan: Steward `documents/plans/mcp-gateway` + `mcp-gateway-deci
   `container_rollback`, `container_status`, `container_health`, `container_logs` and the builder
   tool `builder_build_and_push`, each constrained by `argLimits`:
   - `container_upgrade` requires a digest-pinned image from `localhost:30500` or
-    `registry.company-ops.svc.cluster.local:5000` and a deployment other than `hermes-gateway`
-    and `mcp-gateway`; rollback, health and logs exclude those two deployments as well;
+    `registry.company-ops.svc.cluster.local:5000` and a deployment other than `mcp-gateway`; rollback, health and logs exclude `mcp-gateway` as well;
   - `builder_build_and_push` requires `context_ref` (and every `contexts` value) of the form
     `https://github.com/BuildMy-house/<repo>.git#<40-hex-sha>`, an `image_repo` from an explicit
     allowlist (`company-os-mcp-gateway` deliberately excluded, so the gateway cannot rebuild
@@ -105,8 +104,9 @@ than by a child. Plan: Steward `documents/plans/mcp-gateway` + `mcp-gateway-deci
   child of the gateway pod (hive, kubernetes, container-manager, builder) — a known blast-radius
   tradeoff, not an accident.
 - The gateway must not upgrade itself: container-manager runs inside `mcp-gateway`, so
-  `mcp-gateway` and `hermes-gateway` are excluded for this identity and still go through the
-  independent hive/engineering path with explicit user approval.
+  `mcp-gateway` is excluded for this identity and still goes through the independent
+  hive/engineering path with explicit user approval. `hermes-gateway` was removed from the
+  exclusion on 2026-10-25 at the Board's request so the local session can roll out CEO fixes.
 
 ## Build (never from a mutable ref)
 `builder_build_and_push(context_ref: https://github.com/BuildMy-house/company-os.git#<40-hex-sha>,
