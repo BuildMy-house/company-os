@@ -345,7 +345,21 @@ async function diagnoseHive(timeoutMs = 2_000) {
   return { endpoint: endpoint.host, ok: steps.every((step) => step.ok), steps };
 }
 
-async function waitForEvent(taskId, timeoutSeconds = 900) {
+// hive_wait / hive_next_work block, so they must always finish well inside the
+// Hermes in-pod tool executor's 420s hard kill: default 300s, hard cap 360s.
+// Larger timeout_seconds are clamped, never rejected. On timeout both return a
+// normal {timed_out: true, retry: true} result so the caller just re-calls
+// instead of treating the wait as broken. HIVE_WAIT_MAX_SECONDS is a test seam.
+const WAIT_DEFAULT_SECONDS = 300;
+const WAIT_MAX_SECONDS = Number(process.env.HIVE_WAIT_MAX_SECONDS) || 360;
+
+function waitSeconds(value) {
+  const seconds = Number(value);
+  const requested = Number.isFinite(seconds) && seconds > 0 ? seconds : WAIT_DEFAULT_SECONDS;
+  return Math.min(WAIT_MAX_SECONDS, requested);
+}
+
+async function waitForEvent(taskId, timeoutSeconds) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
   try {
@@ -375,6 +389,11 @@ async function waitForEvent(taskId, timeoutSeconds = 900) {
       }
       buffer = buffer.split("\n\n").at(-1) || "";
     }
+  } catch (error) {
+    // Our own timeout aborts the stream — idle, not a failure: return a normal
+    // result so the caller re-calls rather than seeing a broken stream.
+    if (controller.signal.aborted) return { timed_out: true, retry: true, task_id: taskId, timeout_seconds: timeoutSeconds };
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -396,8 +415,8 @@ const tools = [
   { name: "hive_complete", description: "Record terminal completion or failure for work held by this agent; exactly one call per task, and the lease ends. result must include the required feedback object (calibration, friction, optional suggested_guidance_change). After this, hive_wait on the task returns immediately — use hive_status only to verify the recorded state.", inputSchema: { type: "object", required: ["task_id", "state", "result"], properties: { task_id: { type: "string" }, state: { type: "string" }, result: { type: "object", required: ["feedback"], additionalProperties: true, properties: { feedback: { type: "object", required: ["calibration", "friction"], additionalProperties: false, properties: { calibration: { type: "object", required: ["estimated_cost", "actual_cost", "estimated_benefit", "actual_benefit"], additionalProperties: false, properties: { estimated_cost: { type: "number" }, actual_cost: { type: "number" }, estimated_benefit: { type: "number" }, actual_benefit: { type: "number" } } }, friction: { type: "string", description: "What guidance was missing or wrong; \"\" if none." }, suggested_guidance_change: { type: "string", description: "Concrete change to guidance/specs; omit or empty if none." } } } } } }, additionalProperties: false } },
   { name: "hive_status", description: "Read the durable status of a Hive task — one-off inspection only, never poll in a loop. To block on completion use hive_wait; for the event history use hive_events.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" } }, additionalProperties: false } },
   { name: "hive_events", description: "Replay durable lifecycle events for a task (bids, allocation, heartbeats, completion). Use to debug a stuck task, then hive_status for current state or hive_wait to block on the outcome.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
-  { name: "hive_wait", description: "Wait for a task's completion/failure event over SSE without polling (timeout up to 900s; re-call to keep waiting). This is the default way to await any task you submitted or hold — on timeout, re-call rather than switching to hive_status polling.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
-  { name: "hive_next_work", description: "Wait for the next available Hive work item over SSE without polling. Returns the allocated task — then hive_heartbeat it while working and hive_complete when done. Idle members should live inside this call, not loop on hive_available_work.", inputSchema: { type: "object", properties: { timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
+  { name: "hive_wait", description: "Wait for a task's completion/failure event over SSE without polling (timeout_seconds: default 300, max 360 — larger values are clamped so the call always finishes). Returns the completion event, or {timed_out: true, retry: true} on timeout: just re-call to keep waiting instead of switching to hive_status polling. This is the default way to await any task you submitted or hold.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 360, default: 300 } }, additionalProperties: false } },
+  { name: "hive_next_work", description: "Wait for the next available Hive work item over SSE without polling (timeout_seconds: default 300, max 360 — larger values are clamped so the call always finishes). Returns the allocated task, or {timed_out: true, retry: true} on timeout — re-call to keep waiting. Then hive_heartbeat the task while working and hive_complete when done. Idle members should live inside this call, not loop on hive_available_work.", inputSchema: { type: "object", properties: { timeout_seconds: { type: "integer", minimum: 5, maximum: 360, default: 300 } }, additionalProperties: false } },
   { name: "hive_diagnostics", description: "Check DNS, TCP, the Hive HTTP health route, and the worker SSE subscription from this container (opens and immediately closes an unclaimed stream; no work is consumed). Call this first when hive_wait or hive_next_work error or time out unexpectedly.", inputSchema: { type: "object", properties: { timeout_ms: { type: "integer", minimum: 250, maximum: 5000 } }, additionalProperties: false } },
   ...(process.env.AGENT_ROLE === "manager" ? [
     { name: "hive_prompt_workers", description: "Wake currently subscribed eligible workers for an available task. Returns worker identities prompted; does not bid or allocate on their behalf.", inputSchema: { type: "object", required: ["work_slug"], properties: { work_slug: { type: "string" } }, additionalProperties: false } },
@@ -433,8 +452,8 @@ async function call(name, args) {
   }
   if (name === "hive_status") return request(`/tasks/${encodeURIComponent(args.task_id)}`);
   if (name === "hive_events") return request(`/events?task_id=${encodeURIComponent(args.task_id)}&limit=${args.limit || 100}`);
-  if (name === "hive_wait") return waitForEvent(args.task_id, args.timeout_seconds || 900);
-  if (name === "hive_next_work") return waitForWork(args.timeout_seconds || 900);
+  if (name === "hive_wait") return waitForEvent(args.task_id, waitSeconds(args.timeout_seconds));
+  if (name === "hive_next_work") return waitForWork(waitSeconds(args.timeout_seconds));
   if (name === "hive_diagnostics") return diagnoseHive(Math.min(5_000, Math.max(250, args.timeout_ms || 2_000)));
   if (name === "hive_prompt_workers") return request(`/work/${encodeURIComponent(args.work_slug)}/prompt`, { method: "POST", body: JSON.stringify({ requester_id: consumerId }) });
   throw new Error(`unknown tool: ${name}`);
@@ -444,7 +463,7 @@ async function call(name, args) {
 // (half-open socket after a coordinator restart) and must be re-dialled, not waited on.
 const STREAM_IDLE_MS = Number(process.env.HIVE_STREAM_IDLE_MS) || 45_000;
 
-async function waitForWork(timeoutSeconds = 900) {
+async function waitForWork(timeoutSeconds) {
   const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
@@ -475,7 +494,7 @@ async function waitForWork(timeoutSeconds = 900) {
       if (!done) reportSubscription("alive", { stream: "work" });
       if (done) {
         // Our own timeout aborts the stream — idle, not a failure.
-        if (controller.signal.aborted) return null;
+        if (controller.signal.aborted) return { timed_out: true, retry: true, timeout_seconds: timeoutSeconds };
         throw new Error("Hive work stream closed");
       }
       buffer += decoder.decode(value, { stream: true });
@@ -488,7 +507,7 @@ async function waitForWork(timeoutSeconds = 900) {
     }
   } catch (error) {
     if (stalled) error = Object.assign(new Error(`Hive work stream silent for ${STREAM_IDLE_MS}ms`), { code: "HIVE_STREAM_STALLED" });
-    else if (controller.signal.aborted) return null;
+    else if (controller.signal.aborted) return { timed_out: true, retry: true, timeout_seconds: timeoutSeconds };
     const details = safeErrorDetails(error, "hive_next_work");
     console.error(`[hive-member] hive_next_work failed: ${JSON.stringify(details)}`);
     reportSubscription("failed", details);
@@ -510,7 +529,13 @@ for await (const line of input) {
   if (message.method === "notifications/initialized" || message.method === "ping") { if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, result: {} }); continue; }
   if (message.method === "tools/list") { send({ jsonrpc: "2.0", id: message.id, result: { tools } }); continue; }
   if (message.method === "tools/call") {
-    try { send(text(message.id, await call(message.params.name, message.params.arguments || {}))); }
-    catch (error) { send(fail(message.id, JSON.stringify(safeErrorDetails(error, message.params?.name)))); }
+    // Handled concurrently, never awaited inside the read loop: one long
+    // hive_wait must not delay any later call (the Hermes in-pod executor
+    // hard-kills tools at 420s). Replies are keyed by their own id and each
+    // send writes one whole line, so interleaved completion order is safe.
+    void call(message.params.name, message.params.arguments || {}).then(
+      (value) => send(text(message.id, value)),
+      (error) => send(fail(message.id, JSON.stringify(safeErrorDetails(error, message.params?.name)))),
+    );
   }
 }
