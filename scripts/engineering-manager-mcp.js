@@ -67,11 +67,41 @@ export const repoAllowed = (candidate, repos = []) => {
   if (!served.length) return true; // unscoped worker: serves every repo
   return served.includes(repo);
 };
+// Tool gating, same shape as the repo scoping mechanism: a worker declares the
+// tools it can use with AGENT_TOOLS (comma-separated). Work that requires a tool
+// the worker has not declared is declined before bidding, so a no-browser worker
+// can no longer win a browser task, expire two leases and force an escalation.
+// Required tools are explicit payload requires_tools (payload or payload.metadata)
+// plus keyword inference for browser work (browser/Playwright/screenshot/live-URL
+// QA, e.g. a "PRE-LAUNCH QA SWEEP of app.buildmy.house").
+export const normalizeTools = (value) => [...new Set((Array.isArray(value) ? value : String(value ?? "").split(",")).map((tool) => String(tool ?? "").trim().toLowerCase()).filter(Boolean))].sort();
+export const toolsFromEnv = (env = process.env) => normalizeTools(env.AGENT_TOOLS);
+export const BROWSER_TASK_RE = /\b(browser|playwright|screenshot|live[ -]?url|app\.buildmy\.house)\b/i;
+const taskTextOf = (candidate) => (Array.isArray(candidate?.payload?.parts) ? candidate.payload.parts : []).filter((part) => typeof part?.text === "string").map((part) => part.text).join("\n");
+export function requiredToolsOf(candidate) {
+  const payload = candidate?.payload ?? {};
+  const required = normalizeTools([payload.requires_tools, payload.metadata?.requires_tools].flat(Infinity));
+  if (BROWSER_TASK_RE.test(taskTextOf(candidate))) required.push("browser");
+  return [...new Set(required)].sort();
+}
+export const toolsAllowed = (candidate, tools = []) => {
+  const required = requiredToolsOf(candidate);
+  if (!required.length) return true; // work requiring no tools is open to every worker
+  const declared = normalizeTools(tools);
+  return required.every((tool) => declared.includes(tool));
+};
+const missingToolsOf = (candidate, tools) => {
+  const declared = normalizeTools(tools);
+  return requiredToolsOf(candidate).filter((tool) => !declared.includes(tool));
+};
 const positiveNumber = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
 const POOL_TIER = normalizeTier(process.env.AGENT_TIER, process.env.AGENT_FLAVOR === "opencode" ? "cheap" : "power");
 const POOL_COST_FACTOR = positiveNumber(process.env.AGENT_COST_FACTOR, process.env.AGENT_FLAVOR === "opencode" ? 0.1 : 1);
 // Repos this pool serves. Empty means it serves every repo (backward compatible).
 const POOL_REPOS = reposFromEnv(process.env);
+// Tools this pool can use. Empty means it declares no tools: work requiring a
+// tool (explicitly or inferred) is declined instead of bid on.
+const POOL_TOOLS = toolsFromEnv(process.env);
 // Hive holds allocation open (deferred) while connected pool workers have not bid; each
 // retry waits at most 10s, so this bounds the wait at roughly 2-4 minutes.
 const ALLOCATE_MAX_ATTEMPTS = 24;
@@ -883,6 +913,16 @@ export async function runHiveWork(candidate, deps = {}) {
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: "repo_not_served", repo });
     return;
   }
+  // Tool gating: work that requires a tool this worker has not declared is
+  // declined before bidding, so it never wins a lease it cannot execute.
+  const tools = deps.tools ?? POOL_TOOLS;
+  if (!toolsAllowed(candidate, tools)) {
+    const missing = missingToolsOf(candidate, tools);
+    console.error(`hive work skipped: reason=tool_not_declared missing=${missing.join(",")} (AGENT_TOOLS=${normalizeTools(tools).length ? normalizeTools(tools).join(",") : "none"})`);
+    await recordDecline(hiveCallDep, candidate, "tool_not_declared");
+    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: "tool_not_declared", missing_tools: missing });
+    return;
+  }
   if (!acquireHiveSlot()) {
     emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "deferred", reason: "worker_busy" });
     return;
@@ -1063,6 +1103,13 @@ export async function handleBidPrompt(request, deps = {}) {
     const served = normalizeRepos(repos);
     console.error(`hive work declined: reason=repo_not_served repo=${repo} is not served by this worker (AGENT_REPOS=${served.length ? served.join(",") : "all"})`);
     return { outcome: "declined", worker_id: agentId, reason: "repo_not_served" };
+  }
+  // Tool gating: this worker declines work requiring a tool it has not declared.
+  const tools = deps.tools ?? POOL_TOOLS;
+  if (!toolsAllowed(work, tools)) {
+    const missing = missingToolsOf(work, tools);
+    console.error(`hive work declined: reason=tool_not_declared missing=${missing.join(",")} (AGENT_TOOLS=${normalizeTools(tools).length ? normalizeTools(tools).join(",") : "none"})`);
+    return { outcome: "declined", worker_id: agentId, reason: "tool_not_declared" };
   }
   let assessment = null;
   if (!decisionBusy && healthState.status === "healthy") {
