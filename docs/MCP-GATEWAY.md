@@ -73,6 +73,19 @@ than by a child. Plan: Steward `documents/plans/mcp-gateway` + `mcp-gateway-deci
   request a key or rotation (from Nahar); Nahar, or an agent he explicitly directs holding the
   admin token, performs it.
 
+## CEO (hermes-gateway) cluster visibility
+
+The CEO does not reach the cluster through this gateway and has no gateway identity: Hermes
+runs its own stdio MCP children (`hermes/config.yaml`), so no policy change here is needed or
+wanted (a CEO identity would add a credential for no benefit). Read-only visibility is wired in
+Hermes config instead: `container_manager` now receives `KUBERNETES_SERVICE_HOST`/`PORT`
+(MCP subprocesses do not inherit the pod env; their absence caused `container_status` to fail
+with "Kubernetes API unavailable outside a k3s pod"), and a separate `k8s_readonly` server
+(`kubernetes-mcp-server --read-only --disable-destructive`, in-cluster, no Secrets in RBAC) is
+exposed to the `api_server` platform. `k8s_deployment` (patch-capable) stays unexposed there.
+`container_manager` still carries its existing upgrade/rollback verbs, unchanged by this note.
+Tests: `tests/test_ceo_k8s_readonly.py`.
+
 ## API keys
 
 - Format `gwk_<43 chars base64url>`, 256-bit random. Only the SHA-256 hash is stored, in Postgres
