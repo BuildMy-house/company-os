@@ -382,6 +382,16 @@ defmodule Hive.Router do
     end
   end
 
+  # Terminal-cancel (TICKET G): valid from available/claimed/escalated; stores reason
+  # and cancelled_at in the terminal result metadata, releases the lease and drops bids.
+  post "/work/:work_id/cancel" do
+    case Hive.Work.cancel(work_id, conn.body_params["reason"]) do
+      {:ok, work} -> json(conn, work)
+      {:error, :not_found} -> json(conn, %{"error" => "work not found"}, 404)
+      {:error, :terminal_state} -> json(conn, %{"error" => "work cannot be cancelled"}, 409)
+    end
+  end
+
   post "/events/:event_id/ack" do
     with %{"consumer_id" => consumer_id} <- conn.body_params do
       :ok = Hive.Work.acknowledge_event(event_id, consumer_id)
