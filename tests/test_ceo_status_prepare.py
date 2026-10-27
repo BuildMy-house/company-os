@@ -41,17 +41,28 @@ def test_first_run_no_output(tmp_path):
     since = datetime.fromisoformat(ctx["context"]["since"].replace("Z", "+00:00"))
     age = datetime.now(timezone.utc) - since
     assert timedelta(hours=1) < age < timedelta(hours=3)
-    # run time recorded for the next run
-    datetime.fromisoformat((tmp_path / "ceo-status.last-run").read_text().strip().replace("Z", "+00:00"))
 
 
-def test_second_run_reads_newest_output(tmp_path):
+def test_failed_run_does_not_advance_window(tmp_path):
+    """No output file produced -> second run's `since` is still ~2h ago,
+    not the time of the (failed) first run."""
+    ctx1, _ = _run(tmp_path)
+    ctx2, _ = _run(tmp_path)
+    assert ctx1["context"]["first_run"] is True
+    assert ctx2["context"]["first_run"] is True
+    since2 = datetime.fromisoformat(ctx2["context"]["since"].replace("Z", "+00:00"))
+    age = datetime.now(timezone.utc) - since2
+    assert age > timedelta(hours=1), "second run must not inherit the first run's timestamp"
+
+
+def test_since_from_output_mtime(tmp_path):
     _write_jobs(tmp_path, "list")
     old, new = 1.0, 2.0
     _write_output(tmp_path, "abc123", "older report\n", mtime=old)
     _write_output(tmp_path, "abc123", "newer report\n", mtime=new)
     ctx, _ = _run(tmp_path)
     assert ctx["context"]["first_run"] is False
+    assert ctx["context"]["since"] == "1970-01-01T00:00:02Z"
     # bash $(...) strips trailing newlines; harmless for next-run diffing
     assert ctx["context"]["previous_report"] == "newer report"
 
@@ -95,3 +106,21 @@ def test_json_valid_with_quotes_and_newlines(tmp_path):
     assert ctx["context"]["previous_report"] == report.rstrip("\n")
     assert len(lines) == 1 and "\n" not in lines[0]  # single-line JSON on stdout
     assert lines[0] == json.dumps(ctx, ensure_ascii=False)
+
+
+def test_previous_items_survives_silent_newest_run(tmp_path):
+    _write_jobs(tmp_path, "list")
+    d = tmp_path / "cron" / "output" / "abc123"
+    d.mkdir(parents=True)
+    (d / "a.md").write_text("report\nItems: x=open, y=changed\n")
+    (d / "b.md").write_text("[SILENT]")
+    os.utime(d / "a.md", (1.0, 1.0))
+    os.utime(d / "b.md", (2.0, 2.0))
+    ctx, _ = _run(tmp_path)
+    assert ctx["context"]["previous_report"] == "[SILENT]"
+    assert ctx["context"]["previous_items"] == "Items: x=open, y=changed"
+
+
+def test_previous_items_empty_without_footer(tmp_path):
+    ctx, _ = _run(tmp_path)
+    assert ctx["context"]["previous_items"] == ""

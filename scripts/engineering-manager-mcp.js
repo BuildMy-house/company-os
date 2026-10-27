@@ -50,9 +50,58 @@ export const normalizeTier = (value, fallback = "standard") => {
   const tier = String(value ?? "").trim().toLowerCase();
   return TIERS.includes(tier) ? tier : fallback;
 };
+
+// Repo scoping, same shape as the requires_tools / capabilities.tools mechanism:
+// a worker declares the repos it serves with AGENT_REPOS (comma-separated, trimmed,
+// lowercased, deduped). Work that names a repo (payload.repo) is only eligible for
+// workers that serve it; work without a repo and workers without repos stay open to
+// everyone, so nothing changes for the pools registered before this key existed.
+export const normalizeRepo = (value) => String(value ?? "").trim().toLowerCase();
+export const normalizeRepos = (value) => [...new Set(String(value ?? "").split(",").map(normalizeRepo).filter(Boolean))].sort();
+export const reposFromEnv = (env = process.env) => normalizeRepos(env.AGENT_REPOS);
+export const workRepoOf = (candidate) => normalizeRepo(candidate?.payload?.repo ?? candidate?.payload?.metadata?.repo);
+export const repoAllowed = (candidate, repos = []) => {
+  const repo = workRepoOf(candidate);
+  if (!repo) return true; // unscoped work: any worker may bid
+  const served = normalizeRepos(repos);
+  if (!served.length) return true; // unscoped worker: serves every repo
+  return served.includes(repo);
+};
+// Tool gating, same shape as the repo scoping mechanism: a worker declares the
+// tools it can use with AGENT_TOOLS (comma-separated). Work that requires a tool
+// the worker has not declared is declined before bidding, so a no-browser worker
+// can no longer win a browser task, expire two leases and force an escalation.
+// Required tools are explicit payload requires_tools (payload or payload.metadata)
+// plus keyword inference for browser work (browser/Playwright/screenshot/live-URL
+// QA, e.g. a "PRE-LAUNCH QA SWEEP of app.buildmy.house").
+export const normalizeTools = (value) => [...new Set((Array.isArray(value) ? value : String(value ?? "").split(",")).map((tool) => String(tool ?? "").trim().toLowerCase()).filter(Boolean))].sort();
+export const toolsFromEnv = (env = process.env) => normalizeTools(env.AGENT_TOOLS);
+export const BROWSER_TASK_RE = /\b(browser|playwright|screenshot|live[ -]?url|app\.buildmy\.house)\b/i;
+const taskTextOf = (candidate) => (Array.isArray(candidate?.payload?.parts) ? candidate.payload.parts : []).filter((part) => typeof part?.text === "string").map((part) => part.text).join("\n");
+export function requiredToolsOf(candidate) {
+  const payload = candidate?.payload ?? {};
+  const required = normalizeTools([payload.requires_tools, payload.metadata?.requires_tools].flat(Infinity));
+  if (BROWSER_TASK_RE.test(taskTextOf(candidate))) required.push("browser");
+  return [...new Set(required)].sort();
+}
+export const toolsAllowed = (candidate, tools = []) => {
+  const required = requiredToolsOf(candidate);
+  if (!required.length) return true; // work requiring no tools is open to every worker
+  const declared = normalizeTools(tools);
+  return required.every((tool) => declared.includes(tool));
+};
+const missingToolsOf = (candidate, tools) => {
+  const declared = normalizeTools(tools);
+  return requiredToolsOf(candidate).filter((tool) => !declared.includes(tool));
+};
 const positiveNumber = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
 const POOL_TIER = normalizeTier(process.env.AGENT_TIER, process.env.AGENT_FLAVOR === "opencode" ? "cheap" : "power");
 const POOL_COST_FACTOR = positiveNumber(process.env.AGENT_COST_FACTOR, process.env.AGENT_FLAVOR === "opencode" ? 0.1 : 1);
+// Repos this pool serves. Empty means it serves every repo (backward compatible).
+const POOL_REPOS = reposFromEnv(process.env);
+// Tools this pool can use. Empty means it declares no tools: work requiring a
+// tool (explicitly or inferred) is declined instead of bid on.
+const POOL_TOOLS = toolsFromEnv(process.env);
 // Hive holds allocation open (deferred) while connected pool workers have not bid; each
 // retry waits at most 10s, so this bounds the wait at roughly 2-4 minutes.
 const ALLOCATE_MAX_ATTEMPTS = 24;
@@ -70,7 +119,7 @@ export function tierAffinityMultiplier(taskTier, poolTier) {
 export const taskTierOf = (candidate) => normalizeTier(candidate?.payload?.tier);
 
 // Ticket metadata is not part of payload.parts, so a worker never sees it unless it is injected.
-// approval_ref (docs/PUBLISHER.md) is the one key workers need: the publisher agent refuses to
+// approval_ref (docs/MARKETING-LEAD.md) is the one key workers need: the marketing-lead agent refuses to
 // publish to Reddit or Substack without it. Only a well-formed value is passed on, so a ticket
 // cannot smuggle prompt text through this field.
 export const APPROVAL_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{5,119}$/;
@@ -111,7 +160,9 @@ if (hiveMember) {
     let message;
     try { message = JSON.parse(line); } catch { return; }
     if (message.method === "notifications/message" && message.params?.data?.event === "hive_subscription") {
-      emitTelemetry(message.params.data);
+      // "alive" is a liveness tick only (one per SSE chunk): never forward it as telemetry.
+      if (message.params.data.state === "alive" || message.params.data.state === "connected") markHiveOk();
+      if (message.params.data.state !== "alive") emitTelemetry(message.params.data);
       return;
     }
     const waiter = hivePending.get(message.id);
@@ -440,6 +491,10 @@ async function readJson(request) {
 
 async function handleA2A(request, response) {
   const url = new URL(request.url, "http://127.0.0.1");
+  if (request.method === "GET" && url.pathname === "/healthz") {
+    const health = hiveHealth();
+    return sendHttp(response, health.ok ? 200 : 503, health);
+  }
   if (request.method === "GET" && url.pathname === "/.well-known/agent-card.json") {
     return sendHttp(response, 200, {
       name: "buildmy.house engineering agent",
@@ -842,15 +897,36 @@ const assessmentFailures = new Map();
 const ASSESSMENT_FAILURE_WARN_THRESHOLD = 5;
 export async function runHiveWork(candidate, deps = {}) {
   if (!candidate?.id) return;
-  if (!acquireHiveSlot()) {
-    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "deferred", reason: "worker_busy" });
-    return;
-  }
   const hiveCallDep = deps.hiveCall ?? hiveCall;
   const healthDep = deps.health ?? health;
   const telemetryDep = deps.telemetry ?? telemetry;
   const assessDep = deps.assessTaskFit ?? assessTaskFit;
   const agentId = deps.agentId ?? (process.env.HIVE_AGENT_ID || "engineering-agent");
+  // Repo scoping: work that names a repo this worker does not serve is never bid on.
+  // The decline is recorded so Hive stops re-offering the same item to this worker.
+  const repos = deps.repos ?? POOL_REPOS;
+  if (!repoAllowed(candidate, repos)) {
+    const repo = workRepoOf(candidate);
+    const served = normalizeRepos(repos);
+    console.error(`hive work skipped: reason=repo_not_served repo=${repo} is not served by this worker (AGENT_REPOS=${served.length ? served.join(",") : "all"})`);
+    await recordDecline(hiveCallDep, candidate, "repo_not_served");
+    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: "repo_not_served", repo });
+    return;
+  }
+  // Tool gating: work that requires a tool this worker has not declared is
+  // declined before bidding, so it never wins a lease it cannot execute.
+  const tools = deps.tools ?? POOL_TOOLS;
+  if (!toolsAllowed(candidate, tools)) {
+    const missing = missingToolsOf(candidate, tools);
+    console.error(`hive work skipped: reason=tool_not_declared missing=${missing.join(",")} (AGENT_TOOLS=${normalizeTools(tools).length ? normalizeTools(tools).join(",") : "none"})`);
+    await recordDecline(hiveCallDep, candidate, "tool_not_declared");
+    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "bid_skipped", agent_id: agentId, reason: "tool_not_declared", missing_tools: missing });
+    return;
+  }
+  if (!acquireHiveSlot()) {
+    emitTelemetry({ event: "hive_work", task_id: candidate.id, state: "deferred", reason: "worker_busy" });
+    return;
+  }
   let keepBusy = false;
   try {
     const healthState = healthDep();
@@ -1020,6 +1096,21 @@ export async function handleBidPrompt(request, deps = {}) {
     work = (available?.work || []).find((item) => workMatches(item, request.work_id));
   } catch { return unavailable("hive_unavailable"); }
   if (!work) return unavailable("work_not_available");
+  // Repo scoping: this worker declines work for a repo it does not serve.
+  const repos = deps.repos ?? POOL_REPOS;
+  if (!repoAllowed(work, repos)) {
+    const repo = workRepoOf(work);
+    const served = normalizeRepos(repos);
+    console.error(`hive work declined: reason=repo_not_served repo=${repo} is not served by this worker (AGENT_REPOS=${served.length ? served.join(",") : "all"})`);
+    return { outcome: "declined", worker_id: agentId, reason: "repo_not_served" };
+  }
+  // Tool gating: this worker declines work requiring a tool it has not declared.
+  const tools = deps.tools ?? POOL_TOOLS;
+  if (!toolsAllowed(work, tools)) {
+    const missing = missingToolsOf(work, tools);
+    console.error(`hive work declined: reason=tool_not_declared missing=${missing.join(",")} (AGENT_TOOLS=${normalizeTools(tools).length ? normalizeTools(tools).join(",") : "none"})`);
+    return { outcome: "declined", worker_id: agentId, reason: "tool_not_declared" };
+  }
   let assessment = null;
   if (!decisionBusy && healthState.status === "healthy") {
     try {
@@ -1109,30 +1200,66 @@ export async function promptWorkers(args, deps = {}) {
   return { ...base, outcomes };
 }
 
-let hiveRetryAttempt = 0;
-async function subscribeHive() {
-  if (!hiveMember) return;
-  const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
+// Reconnect backoff for the Hive work subscription: exponential from 1s, capped at 30s, with
+// equal jitter (half fixed, half random) so a restarted coordinator is not hit by every pool at
+// the same instant and no worker ever waits less than half the ceiling.
+export function subscriptionBackoffMs(attempt, random = Math.random) {
+  const ceiling = Math.min(30_000, 1_000 * (2 ** Math.max(0, attempt - 1)));
+  return Math.floor(ceiling / 2 + Math.max(0, Math.min(0.999999, random())) * (ceiling / 2));
+}
+
+// Liveness: the pod is healthy while the Hive subscription has made progress recently (a poll
+// returned, a stream connected, or a stream chunk arrived), while it is busy running work (the
+// poll loop is intentionally parked), or inside the startup grace. Anything else for longer
+// than HIVE_STALE_MS means the member is wedged, and /healthz fails so Kubernetes restarts it.
+const HIVE_STALE_MS = Number(process.env.HIVE_STALE_MS) || 600_000;
+let hiveLastOkAt = Date.now();
+export function markHiveOk(now = Date.now()) { hiveLastOkAt = now; }
+export function hiveHealth({ now = Date.now(), lastOkAt = hiveLastOkAt, busy = hiveBusy, enabled = Boolean(hiveMember), staleMs = HIVE_STALE_MS } = {}) {
+  const idleMs = now - lastOkAt;
+  return { ok: !enabled || busy || idleMs <= staleMs, enabled, busy, last_ok_ms_ago: idleMs, stale_after_ms: staleMs };
+}
+
+// Never gives up: every failure (including one thrown by work handling or telemetry) is logged,
+// backed off, and retried. The old version rescheduled itself with a bare setTimeout from inside
+// its own catch, so any throw in that path ended the subscription silently while the pod stayed
+// Running/Ready.
+export async function runSubscriptionLoop({ call, runWork, waitForSlot = async () => {}, emit = () => {}, log = console.error, sleep = delay, random = Math.random, markOk = markHiveOk, agentId = "engineering-agent", shouldStop = () => false } = {}) {
   const startedAt = Date.now();
-  try {
-    emitTelemetry({ event: "hive_subscription", state: "connecting", agent_id: agentId, attempt: hiveRetryAttempt + 1 });
-    while (true) {
-      await waitForHiveSlot();
-      const candidate = await hiveCall("hive_next_work", { timeout_seconds: 900 });
-      hiveRetryAttempt = 0;
-      emitTelemetry({ event: "hive_subscription", state: "work_received", task_id: candidate?.id, agent_id: agentId, duration_ms: Date.now() - startedAt });
-      await runHiveWork(candidate);
+  const safeEmit = (event) => { try { emit(event); } catch {} };
+  let attempt = 0;
+  while (!shouldStop()) {
+    try {
+      safeEmit({ event: "hive_subscription", state: "connecting", agent_id: agentId, attempt: attempt + 1 });
+      await waitForSlot();
+      const candidate = await call("hive_next_work", { timeout_seconds: 900 });
+      if (attempt > 0) safeEmit({ event: "hive_subscription", state: "reconnected", agent_id: agentId, attempts: attempt });
+      attempt = 0;
+      markOk();
+      if (candidate?.id) {
+        safeEmit({ event: "hive_subscription", state: "work_received", task_id: candidate.id, agent_id: agentId, duration_ms: Date.now() - startedAt });
+        await runWork(candidate);
+      }
+    } catch (error) {
+      attempt += 1;
+      const delayMs = subscriptionBackoffMs(attempt, random);
+      try { log(formatSubscriptionFailure(error, attempt, delayMs)); } catch {}
+      safeEmit({ event: "hive_subscription", state: "failed", agent_id: agentId, attempt, duration_ms: Date.now() - startedAt, ...errorTelemetry(error) });
+      safeEmit({ event: "hive_subscription", state: "reconnecting", agent_id: agentId, attempt, delay_ms: delayMs });
+      await sleep(delayMs);
     }
-  } catch (error) {
-    hiveRetryAttempt += 1;
-    const delayMs = retryDelayMs(hiveRetryAttempt);
-    console.error(formatSubscriptionFailure(error, hiveRetryAttempt, delayMs));
-    emitTelemetry({ event: "hive_subscription", state: "failed", agent_id: agentId, attempt: hiveRetryAttempt, duration_ms: Date.now() - startedAt, ...errorTelemetry(error) });
-    emitTelemetry({ event: "hive_subscription", state: "reconnecting", agent_id: agentId, attempt: hiveRetryAttempt, delay_ms: delayMs });
-    setTimeout(subscribeHive, delayMs);
   }
 }
-if (hiveMember) subscribeHive();
+
+if (hiveMember) {
+  void runSubscriptionLoop({
+    call: hiveCall,
+    runWork: (candidate) => runHiveWork(candidate),
+    waitForSlot: waitForHiveSlot,
+    emit: emitTelemetry,
+    agentId: process.env.HIVE_AGENT_ID || "engineering-agent",
+  });
+}
 
 if (isMain) {
   const requests = readline.createInterface({ input: process.stdin });

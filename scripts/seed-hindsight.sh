@@ -23,8 +23,39 @@ fi
 mkdir -p "$H/hindsight"
 if [ -s "$DEST" ]; then
   echo "[hindsight] config already present; leaving as is"
+  # One-time bank rename (docs/HINDSIGHT-BANKS.md): the original default bank
+  # was "hermes"; the CEO's bank is now "ceo". Only that exact old default is
+  # rewritten; any other operator value is left alone. Copy the old bank's
+  # memories across first with scripts/hindsight-copy-bank.py.
+  python3 - "$DEST" <<'PY' || echo "[hindsight] WARN: bank migration skipped" >&2
+import json, sys
+path = sys.argv[1]
+cfg = json.load(open(path))
+if cfg.get("bank_id") == "hermes":
+    cfg["bank_id"] = "ceo"
+    if cfg.get("retain_tags") == ["hermes", "explicit"]:
+        cfg["retain_tags"] = ["ceo", "explicit"]
+    if cfg.get("retain_source") == "hermes":
+        cfg["retain_source"] = "ceo"
+    json.dump(cfg, open(path, "w"), indent=2)
+    print("[hindsight] migrated bank_id hermes -> ceo")
+PY
 else
   cp "$SRC/config.json" "$DEST"
   echo "[hindsight] seeded $DEST"
+fi
+
+# Bank creation (docs/HINDSIGHT-BANKS.md): Hindsight only creates a bank on a
+# write, and the CEO is tools-only (auto_retain=false), so recall would 404 on
+# a never-written bank. Ensure it in the background so boot never blocks; the
+# script logs [hindsight]-prefixed lines and failure only warns. Skip with
+# HINDSIGHT_ENSURE_BANK=0 (tests) or when no key is configured.
+if [ -n "${HINDSIGHT_API_KEY:-}" ] && [ "${HINDSIGHT_ENSURE_BANK:-1}" != "0" ]; then
+  HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -f "$HERE/hindsight-ensure-bank.py" ]; then
+    python3 "$HERE/hindsight-ensure-bank.py" &
+  else
+    echo "[hindsight] WARN: $HERE/hindsight-ensure-bank.py missing; bank not ensured" >&2
+  fi
 fi
 exit 0

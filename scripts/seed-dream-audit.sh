@@ -17,7 +17,7 @@ DREAM_DELIVER="${DREAM_AUDIT_DELIVER:-discord:#human-in-the-loop}"
 # entrypoint may render a different live-probed free model there at boot, in
 # which case override with DREAM_AUDIT_MODEL).
 DREAM_PROVIDER="${DREAM_AUDIT_PROVIDER:-custom:nous}"
-DREAM_MODEL="${DREAM_AUDIT_MODEL:-meituan/longcat-2.5-preview:free}"
+DREAM_MODEL="${DREAM_AUDIT_MODEL:-poolside/laguna-xs-2.1:free}"
 
 # 1. Skill: copy-per-skill, overwrite ONLY dream-audit; never touch other skills.
 if [ -d "$SRC/skills/dream-audit" ]; then

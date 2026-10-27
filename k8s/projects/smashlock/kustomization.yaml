@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# SmashLock worker stack for cluster 1 (company-ops namespace).
+# Not part of k8s/overlays/buildmy-prod: apply this directory directly,
+# on demand, via builder-gw/container-manager-gw (human-approved step).
+resources:
+  - smashlock-opencode.yaml
+  - smashlock-reviewer.yaml
+  - smashlock-infisical-sync.yaml

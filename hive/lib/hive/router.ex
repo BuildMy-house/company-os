@@ -80,6 +80,20 @@ defmodule Hive.Router do
               422
             )
 
+          {:error, :invalid_repo} ->
+            json(
+              conn,
+              %{
+                "jsonrpc" => "2.0",
+                "id" => request_id,
+                "error" => %{
+                  "code" => -32602,
+                  "message" => "repo must be a non-empty string"
+                }
+              },
+              422
+            )
+
           {:error, :invalid_slug} ->
             json(
               conn,
@@ -216,10 +230,18 @@ defmodule Hive.Router do
 
   post "/work/:work_id/allocate" do
     case Hive.Work.allocate(work_id, conn.body_params["lease_seconds"] || 900) do
-      {:ok, work} -> json(conn, work)
-      {:error, :work_not_found} -> json(conn, %{"error" => "work not found"}, 404)
-      {:error, :no_bids} -> json(conn, %{"error" => "no interested bids"}, 409)
-      {:error, :unavailable} -> json(conn, %{"error" => "work unavailable"}, 409)
+      {:ok, work} ->
+        json(conn, work)
+
+      {:error, :work_not_found} ->
+        json(conn, %{"error" => "work not found"}, 404)
+
+      {:error, :no_bids} ->
+        json(conn, %{"error" => "no interested bids"}, 409)
+
+      {:error, :unavailable} ->
+        json(conn, %{"error" => "work unavailable"}, 409)
+
       # Bid window still open: a connected pool worker has not bid yet. Not an error:
       # the caller retries after `retry_after_seconds` instead of locking in the first bid.
       {:deferred, seconds} ->
@@ -329,7 +351,14 @@ defmodule Hive.Router do
       json(conn, work)
     else
       {:error, :invalid_feedback} ->
-        json(conn, %{"error" => "result.feedback requires calibration {estimated_cost, actual_cost, estimated_benefit, actual_benefit (numbers)} and friction (string)"}, 422)
+        json(
+          conn,
+          %{
+            "error" =>
+              "result.feedback requires calibration {estimated_cost, actual_cost, estimated_benefit, actual_benefit (numbers)} and friction (string)"
+          },
+          422
+        )
 
       {:error, :not_owner} ->
         json(conn, %{"error" => "agent does not hold lease"}, 409)
@@ -350,6 +379,16 @@ defmodule Hive.Router do
     else
       {:error, :not_owner} -> json(conn, %{"error" => "agent does not hold active lease"}, 409)
       _ -> json(conn, %{"error" => "agent_id required"}, 400)
+    end
+  end
+
+  # Terminal-cancel (TICKET G): valid from available/claimed/escalated; stores reason
+  # and cancelled_at in the terminal result metadata, releases the lease and drops bids.
+  post "/work/:work_id/cancel" do
+    case Hive.Work.cancel(work_id, conn.body_params["reason"]) do
+      {:ok, work} -> json(conn, work)
+      {:error, :not_found} -> json(conn, %{"error" => "work not found"}, 404)
+      {:error, :terminal_state} -> json(conn, %{"error" => "work cannot be cancelled"}, 409)
     end
   end
 

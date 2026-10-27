@@ -158,3 +158,21 @@ the score fallback. With no capable execute-mode agent registered, the work is n
 allocated (`409 no_bids`) and the re-offer sweep escalates it with `reason: "missing_tools"`
 and the missing tool names instead of lowering the tier. Work without `requires_tools` is
 unaffected.
+
+## Repo scoping
+
+Agents may register `capabilities.repos` (list of repo names such as `smashlock`, `house-designer`,
+`company-ops`). Work whose payload has `repo` (a single string, e.g. `"smashlock"`) only goes to
+agents declaring that repo (case-insensitive match after trimming). Agents without `capabilities.repos`
+or with an empty list serve **all** repos (backward compatible). Work without `repo` is unscoped and
+any worker may bid (backward compatible). A bid from an agent missing the required repo is annotated
+`ineligible_reasons: ["repo_mismatch"]` with a `worker_repos` array in `GET /work/:id/bids` and can
+never win or be the score fallback. With no capable execute-mode agent registered for the required
+repo, the work is not allocated and the re-offer sweep escalates it with `reason: "missing_repo"`
+and the required repo name instead of lowering the tier. Work without `repo` is unaffected.
+
+Rules mirror the `requires_tools` / `capabilities.tools` mechanism exactly:
+- Work with no `repo` = unscoped, any worker may bid.
+- Worker with no/empty `repos` = serves ALL repos.
+- Work with `repo` R and a worker whose non-empty `repos` does not include R = ineligible (`repo_mismatch`).
+- Compare case-insensitively after trimming.

@@ -1,0 +1,27 @@
+# Steward identity for the smashlock-opencode and smashlock-reviewer agents, mirroring
+# company-ops-steward-engineering-opencode in k8s/base/infisical-sync/infisical-sync.yaml.
+# Everything else (Axiom, TokenRouter, GitHub App) comes from the shared company-ops-secrets
+# Secret via envFrom, so no SmashLock-specific folder is needed.
+# The folder /infra/steward/smashlock-opencode must contain exactly STEWARD_MCP_URL and
+# STEWARD_TOKEN as separate keys (the names opencode/worker/opencode.json reads). The operator
+# creates Secret company-ops-steward-smashlock-opencode in company-ops.
+apiVersion: secrets.infisical.com/v1beta1
+kind: InfisicalStaticSecret
+metadata:
+  name: company-ops-steward-smashlock-opencode
+  namespace: company-ops
+spec:
+  infisicalAuthRef:
+    name: infisical-auth
+    namespace: company-ops
+  syncOptions:
+    refreshInterval: 60s
+  sources:
+    - projectId: "8806c2b0-73d2-4bea-8537-5b874c5ff592"
+      environmentSlug: dev
+      secretPath: /infra/steward/smashlock-opencode
+  targets:
+    - name: company-ops-steward-smashlock-opencode
+      namespace: company-ops
+      kind: Secret
+      creationPolicy: Owner

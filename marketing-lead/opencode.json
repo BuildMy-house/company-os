@@ -1,0 +1,32 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "zai-coding-plan/glm-5.3-flash",
+  "permission": {
+    "webfetch": "deny",
+    "websearch": "deny",
+    "external_directory": "deny",
+    "edit": "allow",
+    "bash": {
+      "*": "ask",
+      "marketing-lead *": "allow",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git add*": "allow",
+      "git commit*": "allow",
+      "git checkout*": "allow",
+      "git push*": "allow",
+      "git fetch*": "allow",
+      "ls*": "allow",
+      "cat*": "allow",
+      "curl*": "deny",
+      "wget*": "deny",
+      "psql*": "deny",
+      "kubectl*": "deny",
+      "ssh*": "deny",
+      "env*": "deny",
+      "printenv*": "deny"
+    }
+  },
+  "instructions": ["AGENTS.md"]
+}

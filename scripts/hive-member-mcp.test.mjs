@@ -397,7 +397,7 @@ test("hive_next_work failure logs a safe line and reports subscription failed", 
   assert.equal(logged.split("\n").length, 1, "stderr failure line must be single-line JSON");
 });
 
-test("hive_next_work returns null on long-poll timeout without a failed report", async (t) => {
+test("hive_next_work timeout returns a timed_out result without a failed report", async (t) => {
   const server = createServer((request, response) => {
     if (request.method === "POST" && request.url === "/agents/register") {
       response.writeHead(200, { "content-type": "application/json" });
@@ -446,9 +446,146 @@ test("hive_next_work returns null on long-poll timeout without a failed report",
   await call(1, "initialize", { protocolVersion: "2025-03-26" });
   const response = await call(2, "tools/call", { name: "hive_next_work", arguments: { timeout_seconds: 1 } });
   assert.equal(response.error, undefined, JSON.stringify(response.error));
-  assert.equal(JSON.parse(response.result.content[0].text), null, "timeout must return null, not an error");
+  const result = JSON.parse(response.result.content[0].text);
+  assert.deepEqual(result, { timed_out: true, retry: true, timeout_seconds: 1 }, "timeout must return a timed_out result, not an error");
   assert.ok(notifications.some((data) => data.state === "connected"));
   assert.equal(notifications.some((data) => data.state === "failed"), false, "timeout is idle, not a failure");
+});
+
+test("a pending hive_wait does not block a concurrent hive_status", async (t) => {
+  const server = createServer((request, response) => {
+    if (request.method === "POST" && request.url === "/agents/register") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+      return;
+    }
+    if (request.url?.startsWith("/events/subscribe?")) {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": connected\n\n");
+      return; // stream stays open; only the client's own timeout ends the wait
+    }
+    if (request.url?.startsWith("/tasks/")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "t1", state: "running" }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const address = server.address();
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${address.port}`, HIVE_AGENT_ID: "concurrent-test" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    const waiter = waiters.get(message.id);
+    if (!waiter) return;
+    waiters.delete(message.id);
+    waiter(message);
+  });
+  const call = (id, method, params = {}) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      waiters.delete(id);
+      reject(new Error(`timed out waiting for ${method}`));
+    }, 15_000);
+    waiters.set(id, (message) => { clearTimeout(timer); resolve(message); });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  });
+
+  await call(1, "initialize", { protocolVersion: "2025-03-26" });
+  const waitPromise = call(2, "tools/call", { name: "hive_wait", arguments: { task_id: "t1", timeout_seconds: 5 } });
+  await sleep(250); // let the wait connect before the concurrent call arrives
+  const statusStart = Date.now();
+  const status = await call(3, "tools/call", { name: "hive_status", arguments: { task_id: "t1" } });
+  const statusElapsed = Date.now() - statusStart;
+  assert.equal(status.error, undefined, JSON.stringify(status.error));
+  assert.ok(statusElapsed < 4_000, `hive_status took ${statusElapsed}ms — the pending hive_wait is blocking the read loop`);
+  assert.equal(JSON.parse(status.result.content[0].text).state, "running");
+
+  const waited = await waitPromise;
+  assert.equal(waited.error, undefined);
+  const waitedResult = JSON.parse(waited.result.content[0].text);
+  assert.deepEqual(waitedResult, { timed_out: true, retry: true, task_id: "t1", timeout_seconds: 5 });
+});
+
+test("oversized wait timeouts are clamped to the cap, and the schema advertises it", async (t) => {
+  const server = createServer((request, response) => {
+    if (request.method === "POST" && request.url === "/agents/register") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+      return;
+    }
+    if (request.url?.startsWith("/events/subscribe?") || request.url?.startsWith("/work/subscribe?")) {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": connected\n\n");
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const address = server.address();
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${address.port}`, HIVE_AGENT_ID: "clamp-test", HIVE_WAIT_MAX_SECONDS: "2" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    const waiter = waiters.get(message.id);
+    if (!waiter) return;
+    waiters.delete(message.id);
+    waiter(message);
+  });
+  const call = (id, method, params = {}) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      waiters.delete(id);
+      reject(new Error(`timed out waiting for ${method}`));
+    }, 15_000);
+    waiters.set(id, (message) => { clearTimeout(timer); resolve(message); });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  });
+
+  await call(1, "initialize", { protocolVersion: "2025-03-26" });
+  const listed = await call(2, "tools/list");
+  const byName = new Map(listed.result.tools.map((tool) => [tool.name, tool]));
+  for (const name of ["hive_wait", "hive_next_work"]) {
+    const schema = byName.get(name).inputSchema.properties.timeout_seconds;
+    assert.equal(schema.maximum, 360, `${name} must advertise the 360s cap`);
+    assert.equal(schema.default, 300, `${name} must advertise the 300s default`);
+  }
+
+  // Requested 9000s must be clamped (here to the test cap of 2s), not honored or rejected.
+  const start = Date.now();
+  const response = await call(3, "tools/call", { name: "hive_wait", arguments: { task_id: "t1", timeout_seconds: 9000 } });
+  const elapsed = Date.now() - start;
+  assert.equal(response.error, undefined, JSON.stringify(response.error));
+  assert.equal(JSON.parse(response.result.content[0].text).timed_out, true);
+  assert.ok(elapsed < 30_000, `oversized timeout_seconds waited ${elapsed}ms — not clamped`);
+  assert.ok(elapsed >= 1_500, `returned after only ${elapsed}ms — clamp did not apply`);
+
+  // The default respects the cap too.
+  const nextStart = Date.now();
+  const next = await call(4, "tools/call", { name: "hive_next_work", arguments: {} });
+  const nextElapsed = Date.now() - nextStart;
+  assert.equal(next.error, undefined);
+  assert.equal(JSON.parse(next.result.content[0].text).timed_out, true);
+  assert.ok(nextElapsed < 30_000 && nextElapsed >= 1_500, `default wait took ${nextElapsed}ms — expected the 2s cap`);
 });
 
 test("HIVE_REGISTER=false never calls /agents/register, default still registers", async (t) => {
@@ -563,18 +700,18 @@ test("registration declares capabilities.tools only for known, verifiable tools"
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "browser,hindsight", PLAYWRIGHT_BROWSERS_PATH: noBrowsers })).tools, ["hindsight"], "browser is dropped without Chromium");
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "browser,hindsight", PLAYWRIGHT_BROWSERS_PATH: withChromium })).tools, ["browser", "hindsight"]);
 
-  // Credential-gated publisher tools: declared only when their env is present.
-  const publisherTools = "github-pr,reddit-publish,substack-publish,marketing-db-read,marketing-ingest";
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools })).tools, [], "no credentials declares none of the publisher tools");
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c" })).tools, [], "partial reddit credentials declare nothing");
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c", REDDIT_PASSWORD: "d", PUBLISHER_DATABASE_URL: "postgresql://x" })).tools, ["marketing-db-read", "reddit-publish"]);
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, SUBSTACK_PUBLICATION_URL: "https://x.substack.com", SUBSTACK_SESSION_TOKEN: "c" })).tools, [], "the cookie alone declares nothing: the sidecar ready marker is required");
+  // Credential-gated marketing-lead tools: declared only when their env is present.
+  const marketingLeadTools = "github-pr,reddit-publish,substack-publish,marketing-db-read,marketing-ingest";
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools })).tools, [], "no credentials declares none of the marketing-lead tools");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c" })).tools, [], "partial reddit credentials declare nothing");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c", REDDIT_PASSWORD: "d", PUBLISHER_DATABASE_URL: "postgresql://x" })).tools, ["marketing-db-read", "reddit-publish"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, SUBSTACK_PUBLICATION_URL: "https://x.substack.com", SUBSTACK_SESSION_TOKEN: "c" })).tools, [], "the cookie alone declares nothing: the sidecar ready marker is required");
   const marker = join(await mkdtemp(join(tmpdir(), "ready-")), "m");
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, MARKETING_INGEST_READY_FILE: marker, SUBSTACK_READY_FILE: marker })).tools, [], "ready-file env pointing at a missing file declares nothing");
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, MARKETING_INGEST_READY_FILE: marker, SUBSTACK_READY_FILE: marker })).tools, [], "ready-file env pointing at a missing file declares nothing");
   await writeFile(marker, "ok");
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, MARKETING_INGEST_READY_FILE: marker })).tools, ["marketing-ingest"]);
-  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: publisherTools, SUBSTACK_READY_FILE: marker })).tools, ["substack-publish"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, MARKETING_INGEST_READY_FILE: marker })).tools, ["marketing-ingest"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: marketingLeadTools, SUBSTACK_READY_FILE: marker })).tools, ["substack-publish"]);
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "github-pr", GITHUB_TOKEN: "x" })).tools, ["github-pr"]);
   assert.deepEqual((await registeredCapabilities({ AGENT_TOOLS: "ga-read,gsc-read,reddit-read,substack-read" })).tools, [], "read-API tools were replaced by marketing-db-read");
 });
@@ -628,3 +765,126 @@ test("hive_submit validates requires_tools and leaves tool-free tickets unchange
   await submit({ message: "empty", metadata: { ...ticket, requires_tools: [] } });
   assert.equal("requires_tools" in submitted[2].params.metadata, false);
 });
+
+test("registration declares capabilities.repos only for the repos the worker serves", async (t) => {
+  async function registeredCapabilities(env) {
+    let captured;
+    const server = createServer(async (request, response) => {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      if (request.url === "/agents/register") captured = JSON.parse(body).capabilities;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const childEnv = { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "repos-test", AGENT_TOOLS: "", ...env };
+    if (!("AGENT_REPOS" in env)) delete childEnv.AGENT_REPOS;
+    const child = spawn(process.execPath, [memberScript], { env: childEnv, stdio: ["pipe", "pipe", "ignore"] });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    child.kill();
+    server.closeAllConnections();
+    server.close();
+    return captured;
+  }
+
+  assert.equal("repos" in (await registeredCapabilities({})), false, "no AGENT_REPOS declares no repos");
+  assert.equal("repos" in (await registeredCapabilities({ AGENT_REPOS: "" })), false, "an empty AGENT_REPOS declares no repos");
+  assert.equal("repos" in (await registeredCapabilities({ AGENT_REPOS: " , " })), false, "a blank AGENT_REPOS declares no repos");
+  assert.deepEqual((await registeredCapabilities({ AGENT_REPOS: "smashlock" })).repos, ["smashlock"]);
+  assert.deepEqual((await registeredCapabilities({ AGENT_REPOS: " SmashLock , other ,smashlock,," })).repos, ["other", "smashlock"]);
+});
+
+test("hive_submit validates metadata.repo and passes it through to Hive", async (t) => {
+  const submitted = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    if (request.method === "POST" && request.url === "/") submitted.push(JSON.parse(body));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"result":{"id":"task_test"}}');
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "repo-ticket-test", HIVE_REGISTER: "false" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    waiters.get(message.id)?.(message);
+    waiters.delete(message.id);
+  });
+  let nextId = 1;
+  const submit = (args) => new Promise((resolve) => {
+    const id = nextId++;
+    waiters.set(id, resolve);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "hive_submit", arguments: args } })}\n`);
+  });
+  const ticket = { type: "chore", points: 2, goal: "Ship it.", acceptance_criteria: ["test passes"], scope: "repo smashlock, src/ only" };
+
+  const notString = await submit({ message: "qa", metadata: { ...ticket, repo: 42 } });
+  assert.match(notString.error.message, /TICKET-STANDARD/);
+  assert.match(notString.error.message, /metadata\.repo must be a string/);
+  const notList = await submit({ message: "qa", metadata: { ...ticket, repo: ["smashlock"] } });
+  assert.match(notList.error.message, /metadata\.repo must be a string/);
+  const blank = await submit({ message: "qa", metadata: { ...ticket, repo: "   " } });
+  assert.match(blank.error.message, /metadata\.repo must name a repo/);
+  assert.equal(submitted.length, 0, "an invalid repo never reaches Hive");
+
+  await submit({ message: "qa", metadata: { ...ticket, repo: " smashlock " } });
+  assert.equal(submitted[0].params.metadata.repo, "smashlock");
+
+  await submit({ message: "plain", metadata: ticket });
+  assert.equal("repo" in submitted[1].params.metadata, false, "a ticket without a repo stays unscoped");
+});
+
+test("instructions and tool descriptions document repo scoping", async (t) => {
+  const server = createServer((request, response) => {
+    if (request.method === "POST" && request.url === "/agents/register") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.closeAllConnections());
+  t.after(() => server.close());
+
+  const child = spawn(process.execPath, [memberScript], {
+    env: { ...process.env, HIVE_URL: `http://127.0.0.1:${server.address().port}`, HIVE_AGENT_ID: "repo-docs-test" },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  t.after(() => child.kill());
+  const lines = readline.createInterface({ input: child.stdout });
+  const waiters = new Map();
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    waiters.get(message.id)?.(message);
+    waiters.delete(message.id);
+  });
+  const call = (id, method, params = {}) => new Promise((resolve) => {
+    waiters.set(id, resolve);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  });
+
+  const initialized = await call(1, "initialize", { protocolVersion: "2025-03-26" });
+  assert.match(initialized.result.instructions, /metadata\.repo/);
+  assert.match(initialized.result.instructions, /AGENT_REPOS/);
+
+  const listed = await call(2, "tools/list");
+  const byName = new Map(listed.result.tools.map((tool) => [tool.name, tool]));
+  assert.match(byName.get("hive_submit").description, /metadata\.repo/);
+  assert.match(byName.get("hive_submit").description, /AGENT_REPOS/);
+  assert.equal(byName.get("hive_submit").inputSchema.properties.metadata.properties.repo.type, "string");
+  assert.match(byName.get("hive_bid").description, /AGENT_REPOS/);
+});
+

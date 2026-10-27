@@ -2,6 +2,10 @@
 timezone: UTC
 
 agent:
+  # Nous free models regularly answer 429 "at capacity upstream". The default
+  # of 3 app-level retries with 30s waits stalled a CEO reply for minutes
+  # before reaching the glm-5.3-flash fallback; 1 fails over after one retry.
+  api_max_retries: 1
   disabled_toolsets:
     - code_execution
     - file
@@ -14,16 +18,29 @@ model:
   # meituan/longcat-2.0:free have each gone this way (the last one answers
   # 404 "This model is no longer free" on every call while still listed).
   # Verified 2026-10-12 with a real chat completion, not the listing:
-  # meituan/longcat-2.5-preview:free answers 200 with a 1,048,576-token
+  # poolside/laguna-xs-2.1:free answers 200 with a 1,048,576-token
   # context. It is a preview build, so expect it to be retired the same way;
   # the glm-5.3-flash fallback below keeps Hermes serving when that happens.
   # Baked default only: scripts/entrypoint.sh renders the live-probed free
   # model over this line at every boot (hermes/resolve_model.py), and a 6h /
   # on-failure watcher restarts the pod when the best free model changes.
-  default: meituan/longcat-2.5-preview:free
+  default: poolside/laguna-xs-2.1:free
   provider: custom:nous
 
+# Ordered fallback chain. 2026-10-28: custom:zai_coding_plan glm-5.3-flash
+# returned 429 "Weekly/Monthly Limit Exhausted" (resets 2026-10-29 14:26) and a
+# CEO cron run died with no fallback left. Free TokenRouter goes first so a
+# Z.AI quota wall cannot take Hermes down again. Live probe 2026-10-28: this
+# TokenRouter token only lists two models, so glm-5.3-flash (prefixed or not)
+# 403s; use the models it actually lists. z-ai/glm-5.3-free answered 503 "no
+# available channel" at probe time and the nemotron :free model had hit its
+# OpenRouter free-tier daily cap (1000/day), so keep several diverse entries and
+# Z.AI last; re-probe with GET /v1/models before changing this list.
 fallback_providers:
+  - provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  - provider: custom:tokenrouter
+    model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
   - provider: custom:zai_coding_plan
     model: glm-5.3-flash
 
@@ -38,8 +55,8 @@ custom_providers:
       tags:
         - product=hermes-agent
         - user=hermes-agent
-  # TokenRouter stays available as an optional provider (see SOUL.md), but its
-  # token has no access to glm-5.3-flash (403), so auxiliary slots use Z.AI.
+  # TokenRouter leads fallback_providers (see above); its token has no access
+  # to glm-5.3-flash (403, probed 2026-10-28), so auxiliary slots stay on Z.AI.
   - name: tokenrouter
     base_url: https://api.tokenrouter.com/v1
     key_env: TOKENROUTER_API_KEY
@@ -51,7 +68,7 @@ auxiliary:
   # least one real failure ("Auxiliary title generation failed: HTTP 400...
   # missing tags"). Pin every aux slot (except vision, which needs
   # vision-capable models) to the same Z.AI Coding Plan model the
-  # fallback lane uses (TokenRouter 403s on glm-5.3-flash), and set free_only so the OpenRouter fallback
+  # fallback chain's Z.AI entry uses, and set free_only so the OpenRouter fallback
   # can never pick a paid SKU ("PAID lane engaged... may incur real spend").
   free_only: true
   compression:
@@ -139,7 +156,7 @@ display:
 # at its default; `threshold_tokens` is Hermes's absolute-token cap and the
 # trigger is the LOWER of the two (hermes_cli/config.py: "takes lower of ratio
 # vs absolute"; agent/agent_init.py clamps it to the window). Primary model
-# meituan/longcat-2.0:free has a ~1.05M window and the glm-5.3-flash fallback
+# poolside/laguna-xs-2.1:free has a ~1.05M window and the glm-5.3-flash fallback
 # 1M, so the default 50% ratio would only compact at ~500k tokens; cap it at
 # 100k so long CEO sessions compact long before context rot sets in. The
 # summariser is auxiliary.compression (glm-5.3-flash, 1M window), so 100k fits.
@@ -221,9 +238,29 @@ mcp_servers:
       KUBERNETES_SERVICE_PORT: "443"
     connect_timeout: 60
     timeout: 300
+  # Read-only cluster view for status reports (pods, events, logs in
+  # company-ops). --read-only drops every write verb server-side; the shared
+  # SA's RBAC still has no Secrets access, so there is no secrets surface.
+  # Separate entry from k8s_deployment so exposing it to the api_server
+  # platform (CEO chat) does not also expose patch-capable tools.
+  k8s_readonly:
+    command: "npx"
+    args: ["-y", "kubernetes-mcp-server@0.0.67", "--read-only", "--disable-destructive", "--log-file", "stderr", "--cluster-provider", "in-cluster"]
+    env:
+      KUBERNETES_SERVICE_HOST: "10.43.0.1"
+      KUBERNETES_SERVICE_PORT: "443"
+    connect_timeout: 60
+    timeout: 300
   container_manager:
     command: "node"
     args: ["/opt/company-ops/scripts/container-manager-mcp.js"]
+    # Root cause of container_status failing with "Kubernetes API unavailable
+    # outside a k3s pod": MCP command-subprocesses do not inherit the pod
+    # environment, so KUBERNETES_SERVICE_HOST was unset (the token/CA files
+    # were fine). Same workaround as k8s_deployment above.
+    env:
+      KUBERNETES_SERVICE_HOST: "10.43.0.1"
+      KUBERNETES_SERVICE_PORT: "443"
     connect_timeout: 30
     # Allow an engineering rollout plus its automatic rollback to complete.
     timeout: 1800
@@ -238,6 +275,20 @@ mcp_servers:
     args: ["/opt/company-ops/scripts/hive-member-mcp.js"]
     connect_timeout: 30
     timeout: 900
+  # Observer evidence ledger writers (record_decision, record_failure, ...).
+  # Without this server the CEO's record_decision call had nothing to bind to
+  # and observer.decisions/failures/predictions stayed empty. Connects as
+  # hermes_observer_writer (INSERT+SELECT only). MCP subprocesses do not
+  # inherit the pod env, so the DSN must be passed explicitly; the venv python
+  # is absolute because PATH is not inherited either. Fails loudly (non-zero
+  # exit) if the DSN is missing or the DB is unreachable.
+  observer:
+    command: "/opt/company-ops-venv/bin/python"
+    args: ["-m", "company_ops.observer_mcp"]
+    env:
+      OBSERVER_DATABASE_URL: "${OBSERVER_DATABASE_URL}"
+    connect_timeout: 30
+    timeout: 60
 
 # OpenAI-compatible HTTP API surface (gateway/platforms/api_server.py),
 # used by scripts/hermes-messenger-mcp.js so Claude/agent-manager can talk
@@ -274,5 +325,7 @@ platform_toolsets:
   api_server:
     - hermes-api-server
     - container_manager
+    - k8s_readonly
     - hermes_build_dispatcher
     - hive_member
+    - observer

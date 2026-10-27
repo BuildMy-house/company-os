@@ -3,16 +3,17 @@
 # it can do the file work Hermes cannot: agent.disabled_toolsets includes
 # file/terminal).
 #  1. finds the job id by name in $HERMES_HOME/cron/jobs.json
-#  2. reads the newest saved report for that job
-#  3. records the previous run time in $HERMES_HOME/ceo-status.last-run
-#  4. prints the final {"wakeAgent": true, "context": {...}} line.
+#  2. derives `since` from the mtime of the newest saved report (only a run
+#     that produced output advances the window; a failed run does not move it)
+#  3. reads the newest saved report for that job
+#  4. extracts the newest `Items:` footer from any saved report (a [SILENT] or
+#     footer-less run must not erase the tracked-item state)
+#  5. prints the final {"wakeAgent": true, "context": {...}} line.
 # Never fails the cron because of missing files: degrades to first_run=true.
 set -euo pipefail
 H="${HERMES_HOME:-/opt/data}"
 JOB_NAME="${JOB_NAME:-ceo-status-update}"
-STATE="$H/ceo-status.last-run"
 mkdir -p "$H"
-SINCE="$(cat "$STATE" 2>/dev/null || date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
 
 JOB_ID="$(python3 - "$H/cron/jobs.json" "$JOB_NAME" <<'PY'
 import json, sys
@@ -25,6 +26,18 @@ for j in jobs or []:
     if isinstance(j, dict) and j.get("name") == sys.argv[2]:
         print(j.get("id") or j.get("job_id") or j.get("name"))
         break
+PY
+)"
+
+SINCE="$(python3 - "$H" "${JOB_ID:-}" "$JOB_NAME" <<'PY'
+import glob, os, sys, time
+h, jid, name = sys.argv[1], sys.argv[2], sys.argv[3]
+cands = []
+for d in {jid, name}:
+    if d:
+        cands += glob.glob(os.path.join(h, "cron", "output", d, "*.md"))
+mtime = max(map(os.path.getmtime, cands)) if cands else time.time() - 2 * 3600
+print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime)))
 PY
 )"
 
@@ -43,17 +56,32 @@ with open(newest, encoding="utf-8", errors="replace") as f:
 PY
 )"
 
-date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE"
+PREV_ITEMS="$(python3 - "$H" "${JOB_ID:-}" "$JOB_NAME" <<'PY'
+import glob, os, sys
+h, jid, name = sys.argv[1], sys.argv[2], sys.argv[3]
+cands = []
+for d in {jid, name}:
+    if d:
+        cands += glob.glob(os.path.join(h, "cron", "output", d, "*.md"))
+for path in sorted(cands, key=os.path.getmtime, reverse=True):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        footers = [l.strip() for l in f if l.strip().startswith("Items:")]
+    if footers:
+        print(footers[-1])
+        break
+PY
+)"
 
 FIRST_RUN=false
 [ -n "$PREV_REPORT" ] || FIRST_RUN=true
 
-python3 - "$SINCE" "$FIRST_RUN" "$PREV_REPORT" <<'PY'
+python3 - "$SINCE" "$FIRST_RUN" "$PREV_REPORT" "$PREV_ITEMS" <<'PY'
 import json, sys
-since, first_run, report = sys.argv[1], sys.argv[2], sys.argv[3]
+since, first_run, report, items = sys.argv[1:5]
 print(json.dumps({"wakeAgent": True,
                   "context": {"since": since,
                               "first_run": first_run == "true",
-                              "previous_report": report}},
+                              "previous_report": report,
+                              "previous_items": items}},
                  ensure_ascii=False))
 PY

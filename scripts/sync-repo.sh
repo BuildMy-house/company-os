@@ -9,14 +9,14 @@ set -e
 # TTL, so always minted per-call rather than reused from startup) and
 # clones (first time) or fetches + hard-resets (subsequent times) the repo.
 #
-# Usage: sync-repo.sh <app|website|company-os|hermees|hermees-memory|observer-website>
+# Usage: sync-repo.sh <app|website|company-os|hermees|hermees-memory|observer-website|SmashLock>
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # GitHub org for the fallback clone/fetch URLs (default = today's literal).
 GITHUB_ORG="${GITHUB_ORG:-BuildMy-house}"
 
-name="${1:?Usage: sync-repo.sh <app|website|company-os|hermees|hermees-memory|observer-website>}"
+name="${1:?Usage: sync-repo.sh <app|website|company-os|hermees|hermees-memory|observer-website|SmashLock>}"
 
 case "$name" in
   app) url_var=APP_REPO_URL; path=/workspace/app-checkout ;;
@@ -25,8 +25,9 @@ case "$name" in
   hermees) url_var=HERMEES_REPO_URL; path=/workspace/hermees-checkout ;;
   hermees-memory) url_var=HERMEES_MEMORY_REPO_URL; path=/workspace/hermees-memory-checkout ;;
   observer-website) url_var=OBSERVER_WEBSITE_REPO_URL; path=/workspace/observer-website-checkout ;;
+  SmashLock) url_var=SMASHLOCK_REPO_URL; path=/workspace/SmashLock-checkout ;;
   *)
-    echo "ERROR: unknown repo '$name' (expected app|website|company-os|hermees|hermees-memory|observer-website)" >&2
+    echo "ERROR: unknown repo '$name' (expected app|website|company-os|hermees|hermees-memory|observer-website|SmashLock)" >&2
     exit 1
     ;;
 esac

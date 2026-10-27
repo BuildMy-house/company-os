@@ -17,6 +17,9 @@ memory of the previous run. Everything you need is in this skill plus the
 - `since` — UTC timestamp of the previous run (about 2 hours ago on first run).
 - `previous_report` — the text of the previous run's delivered report (empty on
   first run).
+- `previous_items` — the newest `Items:` footer from any saved report, even if
+  the latest run was `[SILENT]` (empty on first run). Diff against this, not
+  against remembered prose.
 - `first_run` — true when no previous report exists.
 
 ## When to Use
@@ -37,11 +40,16 @@ for one). Never start it on your own from a conversation.
    skill and block on it. Never guess, estimate, or recall a metric.
 4. No edits to `SOUL.md`, policy files, skills, or credentials. Never write
    secrets anywhere; scrub them from anything you quote.
+5. NEVER call `mcp__steward__query`: it is refused for tenant-scoped
+   credentials and can never succeed. Use Steward `query_memories`,
+   `list_tasks`, or `query_specs` instead, and never retry a refused call.
 
 ## Procedure
 
 1. GATHER current state (read-only): Steward tasks (Steward MCP), Hive results
-   (`hive_member`), Observer ledger/decisions, Board decisions from verified
+   (`hive_member`), Observer ledger/decisions (Observer MCP tool
+   `observer_ledger_read`, tables `decisions`, `failures`, `predictions`, etc.,
+   `since=context.since`), Board decisions from verified
    channels. Everything newer than `context.since` is a delta candidate;
    everything older is only useful for matching ids in `previous_report`.
 2. TRACK each item with a stable kebab-case id (e.g. `onboarding-drop-off`,
@@ -56,7 +64,34 @@ for one). Never start it on your own from a conversation.
      item — not even as a one-liner. At most a single closing line
      `N unchanged items omitted` with no detail.
 4. If there are no `new`/`changed`/`resolved` items AND the Unverified section
-   has nothing new or changed, reply with exactly `[SILENT]` and stop.
+   has nothing new or changed, reply with exactly `[SILENT]` and stop. Decide
+   this by diffing this run's fresh verification against `previous_items`, never
+   by rewording. NEVER restate text from `previous_report`: an item whose
+   verified state matches its footer state is `unchanged`, full stop.
+5. Do not track Steward feature requests or wishlist tickets (e.g.
+   `steward-task-dating`) as items; only track Board-relevant incidents,
+   blockers, and decisions.
+
+## Closing items
+
+An item that never closes is noise. Apply these rules each run:
+
+- `model-rate-limit-429` / `cron-delivery-429`: do not use "0 error traces" as
+  evidence. Count 429 / rate-limit lines in Axiom dataset `bmh-company` over
+  the window since `context.since` (or the nearest log/trace tool you actually
+  have, and say which). Mark `resolved` when the count is zero on 2 consecutive
+  runs (the previous footer state `open`/`changed` plus a zero count now, with
+  a zero count recorded in the previous report); otherwise keep it open and
+  cite the count.
+- `hindsight-crash-loop`: resolved once a `hindsight_recall` call succeeds this
+  run (Hindsight was fixed 2026-10-27). Cite the call. A 404
+  `Bank 'ceo' not found` means the bank was never created (fixed by the
+  ensure-bank startup step): keep the item open and cite the error if still
+  seen.
+- `diary-removal-stuck`: never declare resolved from `web_extract` alone (it is
+  cached and flaps per request). Require at least 5 fetches of the diary URL
+  that all land on `/blog/`, and state the fetch count. If only `web_extract`
+  is available, say so and keep the item open.
 
 ## Unverified
 
@@ -82,13 +117,16 @@ Group the report as:
 - Only groups with content appear; omit empty groups entirely.
 - Every item line carries its id and, for facts, the source pointer (Steward
   task id, Hive task slug, ledger id). No pointer, no fact.
-- The report MUST end with a one-line footer listing ALL currently open item
-  ids (every id that is not resolved), so the next run can diff against it:
+- The report MUST end with a one-line footer listing EVERY tracked item (all of
+  `previous_items` plus new ones), so the next run can diff against it:
 
         Items: <id>=<open|changed|resolved>, ...
 
   Use `changed` for an item that changed this run but is still open, `open`
-  for an open item with no change this run. The next run reads only this
+  for an open item with no change this run, `resolved` for one closed this run.
+  A resolved item stays in the footer for exactly one run, then drops
+  explicitly in the next run's report (`Resolved` section) — never vanish an
+  item silently, and never omit the footer. The next run reads only this
   footer from `previous_report` to detect deltas — keep it exact.
 
 ## Pitfalls
@@ -99,4 +137,5 @@ Group the report as:
   Hive report-request result? It goes under Unverified or nowhere.
 - Renaming an existing item instead of reusing its id. The next run then sees
   a phantom `new` item and a silently dropped old one.
+- Dropping an item from the footer instead of marking it `resolved`.
 - Padding a quiet run. A genuinely quiet run is `[SILENT]`, not a recap.

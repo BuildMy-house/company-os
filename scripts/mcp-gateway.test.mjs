@@ -267,9 +267,9 @@ test("manifest policy: violatesLimits against the real container-manager argLimi
   const good = { deployment: "hive-coordinator", image: `localhost:30500/company-os-hive@sha256:${hex}` };
   assert.equal(violatesLimits(cm, "container_upgrade", good), null);
   assert.equal(violatesLimits(cm, "container_upgrade", { deployment: "mcp", image: `registry.company-ops.svc.cluster.local:5000/company-os@sha256:${hex}` }), null);
-  assert.ok(violatesLimits(cm, "container_upgrade", { ...good, deployment: "hermes-gateway" }));
+  assert.equal(violatesLimits(cm, "container_upgrade", { ...good, deployment: "hermes-gateway" }), null, "hermes-gateway is deployable by this identity");
   assert.ok(violatesLimits(cm, "container_upgrade", { ...good, deployment: "mcp-gateway" }));
-  assert.ok(violatesLimits(cm, "container_upgrade", { ...good, deployment: "hermes-gateway\n" }), "trailing newline must not slip the anchored pattern");
+  assert.ok(violatesLimits(cm, "container_upgrade", { ...good, deployment: "mcp-gateway\n" }), "trailing newline must not slip the anchored pattern");
   assert.ok(violatesLimits(cm, "container_upgrade", { deployment: "hive-coordinator", image: "localhost:30500/company-os-hive:main" }), "unpinned tag");
   assert.ok(violatesLimits(cm, "container_upgrade", { deployment: "hive-coordinator", image: "localhost:30500/company-os-hive@sha256:zz" }), "short digest");
   assert.ok(violatesLimits(cm, "container_upgrade", { deployment: "hive-coordinator", image: `docker.io/company-os-hive@sha256:${hex}` }), "foreign registry");
@@ -280,7 +280,7 @@ test("manifest policy: violatesLimits against the real container-manager argLimi
   assert.ok(violatesLimits(cm, "container_upgrade", { ...good, deployment: 42 }), "numeric deployment");
   assert.ok(violatesLimits(cm, "container_upgrade", { ...good, extra: "x" }), "extra arg key");
   for (const tool of ["container_rollback", "container_health", "container_logs"]) {
-    assert.ok(violatesLimits(cm, tool, { deployment: "hermes-gateway" }), `${tool} must deny hermes-gateway`);
+    assert.equal(violatesLimits(cm, tool, { deployment: "hermes-gateway" }), null, `${tool} must allow hermes-gateway`);
     assert.ok(violatesLimits(cm, tool, { deployment: "mcp-gateway" }), `${tool} must deny mcp-gateway`);
     assert.equal(violatesLimits(cm, tool, { deployment: "hive-coordinator" }), null, `${tool} must allow hive-coordinator`);
   }
@@ -366,8 +366,8 @@ test("e2e: deploy identity allowlist + argLimits deny before the fake child sees
       const denied = await call(name, {});
       assert.equal(denied.error?.code, -32001, `${name} must be denied as not in allowlist`);
     }
-    const bad = await call("container_upgrade", { deployment: "hermes-gateway", image: `localhost:30500/x@sha256:${"a".repeat(64)}` });
-    assert.equal(bad.error?.code, -32001, "upgrading hermes-gateway must be denied by argLimits");
+    const bad = await call("container_upgrade", { deployment: "mcp-gateway", image: `localhost:30500/x@sha256:${"a".repeat(64)}` });
+    assert.equal(bad.error?.code, -32001, "upgrading mcp-gateway must be denied by argLimits");
     const ok = await call("container_status", {});
     assert.ok(ok.result, "an allowed call must reach the fake child");
     const recorded = readFileSync(cmCallLog, "utf8").trim().split("\n").map((line) => JSON.parse(line).name);

@@ -22,10 +22,10 @@ const REGISTER_ESCALATE_AFTER = 5;
 // lists requires_tools only to agents whose capabilities.tools declares all of them.
 export const KNOWN_TOOLS = ["browser", "hindsight", "kubectl-deploy", "image-build", "hermes-data", "postgres-admin", "github-pr", "reddit-publish", "substack-publish", "marketing-db-read", "marketing-ingest"];
 
-// Credential-gated tools (publisher pod): declared only when every listed env var is non-empty,
+// Credential-gated tools (marketing-lead pod): declared only when every listed env var is non-empty,
 // so a pod without its Secret never advertises a tool it cannot use (same idea as the Chromium
 // probe for "browser"). Tools not listed here are declared whenever AGENT_TOOLS names them.
-// An entry "file:NAME" means env NAME must hold a path to an existing file. The publisher pod's
+// An entry "file:NAME" means env NAME must hold a path to an existing file. The marketing-lead pod's
 // sidecar (company_ops/marketing_sidecar.py) is the only holder of the Substack cookie and the
 // ingest DSN; it writes these ready markers only after checking its own env and DB connection,
 // so the main container never needs (or sees) those credentials to declare the tools.
@@ -56,6 +56,14 @@ export function resolveAgentTools(env = process.env, hasChromium = defaultHasChr
   return tools.sort();
 }
 
+// Repo scoping (same shape as the requires_tools / capabilities.tools mechanism):
+// a worker declares the repos it serves in AGENT_REPOS (comma-separated, trimmed,
+// lowercased, deduped). Unset or empty means "serves every repo", so every worker
+// registered before this key existed stays eligible for every repo.
+export function resolveRepos(env = process.env) {
+  return [...new Set(String(env.AGENT_REPOS || "").split(",").map((r) => r.trim().toLowerCase()).filter(Boolean))].sort();
+}
+
 function defaultHasChromium(env) {
   const dir = env.PLAYWRIGHT_BROWSERS_PATH || "/opt/ms-playwright";
   try {
@@ -65,13 +73,15 @@ function defaultHasChromium(env) {
   }
 }
 
-async function registerWithHive() {
-  let attempt = 0;
-  for (;;) {
-    attempt += 1;
-    try {
+// One idempotent registration call. Hive upserts the row and bumps last_seen_at, so this
+// doubles as the member's heartbeat and as re-registration if the row was ever lost.
+async function registerOnce() {
+      // Repos this worker serves. Declared only when non-empty: an empty list would
+      // read as "serves no repo" instead of the backward-compatible "serves all".
+      const repos = resolveRepos();
       await request("/agents/register", {
         method: "POST",
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
           id: consumerId,
           endpoint: process.env.A2A_ENDPOINT || "http://hermes-gateway:8642",
@@ -84,9 +94,22 @@ async function registerWithHive() {
             tier: ["cheap", "standard", "power"].includes(process.env.AGENT_TIER) ? process.env.AGENT_TIER : undefined,
             cost_factor: Number(process.env.AGENT_COST_FACTOR) > 0 ? Number(process.env.AGENT_COST_FACTOR) : undefined,
             tools: resolveAgentTools(),
+            ...(repos.length ? { repos } : {}),
           },
         }),
       });
+}
+
+let registering = false;
+async function registerWithHive() {
+  if (registering) return;
+  registering = true;
+  try {
+  let attempt = 0;
+  for (;;) {
+    attempt += 1;
+    try {
+      await registerOnce();
       console.error(`[hive-member] registered with Hive after ${attempt} attempt${attempt === 1 ? "" : "s"}`);
       return;
     } catch (error) {
@@ -96,12 +119,33 @@ async function registerWithHive() {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
+  } finally {
+    registering = false;
+  }
+}
+
+// Keep last_seen_at fresh and self-heal a lost registration for as long as this process lives,
+// independent of the work stream: a coordinator restart must never leave a Running pod
+// invisible to Hive (2026-10-25 incident). Skipped while a retry loop already owns registration.
+const HEARTBEAT_MS = Number(process.env.HIVE_REGISTER_HEARTBEAT_MS) || 60_000;
+function startRegistrationHeartbeat() {
+  const timer = setInterval(() => {
+    if (registering) return;
+    registerOnce().catch((error) => {
+      console.error(`[hive-member] registration heartbeat failed: ${error.message}; will retry`);
+      void registerWithHive();
+    });
+  }, HEARTBEAT_MS);
+  timer.unref();
 }
 
 // HIVE_REGISTER=false keeps this identity out of /agents/register entirely. The MCP gateway
 // sets it for local (workstation) identities, which may read and hive_submit but must never
 // appear as an allocatable worker (documents/plans/mcp-gateway-decisions item 3).
-if (process.env.HIVE_REGISTER !== "false") void registerWithHive();
+if (process.env.HIVE_REGISTER !== "false") {
+  void registerWithHive();
+  startRegistrationHeartbeat();
+}
 
 async function request(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
@@ -145,6 +189,12 @@ export function applyTicketStandard(args) {
     if (unknown === null) problems.push("metadata.requires_tools must be an array of tool names");
     else if (unknown.length) problems.push(`metadata.requires_tools has unknown tool(s) ${unknown.map((t) => JSON.stringify(t)).join(", ")}; known tools: ${KNOWN_TOOLS.join(", ")}`);
   }
+  // Repo scoping: optional metadata.repo names the repo the ticket belongs to. It must be
+  // a plain string (the repo name), so a ticket cannot smuggle structure through it.
+  if (metadata.repo !== undefined) {
+    if (typeof metadata.repo !== "string") problems.push('metadata.repo must be a string (e.g. "smashlock") or omitted');
+    else if (metadata.repo.trim() === "") problems.push("metadata.repo must name a repo, not be empty");
+  }
   if (problems.length) throw new Error(`hive_submit rejected, ticket does not meet docs/TICKET-STANDARD.md: ${problems.join("; ")}`);
 
   const bumps = metadata.type === "bug" ? [...new Set(metadata.bug_modifiers || [])].reduce((sum, m) => sum + BUG_BUMPS[m], 0) : 0;
@@ -160,9 +210,12 @@ export function applyTicketStandard(args) {
   ].join("\n\n");
   // An explicit tier still wins, so a submitter can force power for work the points understate.
   const tier = ["cheap", "standard", "power"].includes(metadata.tier) ? metadata.tier : tierForPoints(points);
-  const { bug_modifiers, requires_tools, ...rest } = metadata;
+  const { bug_modifiers, requires_tools, repo, ...rest } = metadata;
   const tools = requires_tools?.length ? { requires_tools: [...new Set(requires_tools)].sort() } : {};
-  return { message, metadata: { ...rest, ...tools, points, base_points: metadata.points, tier } };
+  // Repo is passed through untouched (trimmed) so Hive stores it on the work payload;
+  // an unset repo stays unset, which means the work is unscoped.
+  const scoped = typeof repo === "string" && repo.trim() !== "" ? { repo: repo.trim() } : {};
+  return { message, metadata: { ...rest, ...tools, ...scoped, points, base_points: metadata.points, tier } };
 }
 
 // Client-side fail-fast for the hive_complete feedback contract
@@ -292,7 +345,21 @@ async function diagnoseHive(timeoutMs = 2_000) {
   return { endpoint: endpoint.host, ok: steps.every((step) => step.ok), steps };
 }
 
-async function waitForEvent(taskId, timeoutSeconds = 900) {
+// hive_wait / hive_next_work block, so they must always finish well inside the
+// Hermes in-pod tool executor's 420s hard kill: default 300s, hard cap 360s.
+// Larger timeout_seconds are clamped, never rejected. On timeout both return a
+// normal {timed_out: true, retry: true} result so the caller just re-calls
+// instead of treating the wait as broken. HIVE_WAIT_MAX_SECONDS is a test seam.
+const WAIT_DEFAULT_SECONDS = 300;
+const WAIT_MAX_SECONDS = Number(process.env.HIVE_WAIT_MAX_SECONDS) || 360;
+
+function waitSeconds(value) {
+  const seconds = Number(value);
+  const requested = Number.isFinite(seconds) && seconds > 0 ? seconds : WAIT_DEFAULT_SECONDS;
+  return Math.min(WAIT_MAX_SECONDS, requested);
+}
+
+async function waitForEvent(taskId, timeoutSeconds) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
   try {
@@ -322,6 +389,11 @@ async function waitForEvent(taskId, timeoutSeconds = 900) {
       }
       buffer = buffer.split("\n\n").at(-1) || "";
     }
+  } catch (error) {
+    // Our own timeout aborts the stream — idle, not a failure: return a normal
+    // result so the caller re-calls rather than seeing a broken stream.
+    if (controller.signal.aborted) return { timed_out: true, retry: true, task_id: taskId, timeout_seconds: timeoutSeconds };
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -329,11 +401,11 @@ async function waitForEvent(taskId, timeoutSeconds = 900) {
 
 // Lifecycle guidance sent in the initialize response (HIVE-GUIDANCE-FEEDBACK.md
 // section 1, plus the dynamic-guidance directive from the Phase 1 ticket).
-const instructions = `Hive member tools for the company-os coordination service (Elixir/Postgres work, leases, durable events). Lifecycle: 1) hive_available_work lists open work; bid with hive_bid (confidence, approach, estimated_cost, expected_benefit). 2) Block, never poll: idle members wait inside hive_next_work; members awaiting a specific task wait inside hive_wait(task_id) — do NOT loop hive_status (one-off inspection only) or hive_available_work. 3) While holding a lease, renew with hive_heartbeat every few minutes and always before lease_seconds elapse (default 900) — an expired lease lets the task be re-allocated. 4) hive_complete is terminal: exactly one call per task with state completed|failed and a result.feedback object; after it the lease is gone and hive_wait returns. When any stream call errors, call hive_diagnostics first. hive_events replays durable history; hive_status reads current state; hive_work_bids audits who won and why. When Steward MCP tools are available, call generate_guidance_packet(scope_path: "hive") against Steward to fetch shared guidance before bidding (hive_bid).`;
+const instructions = `Hive member tools for the company-os coordination service (Elixir/Postgres work, leases, durable events). Lifecycle: 1) hive_available_work lists open work; bid with hive_bid (confidence, approach, estimated_cost, expected_benefit). 2) Block, never poll: idle members wait inside hive_next_work; members awaiting a specific task wait inside hive_wait(task_id) — do NOT loop hive_status (one-off inspection only) or hive_available_work. 3) While holding a lease, renew with hive_heartbeat every few minutes and always before lease_seconds elapse (default 900) — an expired lease lets the task be re-allocated. 4) hive_complete is terminal: exactly one call per task with state completed|failed and a result.feedback object; after it the lease is gone and hive_wait returns. When any stream call errors, call hive_diagnostics first. hive_events replays durable history; hive_status reads current state; hive_work_bids audits who won and why. When Steward MCP tools are available, call generate_guidance_packet(scope_path: "hive") against Steward to fetch shared guidance before bidding (hive_bid). Repo scoping: a ticket may name its repo with metadata.repo (string, e.g. "smashlock"); it lands in the work payload and only workers that serve that repo bid on it. This worker's served repos come from the AGENT_REPOS env (comma-separated); unset means it serves every repo.`;
 
 const tools = [
-  { name: "hive_submit", description: "Submit work to Hive and return its durable task id. Tickets must follow docs/TICKET-STANDARD.md or are rejected: metadata.type (feature|bug|chore), metadata.points (1,2,3,5,8,13), metadata.goal, metadata.acceptance_criteria (array), metadata.scope; bugs may add metadata.bug_modifiers (needs_diagnosis +2, touches_production +1). Optional metadata.requires_tools (known: browser, hindsight, kubectl-deploy, image-build, hermes-data, postgres-admin, github-pr, reddit-publish, substack-publish, marketing-db-read, marketing-ingest) routes the ticket only to agents declaring all of them; if none exists it escalates to a human instead of dropping tier. Points set the tier unless metadata.tier is given. After submitting, block on hive_wait(task_id) for the outcome — never poll hive_status.", inputSchema: { type: "object", required: ["message", "metadata"], properties: { message: { type: "string" }, metadata: { type: "object", required: ["type", "points", "goal", "acceptance_criteria", "scope"], properties: { type: { type: "string", enum: TICKET_TYPES }, points: { type: "integer", enum: FIBONACCI_POINTS }, goal: { type: "string" }, acceptance_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, scope: { type: "string" }, bug_modifiers: { type: "array", items: { type: "string", enum: Object.keys(BUG_BUMPS) } }, tier: { type: "string", enum: ["cheap", "standard", "power"] }, requires_tools: { type: "array", items: { type: "string", enum: KNOWN_TOOLS } }, approval_ref: { type: "string", description: "Board/Hermes approval reference; the publisher agent refuses to publish to Reddit or Substack without it (docs/PUBLISHER.md)." } } } }, additionalProperties: false } },
-  { name: "hive_bid", description: "Submit or update this agent's bid for Hive work (confidence, approach, estimated_cost, expected_benefit). After bidding, wait for allocation via hive_next_work or hive_wait(work_id); once allocated, hive_heartbeat the task while working.", inputSchema: { type: "object", required: ["work_id", "confidence", "approach", "estimated_cost", "expected_benefit"], properties: { work_id: { type: "string" }, interested: { type: "boolean" }, confidence: { type: "number", minimum: 0, maximum: 1 }, approach: { type: "string" }, estimated_cost: { type: "number", minimum: 0 }, expected_benefit: { type: "number", minimum: 0 }, risk: { type: "string" }, evidence: { type: "string" } }, additionalProperties: false } },
+  { name: "hive_submit", description: "Submit work to Hive and return its durable task id. Tickets must follow docs/TICKET-STANDARD.md or are rejected: metadata.type (feature|bug|chore), metadata.points (1,2,3,5,8,13), metadata.goal, metadata.acceptance_criteria (array), metadata.scope; bugs may add metadata.bug_modifiers (needs_diagnosis +2, touches_production +1). Optional metadata.requires_tools (known: browser, hindsight, kubectl-deploy, image-build, hermes-data, postgres-admin, github-pr, reddit-publish, substack-publish, marketing-db-read, marketing-ingest) routes the ticket only to agents declaring all of them; if none exists it escalates to a human instead of dropping tier. Optional metadata.repo (string, e.g. \"smashlock\") scopes the ticket to that repo: only workers that declare it in their AGENT_REPOS bid on it; omit it for repo-agnostic work that any worker may take. Points set the tier unless metadata.tier is given. After submitting, block on hive_wait(task_id) for the outcome — never poll hive_status.", inputSchema: { type: "object", required: ["message", "metadata"], properties: { message: { type: "string" }, metadata: { type: "object", required: ["type", "points", "goal", "acceptance_criteria", "scope"], properties: { type: { type: "string", enum: TICKET_TYPES }, points: { type: "integer", enum: FIBONACCI_POINTS }, goal: { type: "string" }, acceptance_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, scope: { type: "string" }, bug_modifiers: { type: "array", items: { type: "string", enum: Object.keys(BUG_BUMPS) } }, tier: { type: "string", enum: ["cheap", "standard", "power"] }, requires_tools: { type: "array", items: { type: "string", enum: KNOWN_TOOLS } }, repo: { type: "string", description: "Repo this ticket belongs to (e.g. \"smashlock\"). Only workers declaring it in AGENT_REPOS bid on it; omit for work any repo may take." }, approval_ref: { type: "string", description: "Board/Hermes approval reference; the marketing-lead agent refuses to publish to Reddit or Substack without it (docs/MARKETING-LEAD.md)." } } } }, additionalProperties: false } },
+  { name: "hive_bid", description: "Submit or update this agent's bid for Hive work (confidence, approach, estimated_cost, expected_benefit). Only bid on work this worker serves: work naming a repo (metadata.repo) is eligible only when the repo is in this worker's AGENT_REPOS; repo-less work is open to every worker. After bidding, wait for allocation via hive_next_work or hive_wait(work_id); once allocated, hive_heartbeat the task while working.", inputSchema: { type: "object", required: ["work_id", "confidence", "approach", "estimated_cost", "expected_benefit"], properties: { work_id: { type: "string" }, interested: { type: "boolean" }, confidence: { type: "number", minimum: 0, maximum: 1 }, approach: { type: "string" }, estimated_cost: { type: "number", minimum: 0 }, expected_benefit: { type: "number", minimum: 0 }, risk: { type: "string" }, evidence: { type: "string" } }, additionalProperties: false } },
   { name: "hive_work_bids", description: "Read the ranked bids for Hive work, by id, slug or task id (work_id, work_slug and task_id are interchangeable). Order is the allocation order: eligible bids cheapest first, each with eligible/ineligible_reasons/selected and the bidder's stored rationale. Call before hive_allocate to sanity-check the ranking, or after allocation to audit why a bidder won.", inputSchema: { type: "object", properties: { work_id: { type: "string" }, work_slug: { type: "string" }, task_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
   { name: "hive_cost_ledger", description: "Read-only cost ledger: per-agent allocations, failures (failed, lease_expired, escalated), runtime and total estimated cost, plus the most recent allocation rows with outcome. Use it to see whether cost-aware allocation is working; pair with hive_work_bids for one task.", inputSchema: { type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 365 }, limit: { type: "integer", minimum: 1, maximum: 200 } }, additionalProperties: false } },
   { name: "hive_available_work", description: "List currently available Hive work items (id, slug, payload). Pick items worth bidding on and call hive_bid; to learn of new arrivals, wait inside hive_next_work instead of re-calling this in a loop.", inputSchema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
@@ -343,8 +415,8 @@ const tools = [
   { name: "hive_complete", description: "Record terminal completion or failure for work held by this agent; exactly one call per task, and the lease ends. result must include the required feedback object (calibration, friction, optional suggested_guidance_change). After this, hive_wait on the task returns immediately — use hive_status only to verify the recorded state.", inputSchema: { type: "object", required: ["task_id", "state", "result"], properties: { task_id: { type: "string" }, state: { type: "string" }, result: { type: "object", required: ["feedback"], additionalProperties: true, properties: { feedback: { type: "object", required: ["calibration", "friction"], additionalProperties: false, properties: { calibration: { type: "object", required: ["estimated_cost", "actual_cost", "estimated_benefit", "actual_benefit"], additionalProperties: false, properties: { estimated_cost: { type: "number" }, actual_cost: { type: "number" }, estimated_benefit: { type: "number" }, actual_benefit: { type: "number" } } }, friction: { type: "string", description: "What guidance was missing or wrong; \"\" if none." }, suggested_guidance_change: { type: "string", description: "Concrete change to guidance/specs; omit or empty if none." } } } } } }, additionalProperties: false } },
   { name: "hive_status", description: "Read the durable status of a Hive task — one-off inspection only, never poll in a loop. To block on completion use hive_wait; for the event history use hive_events.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" } }, additionalProperties: false } },
   { name: "hive_events", description: "Replay durable lifecycle events for a task (bids, allocation, heartbeats, completion). Use to debug a stuck task, then hive_status for current state or hive_wait to block on the outcome.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false } },
-  { name: "hive_wait", description: "Wait for a task's completion/failure event over SSE without polling (timeout up to 900s; re-call to keep waiting). This is the default way to await any task you submitted or hold — on timeout, re-call rather than switching to hive_status polling.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
-  { name: "hive_next_work", description: "Wait for the next available Hive work item over SSE without polling. Returns the allocated task — then hive_heartbeat it while working and hive_complete when done. Idle members should live inside this call, not loop on hive_available_work.", inputSchema: { type: "object", properties: { timeout_seconds: { type: "integer", minimum: 5, maximum: 900 } }, additionalProperties: false } },
+  { name: "hive_wait", description: "Wait for a task's completion/failure event over SSE without polling (timeout_seconds: default 300, max 360 — larger values are clamped so the call always finishes). Returns the completion event, or {timed_out: true, retry: true} on timeout: just re-call to keep waiting instead of switching to hive_status polling. This is the default way to await any task you submitted or hold.", inputSchema: { type: "object", required: ["task_id"], properties: { task_id: { type: "string" }, timeout_seconds: { type: "integer", minimum: 5, maximum: 360, default: 300 } }, additionalProperties: false } },
+  { name: "hive_next_work", description: "Wait for the next available Hive work item over SSE without polling (timeout_seconds: default 300, max 360 — larger values are clamped so the call always finishes). Returns the allocated task, or {timed_out: true, retry: true} on timeout — re-call to keep waiting. Then hive_heartbeat the task while working and hive_complete when done. Idle members should live inside this call, not loop on hive_available_work.", inputSchema: { type: "object", properties: { timeout_seconds: { type: "integer", minimum: 5, maximum: 360, default: 300 } }, additionalProperties: false } },
   { name: "hive_diagnostics", description: "Check DNS, TCP, the Hive HTTP health route, and the worker SSE subscription from this container (opens and immediately closes an unclaimed stream; no work is consumed). Call this first when hive_wait or hive_next_work error or time out unexpectedly.", inputSchema: { type: "object", properties: { timeout_ms: { type: "integer", minimum: 250, maximum: 5000 } }, additionalProperties: false } },
   ...(process.env.AGENT_ROLE === "manager" ? [
     { name: "hive_prompt_workers", description: "Wake currently subscribed eligible workers for an available task. Returns worker identities prompted; does not bid or allocate on their behalf.", inputSchema: { type: "object", required: ["work_slug"], properties: { work_slug: { type: "string" } }, additionalProperties: false } },
@@ -380,17 +452,27 @@ async function call(name, args) {
   }
   if (name === "hive_status") return request(`/tasks/${encodeURIComponent(args.task_id)}`);
   if (name === "hive_events") return request(`/events?task_id=${encodeURIComponent(args.task_id)}&limit=${args.limit || 100}`);
-  if (name === "hive_wait") return waitForEvent(args.task_id, args.timeout_seconds || 900);
-  if (name === "hive_next_work") return waitForWork(args.timeout_seconds || 900);
+  if (name === "hive_wait") return waitForEvent(args.task_id, waitSeconds(args.timeout_seconds));
+  if (name === "hive_next_work") return waitForWork(waitSeconds(args.timeout_seconds));
   if (name === "hive_diagnostics") return diagnoseHive(Math.min(5_000, Math.max(250, args.timeout_ms || 2_000)));
   if (name === "hive_prompt_workers") return request(`/work/${encodeURIComponent(args.work_slug)}/prompt`, { method: "POST", body: JSON.stringify({ requester_id: consumerId }) });
   throw new Error(`unknown tool: ${name}`);
 }
 
-async function waitForWork(timeoutSeconds = 900) {
+// Hive sends an SSE ": heartbeat" comment every 15s, so a stream silent for this long is dead
+// (half-open socket after a coordinator restart) and must be re-dialled, not waited on.
+const STREAM_IDLE_MS = Number(process.env.HIVE_STREAM_IDLE_MS) || 45_000;
+
+async function waitForWork(timeoutSeconds) {
   const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
+  let stalled = false;
+  let idleTimer;
+  const armIdle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { stalled = true; controller.abort(); }, STREAM_IDLE_MS);
+  };
   try {
     const response = await fetch(`${base}/work/subscribe?agent_id=${encodeURIComponent(consumerId)}`, {
       signal: controller.signal,
@@ -400,14 +482,19 @@ async function waitForWork(timeoutSeconds = 900) {
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.includes("text/event-stream")) throw new Error(`unexpected work stream content-type: ${contentType}`);
     reportSubscription("connected", { duration_ms: Date.now() - startedAt, stream: "work" });
+    armIdle();
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     while (true) {
       const { value, done } = await reader.read();
+      armIdle();
+      // Any bytes (including Hive's 15s ": heartbeat" comments) prove the stream is live; the
+      // engineering manager's /healthz uses this to tell "idle but connected" from "wedged".
+      if (!done) reportSubscription("alive", { stream: "work" });
       if (done) {
         // Our own timeout aborts the stream — idle, not a failure.
-        if (controller.signal.aborted) return null;
+        if (controller.signal.aborted) return { timed_out: true, retry: true, timeout_seconds: timeoutSeconds };
         throw new Error("Hive work stream closed");
       }
       buffer += decoder.decode(value, { stream: true });
@@ -419,13 +506,18 @@ async function waitForWork(timeoutSeconds = 900) {
       }
     }
   } catch (error) {
-    if (controller.signal.aborted) return null;
+    if (stalled) error = Object.assign(new Error(`Hive work stream silent for ${STREAM_IDLE_MS}ms`), { code: "HIVE_STREAM_STALLED" });
+    else if (controller.signal.aborted) return { timed_out: true, retry: true, timeout_seconds: timeoutSeconds };
     const details = safeErrorDetails(error, "hive_next_work");
     console.error(`[hive-member] hive_next_work failed: ${JSON.stringify(details)}`);
     reportSubscription("failed", details);
+    // The coordinator may have lost or never seen our registration: re-register in the
+    // background (retries forever) so the next successful dial is an allocatable agent.
+    if (process.env.HIVE_REGISTER !== "false") void registerWithHive();
     throw error;
   } finally {
     clearTimeout(timer);
+    clearTimeout(idleTimer);
   }
 }
 
@@ -437,7 +529,13 @@ for await (const line of input) {
   if (message.method === "notifications/initialized" || message.method === "ping") { if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, result: {} }); continue; }
   if (message.method === "tools/list") { send({ jsonrpc: "2.0", id: message.id, result: { tools } }); continue; }
   if (message.method === "tools/call") {
-    try { send(text(message.id, await call(message.params.name, message.params.arguments || {}))); }
-    catch (error) { send(fail(message.id, JSON.stringify(safeErrorDetails(error, message.params?.name)))); }
+    // Handled concurrently, never awaited inside the read loop: one long
+    // hive_wait must not delay any later call (the Hermes in-pod executor
+    // hard-kills tools at 420s). Replies are keyed by their own id and each
+    // send writes one whole line, so interleaved completion order is safe.
+    void call(message.params.name, message.params.arguments || {}).then(
+      (value) => send(text(message.id, value)),
+      (error) => send(fail(message.id, JSON.stringify(safeErrorDetails(error, message.params?.name)))),
+    );
   }
 }

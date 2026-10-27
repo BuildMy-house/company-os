@@ -220,7 +220,7 @@ data:
                     "required": true,
                     "type": "string",
                     "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
-                    "notIn": ["hermes-gateway", "mcp-gateway"]
+                    "notIn": ["mcp-gateway"]
                   },
                   "image": {
                     "required": true,
@@ -239,7 +239,7 @@ data:
                     "required": true,
                     "type": "string",
                     "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
-                    "notIn": ["hermes-gateway", "mcp-gateway"]
+                    "notIn": ["mcp-gateway"]
                   }
                 },
                 "container_health": {
@@ -248,7 +248,7 @@ data:
                     "required": true,
                     "type": "string",
                     "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
-                    "notIn": ["hermes-gateway", "mcp-gateway"]
+                    "notIn": ["mcp-gateway"]
                   }
                 },
                 "container_logs": {
@@ -257,7 +257,7 @@ data:
                     "required": true,
                     "type": "string",
                     "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
-                    "notIn": ["hermes-gateway", "mcp-gateway"]
+                    "notIn": ["mcp-gateway"]
                   },
                   "tail_lines": { "max": 500 }
                 },

@@ -10,7 +10,11 @@ from this repo by `scripts/seed-ceo-behavior.sh`.
 Git (source of truth, baked into the company-os image):
 
 - `hermes/skills/ceo-status-update/`, `hermes/skills/blog-draft-builder/`,
-  `hermes/skills/report-request/` — the skill definitions.
+  `hermes/skills/report-request/`, `hermes/skills/seo/` — the skill
+  definitions. The `seo` skill describes the SEO cycle now owned by the marketing-lead agent (every 2-3 days; Hermes approves) (see
+  `hermes-operations/domains/marketing/knowledge/seo-playbook.md`); it is
+  seeded but no seo cron job is wired yet, so it runs on explicit request
+  until that job exists.
 - `hermes/scripts/ceo-status-prepare.sh` — pre-run script for
   ceo-status-update; it prints the final `{"wakeAgent": true, "context": ...}`
   JSON line the cron session reads (Hermes has no file/terminal tools).
@@ -35,8 +39,8 @@ The PVC (`$HERMES_HOME`, `/opt/data` in the container) owns runtime state:
 Every container start, `entrypoint.sh` runs `seed-ceo-behavior.sh`
 (`|| true`; the seeder always exits 0 and never fails the boot). It:
 
-1. Copies the three CEO skills from the image into `$HERMES_HOME/skills/`
-   (only those three, overwritten; every other skill is left alone) and
+1. Copies the four CEO skills from the image into `$HERMES_HOME/skills/`
+   (only those four, overwritten; every other skill is left alone) and
    installs `ceo-status-prepare.sh` into `$HERMES_HOME/scripts/`.
 2. Overwrites
    `$HERMES_HOME/memory/decisions/2026-10-18-pricing-free-core-render-credits.md`
@@ -58,7 +62,10 @@ Every container start, `entrypoint.sh` runs `seed-ceo-behavior.sh`
 ## The two crons
 
 - `ceo-status-update`: periodic delta status report. The pre-run script
-  builds the context (previous run, timestamps); the CEO reports only deltas
+  builds the context (previous report, `since` = mtime of the newest saved
+  report under `$HERMES_HOME/cron/output/`, or 2 hours ago when no report
+  exists yet — so only a run that actually produced output advances the
+  window; a failed run leaves `since` unchanged); the CEO reports only deltas
   since the previous run, keeps anything unverified in a separate Unverified
   section, and replies exactly `[SILENT]` when nothing changed. The CEO has
   no analytics tools by design: any metric is requested from the engineering
@@ -84,7 +91,7 @@ Find the job id:
 kubectl -n company-ops exec deploy/hermes-gateway -- hermes cron list
 ```
 
-To re-enable once the publisher agent is deployed (run by an in-cluster
+To re-enable once the marketing-lead agent is deployed (run by an in-cluster
 agent with container-manager/kubectl access):
 
 ```

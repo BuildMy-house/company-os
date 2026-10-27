@@ -158,7 +158,7 @@ Hermes runs the `dream-audit` skill (`hermes/skills/dream-audit/`) from a Hermes
 cron job at 06:00 and 18:00 Bhutan Time (`0 0,12 * * *`, UTC; `timezone: UTC` in
 `hermes/config.yaml`). `scripts/seed-dream-audit.sh` (called from the entrypoint)
 syncs only that skill, seeds `$HERMES_HOME/dream-audit.mode` (`audit`) if missing,
-and creates the job once via `hermes cron create` (provider `custom:nous`, model `meituan/longcat-2.5-preview:free`, matching `hermes/config.yaml`; override with `DREAM_AUDIT_PROVIDER`/`DREAM_AUDIT_MODEL`). A pre-run script
+and creates the job once via `hermes cron create` (provider `custom:nous`, model `poolside/laguna-xs-2.1:free`, matching `hermes/config.yaml`; override with `DREAM_AUDIT_PROVIDER`/`DREAM_AUDIT_MODEL`). A pre-run script
 (`hermes/scripts/dream-audit-prepare.sh`) snapshots `MEMORY.md`/`USER.md` to
 `$HERMES_HOME/cron/output/dream-audit/<ts>/pre-run/` and harvests the diary into
 `$HERMES_HOME/DREAMS.md`. Durable notes live on the PVC in `$HERMES_HOME/memory/`.
@@ -179,17 +179,17 @@ Hermes uses the Hindsight memory provider (`memory.provider: hindsight`) in `loc
 
 Capture is explicit: `memory_mode: tools`, `auto_retain: false`, `auto_recall: false`. The agent stores and recalls only through `hindsight_retain` / `hindsight_recall` / `hindsight_reflect`. Built-in `MEMORY.md` / `USER.md` stay active. Note that the plugin still mirrors built-in `memory` tool writes into Hindsight (tagged as built-in), so the dream-audit skill's apply mode also lands there.
 
-The server's extraction LLM is Nous (`HINDSIGHT_API_LLM_*`), with the required `extra_body.tags` supplied via `HINDSIGHT_API_LLM_EXTRA_BODY`. The plugin does not inherit Hermes `custom_providers`.
+The server's LLM (retain, consolidation and reflect, all via the global `HINDSIGHT_API_LLM_*` values) is Z.AI Coding Plan `glm-5.3-flash` at `https://api.z.ai/api/coding/paas/v4`, the same endpoint, model and key as Hermes's `custom:zai_coding_plan`; it is a reasoning model, so `HINDSIGHT_API_LLM_TIMEOUT=180` and `HINDSIGHT_API_LLM_MAX_CONCURRENT=2`. The plugin does not inherit Hermes `custom_providers`.
 
-Secrets: `NOUS_API_KEY` (already synced) and a new `HINDSIGHT_API_KEY` (create in Infisical `/hermes`, any random string; the server enforces it as bearer token and the plugin reads it from `.env`). No credentials are in git.
+Secrets: `ZAI_CODING_PLAN_API_KEY` (already synced from Infisical `/infra`) and a new `HINDSIGHT_API_KEY` (create in Infisical `/hermes`, any random string; the server enforces it as bearer token and the plugin reads it from `.env`). No credentials are in git.
 
-`hermes/hindsight/config.json` is seeded to `$HERMES_HOME/hindsight/config.json` only if missing, so operator edits survive; delete the file and restart to pick up new defaults. The bank is `hermes`. A separate `seo` bank can be added later via a second Hermes profile with its own `bank_id`, or the plugin's per-bank settings; it needs no server change. The `hindsight-data` PVC is backed up daily (03:45 UTC) by the `hindsight-data-backup` CronJob (`k8s/base/backups/`): a tar.gz of the pg0 data directory (`instances/`; the re-downloadable server binaries in `installation/` are skipped, and the model cache is not on the PVC) to R2 under `hindsight-data-backups/`, keeping the last `R2_BACKUP_KEEP_LAST` (default 7). The PVC is ReadWriteOnce, so the job mounts it read-only and uses `podAffinity` to land on the Hindsight pod's node (same single-node k3s assumption as `hermes-data-backup`). The copy is taken while postgres runs, so it is crash-consistent: restore by unpacking into an empty PVC and starting Hindsight, which replays WAL.
+`hermes/hindsight/config.json` is seeded to `$HERMES_HOME/hindsight/config.json` only if missing, so operator edits survive; delete the file and restart to pick up new defaults. The bank is `ceo` (renamed from `hermes`; see docs/HINDSIGHT-BANKS.md for the per-agent bank names and the one-time copy). Hermes both retains and recalls: SOUL.md tells it to `hindsight_recall` at the start of a work item and `hindsight_retain` lessons at the end, and the dream-audit retains promoted items in apply mode. A separate `seo` bank can be added later via a second Hermes profile with its own `bank_id`, or the plugin's per-bank settings; it needs no server change. The `hindsight-data` PVC is backed up daily (03:45 UTC) by the `hindsight-data-backup` CronJob (`k8s/base/backups/`): a tar.gz of the pg0 data directory (`instances/`; the re-downloadable server binaries in `installation/` are skipped, and the model cache is not on the PVC) to R2 under `hindsight-data-backups/`, keeping the last `R2_BACKUP_KEEP_LAST` (default 7). The PVC is ReadWriteOnce, so the job mounts it read-only and uses `podAffinity` to land on the Hindsight pod's node (same single-node k3s assumption as `hermes-data-backup`). The copy is taken while postgres runs, so it is crash-consistent: restore by unpacking into an empty PVC and starting Hindsight, which replays WAL.
 
-## Publisher agent
+## Marketing-lead agent
 
-An OpenCode-flavor Hive member (`publisher`) writes content, analyses posts and opens blog PRs; it
+An OpenCode-flavor Hive member (`marketing-lead`) writes content, analyses posts and opens blog PRs; it
 publishes to Reddit/Substack only with a Hermes `approval_ref`. Marketing metrics live in the
-`marketing` Postgres schema, filled by the `marketing-ingest` CronJob. See `docs/PUBLISHER.md`.
+`marketing` Postgres schema, filled by the `marketing-ingest` CronJob. See `docs/MARKETING-LEAD.md`.
 
 ## Policy defaults
 
