@@ -66,14 +66,15 @@ def test_dockerfile_pins_plugin_and_client():
     assert "hindsight-client==0.10.3" in d
 
 
-def test_manifest_nous_tags_and_secret_refs_only():
-    assert "https://inference-api.nousresearch.com/v1" in MANIFEST
-    assert '"tags":["product=hermes-agent","user=hermes-agent"]' in MANIFEST
-    for key in ("NOUS_API_KEY", "HINDSIGHT_API_KEY"):
+def test_manifest_zai_llm_and_secret_refs_only():
+    assert "https://api.z.ai/api/coding/paas/v4" in MANIFEST
+    assert "value: glm-5.3-flash" in MANIFEST
+    assert "nousresearch" not in MANIFEST.lower() and "EXTRA_BODY" not in MANIFEST
+    for key in ("ZAI_CODING_PLAN_API_KEY", "HINDSIGHT_API_KEY"):
         assert re.search(rf"secretKeyRef:\s*\n\s+name: company-ops-secrets\s*\n\s+key: {key}", MANIFEST)
     assert not re.search(r"(API_KEY|TOKEN)\s*\n\s+value:", MANIFEST)
     assert "@sha256:" in MANIFEST
-    assert "api.z.ai" not in MANIFEST and "tokenrouter" not in MANIFEST.lower()
+    assert "tokenrouter" not in MANIFEST.lower()
 
 
 def test_manifest_has_pvc_probes_limits_and_overlay_wiring():
