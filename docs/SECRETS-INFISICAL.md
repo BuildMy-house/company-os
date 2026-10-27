@@ -40,6 +40,7 @@ All `Build My house` paths below merge into the `company-ops-secrets` Secret
 | company-ops-steward-engineering-opencode → STEWARD_TOKEN | dedicated Secret | engineering-opencode pod | yes | `/infra/steward/engineering-opencode` |
 | company-ops-steward-engineering-opencode-direct → STEWARD_TOKEN | dedicated Secret | engineering-opencode-direct pod | yes | `/infra/steward/engineering-opencode-direct` |
 | AXIOM_TOKEN, AXIOM_ORG_ID | company-ops-secrets | company_ops/axiom_client.py, OTLP telemetry (engineering-entrypoint.sh) | yes | `/` + `/infra` |
+| AXIOM_OTEL_DATASET | company-ops-secrets | OTLP telemetry dataset for Claude Code export (engineering-entrypoint.sh); set to `buildmy-house-telemetry` 2026-10-28 so it stops adding columns to `bmh-company` | no | `/` |
 | AXIOM_DASHBOARD_TOKEN | company-ops-secrets | Axiom dashboard sharing | yes | `/` |
 | AXIOM_DATASET | Infisical `/hermes` (dev) = `bmh-company` | agent-usage ingest: hermes-plugins/axiom_usage, opencode-plugins/axiom-usage.js, engineering-manager-mcp.js (default `bmh-company`, ingest edge eu-central-1) | yes (optional) | `/hermes` |
 | AXIOM_ENDPOINT | Infisical `/hermes` (dev) = `https://api.axiom.co` | axiom_client.py query endpoint (default `https://api.axiom.co`) | yes (optional) | `/hermes` |
