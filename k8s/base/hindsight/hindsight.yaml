@@ -3,10 +3,14 @@
 # server loads local embedding + reranker models. Reached in-cluster only at
 # http://hindsight:8888 (ClusterIP, no Ingress).
 #
-# LLM extraction goes to Nous (OpenAI-compatible). Nous requires
-# extra_body.tags on every request; HINDSIGHT_API_LLM_EXTRA_BODY merges them in.
+# The LLM (retain, consolidation, reflect - all three fall back to the global
+# HINDSIGHT_API_LLM_* values, no per-operation override is set) is Z.AI Coding
+# Plan glm-5.3-flash over its OpenAI-compatible endpoint: the same base URL,
+# model and key Hermes already uses for `custom:zai_coding_plan`
+# (hermes/config.yaml). glm-5.3-flash is a reasoning model, so the timeout is
+# raised and concurrency capped to stay inside the plan's rate limits.
 # No credentials here: keys come from company-ops-secrets (Infisical sync):
-#   NOUS_API_KEY       (/hermes or /)  - already used by Hermes
+#   ZAI_CODING_PLAN_API_KEY (/infra)   - already used by Hermes and OpenCode
 #   HINDSIGHT_API_KEY  (/hermes)       - NEW: shared bearer token, plugin <-> server
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -70,16 +74,18 @@ spec:
             - name: HINDSIGHT_API_LLM_PROVIDER
               value: openai
             - name: HINDSIGHT_API_LLM_BASE_URL
-              value: https://inference-api.nousresearch.com/v1
+              value: https://api.z.ai/api/coding/paas/v4
             - name: HINDSIGHT_API_LLM_MODEL
-              value: poolside/laguna-xs-2.1:free
-            - name: HINDSIGHT_API_LLM_EXTRA_BODY
-              value: '{"tags":["product=hermes-agent","user=hermes-agent"]}'
+              value: glm-5.3-flash
+            - name: HINDSIGHT_API_LLM_TIMEOUT
+              value: "180"
+            - name: HINDSIGHT_API_LLM_MAX_CONCURRENT
+              value: "2"
             - name: HINDSIGHT_API_LLM_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: company-ops-secrets
-                  key: NOUS_API_KEY
+                  key: ZAI_CODING_PLAN_API_KEY
             - name: HINDSIGHT_API_TENANT_EXTENSION
               value: hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension
             - name: HINDSIGHT_API_TENANT_API_KEY
