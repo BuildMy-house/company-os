@@ -53,7 +53,7 @@ def test_seed_is_idempotent_and_creates_one_job(tmp_path):
     assert argv[2] == "0 0,12 * * *"
     assert argv[argv.index("--skill") + 1] == "dream-audit"
     assert argv[argv.index("--provider") + 1] == "custom:nous"
-    assert argv[argv.index("--model") + 1] == "meituan/longcat-2.5-preview:free"
+    assert argv[argv.index("--model") + 1] == "poolside/laguna-xs-2.1:free"
     assert argv[argv.index("--deliver") + 1] == "discord:#human-in-the-loop"
     assert (home / "dream-audit.mode").read_text().strip() == "audit"
 

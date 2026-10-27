@@ -158,7 +158,7 @@ Hermes runs the `dream-audit` skill (`hermes/skills/dream-audit/`) from a Hermes
 cron job at 06:00 and 18:00 Bhutan Time (`0 0,12 * * *`, UTC; `timezone: UTC` in
 `hermes/config.yaml`). `scripts/seed-dream-audit.sh` (called from the entrypoint)
 syncs only that skill, seeds `$HERMES_HOME/dream-audit.mode` (`audit`) if missing,
-and creates the job once via `hermes cron create` (provider `custom:nous`, model `meituan/longcat-2.5-preview:free`, matching `hermes/config.yaml`; override with `DREAM_AUDIT_PROVIDER`/`DREAM_AUDIT_MODEL`). A pre-run script
+and creates the job once via `hermes cron create` (provider `custom:nous`, model `poolside/laguna-xs-2.1:free`, matching `hermes/config.yaml`; override with `DREAM_AUDIT_PROVIDER`/`DREAM_AUDIT_MODEL`). A pre-run script
 (`hermes/scripts/dream-audit-prepare.sh`) snapshots `MEMORY.md`/`USER.md` to
 `$HERMES_HOME/cron/output/dream-audit/<ts>/pre-run/` and harvests the diary into
 `$HERMES_HOME/DREAMS.md`. Durable notes live on the PVC in `$HERMES_HOME/memory/`.

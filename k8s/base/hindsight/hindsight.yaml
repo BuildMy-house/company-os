@@ -72,7 +72,7 @@ spec:
             - name: HINDSIGHT_API_LLM_BASE_URL
               value: https://inference-api.nousresearch.com/v1
             - name: HINDSIGHT_API_LLM_MODEL
-              value: meituan/longcat-2.5-preview:free
+              value: poolside/laguna-xs-2.1:free
             - name: HINDSIGHT_API_LLM_EXTRA_BODY
               value: '{"tags":["product=hermes-agent","user=hermes-agent"]}'
             - name: HINDSIGHT_API_LLM_API_KEY
