@@ -7,6 +7,7 @@ defmodule Hive.Work do
   @tiers ~w(cheap standard power)
   @default_tier "cheap"
   @default_scoring %{"confidence_weight" => 1.0, "benefit_weight" => 1.0, "cost_weight" => 1.0}
+  @cancellable_states ~w(available claimed escalated)
 
   def start_link(_), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
 
@@ -67,6 +68,16 @@ defmodule Hive.Work do
     do: complete_after_expiry_recovery(work_ref, agent_id, state, result)
 
   def complete(_work_ref, _agent_id, _state, _result), do: {:error, :invalid_state}
+
+  @doc """
+  Terminal-cancel a work item from `available`, `claimed` or `escalated`. The reason
+  and `cancelled_at` are stored in the terminal `result` metadata, the lease (if any)
+  is released and any bids are dropped; cancelled items never re-enter the available
+  feed, bidding, the reaper or escalation. Returns `{:ok, work}` or
+  `{:error, :not_found | :terminal_state}`.
+  """
+  def cancel(work_ref, reason \\ nil),
+    do: with_id(work_ref, fn id -> GenServer.call(__MODULE__, {:cancel, id, reason}) end)
 
   def heartbeat(work_ref, agent_id, lease_seconds),
     do: heartbeat_after_expiry_recovery(work_ref, agent_id, lease_seconds)
@@ -556,7 +567,7 @@ defmodule Hive.Work do
 
   def handle_call({:submit_bid, work_id, agent_id, bid}, _from, %{memory: memory} = state) do
     with {:ok, normalized} <- normalize_bid(bid),
-         true <- Map.has_key?(memory.work, work_id) do
+         true <- bidable?(memory.work[work_id]) do
       item =
         Map.merge(normalized, %{
           "bid_id" => "bid_" <> random_id(),
@@ -574,7 +585,8 @@ defmodule Hive.Work do
 
   def handle_call({:submit_bid, work_id, agent_id, bid}, _from, %{db: db} = state) do
     with {:ok, normalized} <- normalize_bid(bid),
-         {:ok, _work} <- get_db(db, work_id) do
+         {:ok, item} <- get_db(db, work_id),
+         true <- bidable?(item) do
       result =
         transaction!(db, fn tx ->
           Postgrex.query!(
@@ -611,6 +623,7 @@ defmodule Hive.Work do
       touch_agent(db, agent_id)
       {:reply, {:ok, result}, state}
     else
+      false -> {:reply, {:error, :work_not_found}, state}
       {:error, :not_found} -> {:reply, {:error, :work_not_found}, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -1129,6 +1142,43 @@ defmodule Hive.Work do
     end
   end
 
+  def handle_call({:cancel, id, reason}, _from, %{memory: memory} = state) do
+    case memory.work[id] do
+      %{state: s} = item when s in @cancellable_states ->
+        cancelled =
+          Map.merge(item, %{
+            state: "cancelled",
+            result: %{"reason" => reason, "cancelled_at" => DateTime.utc_now()},
+            claimed_by: nil,
+            lease_expires_at: nil
+          })
+
+        event =
+          event(
+            "work.cancelled",
+            id,
+            %{"reason" => reason, "slug" => item.payload["slug"]},
+            item.attempt || 0
+          )
+
+        notify_event_subscribers(event)
+
+        next =
+          state
+          |> put_in([:memory, :work, id], cancelled)
+          |> update_in([:memory, :bids], &Map.reject(&1, fn {{wid, _}, _} -> wid == id end))
+          |> update_in([:memory, :events], &[event | &1])
+
+        {:reply, {:ok, cancelled}, next}
+
+      %{state: _s} ->
+        {:reply, {:error, :terminal_state}, state}
+
+      _ ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
   def handle_call({:complete, id, agent_id, final_state, result}, _from, %{db: db} = state) do
     topic = if final_state == "completed", do: "engineering.completed", else: "engineering.failed"
 
@@ -1197,6 +1247,59 @@ defmodule Hive.Work do
     case result do
       {:ok, item, events} ->
         settle_recovery(events)
+        {:reply, {:ok, item}, state}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:cancel, id, reason}, _from, %{db: db} = state) do
+    cancelled_result = %{"reason" => reason, "cancelled_at" => DateTime.utc_now()}
+
+    result =
+      transaction!(db, fn tx ->
+        updated =
+          rows(
+            Postgrex.query!(
+              tx,
+              "UPDATE company.hive_work_items SET state = 'cancelled', result = $2::jsonb, claimed_by = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $1 AND state IN ('available', 'claimed', 'escalated') RETURNING id, payload, state, claimed_by, lease_expires_at, attempt, last_failure, result",
+              [id, Jason.encode!(cancelled_result)]
+            )
+          )
+          |> List.first()
+
+        case updated do
+          item when is_map(item) ->
+            cancel_event =
+              event(
+                "work.cancelled",
+                id,
+                %{"reason" => reason, "slug" => get_in(item, ["payload", "slug"])},
+                item["attempt"] || 0
+              )
+
+            persist_event(tx, cancel_event)
+            Postgrex.query!(tx, "DELETE FROM company.hive_work_bids WHERE work_id = $1", [id])
+            {:ok, item, cancel_event}
+
+          _ ->
+            case rows(
+                   Postgrex.query!(
+                     tx,
+                     "SELECT state FROM company.hive_work_items WHERE id = $1",
+                     [id]
+                   )
+                 ) do
+              [_state] -> {:error, :terminal_state}
+              _ -> {:error, :not_found}
+            end
+        end
+      end)
+
+    case result do
+      {:ok, item, cancel_event} ->
+        notify_event_subscribers(cancel_event)
         {:reply, {:ok, item}, state}
 
       error ->
@@ -2194,6 +2297,11 @@ defmodule Hive.Work do
 
     Map.merge(decoded, identity(decoded["payload"] || %{}))
   end
+
+  defp bidable?(work), do: is_map(work) and not cancelled?(work)
+  defp cancelled?(%{state: "cancelled"}), do: true
+  defp cancelled?(%{"state" => "cancelled"}), do: true
+  defp cancelled?(_), do: false
 
   defp ensure_subscribers_table do
     case :ets.whereis(:hive_subscribers) do
