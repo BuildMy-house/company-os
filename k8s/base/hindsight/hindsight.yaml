@@ -40,6 +40,20 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+      initContainers:
+        # fsGroup makes the volume group-writable on every mount; Postgres
+        # refuses to start on a data dir wider than 0750 ("invalid
+        # permissions"), which left the pod crash-looping before it opened
+        # port 8888. Re-tighten it before the server starts.
+        - name: pgdata-perms
+          image: ghcr.io/vectorize-io/hindsight-api:0.10.3@sha256:f80f304db313cbc8775acd601fda7d094f5854ebf9bc252d8134eb9276d56b40
+          command:
+            - sh
+            - -c
+            - 'd=/home/hindsight/.pg0/instances/hindsight/data; [ ! -d "$d" ] || chmod 0700 "$d"'
+          volumeMounts:
+            - name: data
+              mountPath: /home/hindsight/.pg0
       containers:
         - name: hindsight
           image: ghcr.io/vectorize-io/hindsight-api:0.10.3@sha256:f80f304db313cbc8775acd601fda7d094f5854ebf9bc252d8134eb9276d56b40
