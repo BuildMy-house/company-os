@@ -41,17 +41,28 @@ def test_first_run_no_output(tmp_path):
     since = datetime.fromisoformat(ctx["context"]["since"].replace("Z", "+00:00"))
     age = datetime.now(timezone.utc) - since
     assert timedelta(hours=1) < age < timedelta(hours=3)
-    # run time recorded for the next run
-    datetime.fromisoformat((tmp_path / "ceo-status.last-run").read_text().strip().replace("Z", "+00:00"))
 
 
-def test_second_run_reads_newest_output(tmp_path):
+def test_failed_run_does_not_advance_window(tmp_path):
+    """No output file produced -> second run's `since` is still ~2h ago,
+    not the time of the (failed) first run."""
+    ctx1, _ = _run(tmp_path)
+    ctx2, _ = _run(tmp_path)
+    assert ctx1["context"]["first_run"] is True
+    assert ctx2["context"]["first_run"] is True
+    since2 = datetime.fromisoformat(ctx2["context"]["since"].replace("Z", "+00:00"))
+    age = datetime.now(timezone.utc) - since2
+    assert age > timedelta(hours=1), "second run must not inherit the first run's timestamp"
+
+
+def test_since_from_output_mtime(tmp_path):
     _write_jobs(tmp_path, "list")
     old, new = 1.0, 2.0
     _write_output(tmp_path, "abc123", "older report\n", mtime=old)
     _write_output(tmp_path, "abc123", "newer report\n", mtime=new)
     ctx, _ = _run(tmp_path)
     assert ctx["context"]["first_run"] is False
+    assert ctx["context"]["since"] == "1970-01-01T00:00:02Z"
     # bash $(...) strips trailing newlines; harmless for next-run diffing
     assert ctx["context"]["previous_report"] == "newer report"
 

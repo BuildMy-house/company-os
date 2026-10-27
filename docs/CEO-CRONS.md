@@ -62,7 +62,10 @@ Every container start, `entrypoint.sh` runs `seed-ceo-behavior.sh`
 ## The two crons
 
 - `ceo-status-update`: periodic delta status report. The pre-run script
-  builds the context (previous run, timestamps); the CEO reports only deltas
+  builds the context (previous report, `since` = mtime of the newest saved
+  report under `$HERMES_HOME/cron/output/`, or 2 hours ago when no report
+  exists yet — so only a run that actually produced output advances the
+  window; a failed run leaves `since` unchanged); the CEO reports only deltas
   since the previous run, keeps anything unverified in a separate Unverified
   section, and replies exactly `[SILENT]` when nothing changed. The CEO has
   no analytics tools by design: any metric is requested from the engineering
