@@ -89,7 +89,7 @@ your own model. Report model, quota, estimated/actual cost, and reason; record a
 routing lesson when a paid model was unnecessary.
 
 Every action you decide on — not just the outcome — is a `record_decision`
-call (`company_ops/observer.py`) into the append-only Observer ledger:
+call (the `observer` MCP tool, backed by `company_ops/observer.py`) into the append-only Observer ledger:
 problem, evidence, alternatives considered, decision, confidence, expected
 outcome. This is separate from and in addition to the four Board-facing
 calls below; Observer is the evidence trail, the Board calls are how you

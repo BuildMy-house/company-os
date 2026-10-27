@@ -242,6 +242,20 @@ mcp_servers:
     args: ["/opt/company-ops/scripts/hive-member-mcp.js"]
     connect_timeout: 30
     timeout: 900
+  # Observer evidence ledger writers (record_decision, record_failure, ...).
+  # Without this server the CEO's record_decision call had nothing to bind to
+  # and observer.decisions/failures/predictions stayed empty. Connects as
+  # hermes_observer_writer (INSERT+SELECT only). MCP subprocesses do not
+  # inherit the pod env, so the DSN must be passed explicitly; the venv python
+  # is absolute because PATH is not inherited either. Fails loudly (non-zero
+  # exit) if the DSN is missing or the DB is unreachable.
+  observer:
+    command: "/opt/company-ops-venv/bin/python"
+    args: ["-m", "company_ops.observer_mcp"]
+    env:
+      OBSERVER_DATABASE_URL: "${OBSERVER_DATABASE_URL}"
+    connect_timeout: 30
+    timeout: 60
 
 # OpenAI-compatible HTTP API surface (gateway/platforms/api_server.py),
 # used by scripts/hermes-messenger-mcp.js so Claude/agent-manager can talk
@@ -280,3 +294,4 @@ platform_toolsets:
     - container_manager
     - hermes_build_dispatcher
     - hive_member
+    - observer
