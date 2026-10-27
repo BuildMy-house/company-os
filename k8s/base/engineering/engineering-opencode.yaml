@@ -99,11 +99,14 @@ spec:
               port: 8000
             initialDelaySeconds: 20
             periodSeconds: 10
+          # /healthz fails once the Hive subscription has made no progress for HIVE_STALE_MS (10 min),
+          # so a member wedged after a coordinator restart is restarted instead of idling Ready.
           livenessProbe:
-            tcpSocket:
-              port: 8000
-            initialDelaySeconds: 30
-            periodSeconds: 20
+            httpGet:
+              path: /healthz
+              port: 8001
+            initialDelaySeconds: 60
+            periodSeconds: 30
             failureThreshold: 3
           volumeMounts:
             - name: agent-home
