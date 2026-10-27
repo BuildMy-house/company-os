@@ -225,9 +225,29 @@ mcp_servers:
       KUBERNETES_SERVICE_PORT: "443"
     connect_timeout: 60
     timeout: 300
+  # Read-only cluster view for status reports (pods, events, logs in
+  # company-ops). --read-only drops every write verb server-side; the shared
+  # SA's RBAC still has no Secrets access, so there is no secrets surface.
+  # Separate entry from k8s_deployment so exposing it to the api_server
+  # platform (CEO chat) does not also expose patch-capable tools.
+  k8s_readonly:
+    command: "npx"
+    args: ["-y", "kubernetes-mcp-server@0.0.67", "--read-only", "--disable-destructive", "--log-file", "stderr", "--cluster-provider", "in-cluster"]
+    env:
+      KUBERNETES_SERVICE_HOST: "10.43.0.1"
+      KUBERNETES_SERVICE_PORT: "443"
+    connect_timeout: 60
+    timeout: 300
   container_manager:
     command: "node"
     args: ["/opt/company-ops/scripts/container-manager-mcp.js"]
+    # Root cause of container_status failing with "Kubernetes API unavailable
+    # outside a k3s pod": MCP command-subprocesses do not inherit the pod
+    # environment, so KUBERNETES_SERVICE_HOST was unset (the token/CA files
+    # were fine). Same workaround as k8s_deployment above.
+    env:
+      KUBERNETES_SERVICE_HOST: "10.43.0.1"
+      KUBERNETES_SERVICE_PORT: "443"
     connect_timeout: 30
     # Allow an engineering rollout plus its automatic rollback to complete.
     timeout: 1800
@@ -278,5 +298,6 @@ platform_toolsets:
   api_server:
     - hermes-api-server
     - container_manager
+    - k8s_readonly
     - hermes_build_dispatcher
     - hive_member
