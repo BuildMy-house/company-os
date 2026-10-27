@@ -5,8 +5,10 @@ Hindsight only creates a bank on a write, and the CEO runs tools-only
 (auto_retain=false), so nothing ever creates the CEO's bank: every
 hindsight_recall then 404s with "Bank 'ceo' not found" (docs/HINDSIGHT-BANKS.md).
 This waits for the server to answer GET /health, GETs the bank profile and,
-when it is missing (404), PUTs an empty create-or-update body to
-/v1/default/banks/{bank_id} (idempotent).
+PUTs an empty create-or-update body to /v1/default/banks/{bank_id}. In
+hindsight-api 0.10.3 there is no GET for a single bank (GET .../profile is 410)
+and update_bank with no fields creates a missing bank and changes nothing on an
+existing one, so the PUT is the idempotent, side-effect-free existence check.
 
     HINDSIGHT_URL=http://hindsight:8888 HINDSIGHT_API_KEY=... \
         python3 scripts/hindsight-ensure-bank.py [--bank ceo] [--wait 600]
@@ -61,15 +63,9 @@ def _wait_healthy(url: str, key: str, deadline_s: int) -> bool:
 
 
 def ensure_bank(url: str, key: str, bank: str) -> str:
-    """Create the bank if missing. Returns "exists" or "created"."""
-    try:
-        _request(url, key, f"/v1/default/banks/{bank}")
-        return "exists"
-    except urllib.error.HTTPError as exc:
-        if exc.code != 404:
-            raise
+    """Create the bank if missing; no-op on an existing one."""
     _request(url, key, f"/v1/default/banks/{bank}", method="PUT", body={})
-    return "created"
+    return "ensured"
 
 
 def default_bank() -> str:

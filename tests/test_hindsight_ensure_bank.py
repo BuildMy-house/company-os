@@ -43,9 +43,8 @@ class FakeHindsight:
                     bank = self.path.removeprefix("/v1/default/banks/")
                     outer.gets.append(bank)
                     outer.auth_seen.append(self.headers.get("Authorization"))
-                    if bank in outer.banks:
-                        return self._send(200, json.dumps({"id": bank}).encode())
-                    return self._send(404, b'{"detail":"Bank not found"}')
+                    # Real hindsight-api 0.10.3 has no GET for a single bank.
+                    return self._send(405, b'{"detail":"Method Not Allowed"}')
 
             def do_PUT(self):  # noqa: N802
                 bank = self.path.removeprefix("/v1/default/banks/")
@@ -85,24 +84,22 @@ def test_creates_missing_bank_then_is_noop():
     try:
         r1 = _run_script(fake, "--bank", "ceo")
         assert r1.returncode == 0, r1.stderr
-        assert "created" in r1.stdout
+        assert "ensured" in r1.stdout
         assert fake.puts == [("ceo", "{}")]
         r2 = _run_script(fake, "--bank", "ceo")
         assert r2.returncode == 0, r2.stderr
-        assert "exists" in r2.stdout
-        assert len(fake.puts) == 1  # second run: no PUT
+        assert fake.puts == [("ceo", "{}")] * 2  # idempotent empty PUT, never a body that could overwrite
     finally:
         fake.stop()
     _assert_no_leak(fake, r1, r2)
 
 
-def test_noop_when_bank_already_present():
+def test_existing_bank_gets_only_empty_put():
     fake = FakeHindsight(existing_banks=("pm-lead",))
     try:
         r = _run_script(fake, "--bank", "pm-lead")
         assert r.returncode == 0, r.stderr
-        assert "exists" in r.stdout
-        assert fake.puts == []
+        assert fake.puts == [("pm-lead", "{}")]  # empty PUT changes nothing on an existing bank
     finally:
         fake.stop()
     _assert_no_leak(fake, r)

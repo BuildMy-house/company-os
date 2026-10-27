@@ -63,9 +63,10 @@ auth or networking problem. The CEO is the case in point: it runs tools-only
 its bank on the first retain, and every recall 404s until the bank is created.
 
 `scripts/hindsight-ensure-bank.py` (stdlib only) closes that gap: it waits for
-the server to answer `GET /health` (bounded by `--wait`, default 600s), GETs the
-bank profile, and on 404 PUTs an empty create-or-update body to
-`PUT /v1/default/banks/{bank_id}` (idempotent). The bank id defaults to the
+the server to answer `GET /health` (bounded by `--wait`, default 600s), then
+sends `PUT /v1/default/banks/{bank_id}` with an empty body. In hindsight-api
+0.10.3 that creates a missing bank and changes nothing on an existing one (there
+is no single-bank GET; `GET .../profile` is 410), so it is idempotent. The bank id defaults to the
 `bank_id` in `$HERMES_HOME/hindsight/config.json`, else `ceo`; the url comes
 from `HINDSIGHT_URL`, the key from `HINDSIGHT_API_KEY` (never printed).
 `scripts/seed-hindsight.sh` launches it in the background at container boot,
