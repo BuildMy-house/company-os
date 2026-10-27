@@ -144,9 +144,15 @@ Use these as a checklist; each is something the queries above surface.
 
 - `hindsight_recall` failed 14 times with "Cannot connect to host hindsight:8888"
   because Hindsight is crash-looping (see the Hindsight ticket in Hive).
+  Resolved 2026-10-28: Hindsight fixed 2026-10-27; the `ceo-status-update`
+  skill now keeps the item open on a 404 "Bank 'ceo' not found" (bank never
+  created; fixed by the ensure-bank startup step).
 - `mcp__steward__manage_files` failed argument validation 15 times and "file
   not found" 7 times; `mcp__steward__query` is refused for tenant-scoped
   credentials 10 times. The CEO is retrying calls that cannot succeed.
+  Resolved 2026-10-28: the CEO skills now forbid `mcp__steward__query` (use
+  `query_memories`/`list_tasks`/`query_specs`, never retry a refusal) and read
+  the ledger via the Observer MCP tool `observer_ledger_read`.
 - `mcp__postgres_analytics__postgres_mcp_query` failed 6 times on a
   non-existent `created_at` column.
 - Model latency, 2026-10-24 12:00 to 2026-10-25 13:30 UTC: the CEO made 486
@@ -158,6 +164,7 @@ Use these as a checklist; each is something the queries above surface.
 - The 2026-10-25 12:00 dream-audit cron ended with "I stopped retrying because
   I kept running mcp__steward__query 8 times without making progress": the
   Steward query tool is refused for tenant-scoped credentials, and the cron
-  prompt still calls it.
+  prompt still calls it. Resolved 2026-10-28: `dream-audit` and
+  `ceo-status-update` skills now carry the prohibition as a hard rule.
 - Managers logged "no interested bids" 6 times and bid-assessment timeouts
   (90 s) 5 times on `engineering-opencode*`.
