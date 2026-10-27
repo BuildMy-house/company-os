@@ -44,4 +44,18 @@ else
   cp "$SRC/config.json" "$DEST"
   echo "[hindsight] seeded $DEST"
 fi
+
+# Bank creation (docs/HINDSIGHT-BANKS.md): Hindsight only creates a bank on a
+# write, and the CEO is tools-only (auto_retain=false), so recall would 404 on
+# a never-written bank. Ensure it in the background so boot never blocks; the
+# script logs [hindsight]-prefixed lines and failure only warns. Skip with
+# HINDSIGHT_ENSURE_BANK=0 (tests) or when no key is configured.
+if [ -n "${HINDSIGHT_API_KEY:-}" ] && [ "${HINDSIGHT_ENSURE_BANK:-1}" != "0" ]; then
+  HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -f "$HERE/hindsight-ensure-bank.py" ]; then
+    python3 "$HERE/hindsight-ensure-bank.py" &
+  else
+    echo "[hindsight] WARN: $HERE/hindsight-ensure-bank.py missing; bank not ensured" >&2
+  fi
+fi
 exit 0

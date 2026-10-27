@@ -8,7 +8,7 @@ import sys
 import unittest
 
 from company_ops import observer_mcp
-from company_ops.observer import ObserverWriter
+from company_ops.observer import ObserverWriter, VALID_TABLES
 
 
 class FakeWriter:
@@ -29,6 +29,25 @@ def rpc(factory, method, params=None, id_=1):
     return observer_mcp.handle(
         factory, {"jsonrpc": "2.0", "id": id_, "method": method, "params": params or {}}
     )
+
+
+class FakeReader:
+    """Stands in for ObserverWriter.read: mimics its table validation."""
+
+    def __init__(self, rows=None, fail: Exception | None = None):
+        self.rows = rows if rows is not None else [
+            {"id": "DECI-1", "created_at": "2026-10-28T00:00:00+00:00"}
+        ]
+        self.fail = fail
+        self.calls: list[dict] = []
+
+    def observer_ledger_read(self, table, since=None, limit=50, id=None):
+        if table not in VALID_TABLES:
+            raise ValueError(f"Invalid table {table!r}")
+        if self.fail:
+            raise self.fail
+        self.calls.append({"table": table, "since": since, "limit": limit, "id": id})
+        return self.rows
 
 
 class TestObserverMcp(unittest.TestCase):
@@ -87,6 +106,76 @@ class TestObserverMcp(unittest.TestCase):
     def test_unknown_tool_is_error(self):
         r = rpc(lambda: FakeWriter(), "tools/call", {"name": "drop_table", "arguments": {}})
         self.assertTrue(r["result"]["isError"])
+
+    def test_observer_ledger_read_is_listed_with_enum(self):
+        r = rpc(lambda: FakeWriter(), "tools/list")
+        tools = {t["name"]: t for t in r["result"]["tools"]}
+        self.assertIn("observer_ledger_read", tools)
+        schema = tools["observer_ledger_read"]["inputSchema"]
+        self.assertEqual(schema["properties"]["table"]["enum"], sorted(VALID_TABLES))
+
+    def test_observer_ledger_read_returns_rows_as_json(self):
+        rows = [{"id": "FAIL-1", "created_at": "2026-10-28T01:00:00+00:00"}]
+        w = FakeReader(rows=rows)
+        r = rpc(lambda: w, "tools/call", {"name": "observer_ledger_read", "arguments": {"table": "failures"}})
+        self.assertNotIn("isError", r["result"])
+        self.assertEqual(json.loads(r["result"]["content"][0]["text"]), rows)
+        self.assertEqual(w.calls, [{"table": "failures", "since": None, "limit": 50, "id": None}])
+
+    def test_observer_ledger_read_filters_and_limit(self):
+        w = FakeReader()
+        r = rpc(lambda: w, "tools/call", {
+            "name": "observer_ledger_read",
+            "arguments": {"table": "decisions", "since": "2026-10-01", "limit": 10, "id": "DECI-1"},
+        })
+        self.assertNotIn("isError", r["result"])
+        self.assertEqual(
+            w.calls,
+            [{"table": "decisions", "since": "2026-10-01", "limit": 10, "id": "DECI-1"}],
+        )
+
+    def test_observer_ledger_read_bad_table_is_error(self):
+        r = rpc(lambda: FakeReader(), "tools/call", {
+            "name": "observer_ledger_read", "arguments": {"table": "user_passwords"},
+        })
+        self.assertTrue(r["result"]["isError"])
+        self.assertIn("Invalid table", r["result"]["content"][0]["text"])
+
+    def test_observer_ledger_read_missing_table_is_error(self):
+        r = rpc(lambda: FakeReader(), "tools/call", {
+            "name": "observer_ledger_read", "arguments": {},
+        })
+        self.assertTrue(r["result"]["isError"])
+        self.assertIn("missing required argument", r["result"]["content"][0]["text"])
+
+    def test_observer_ledger_read_rejects_unknown_args_cannot_inject_writes(self):
+        for bogus in ({"problem": "x"}, {"id": "DECI-1", "decision": "drop all rows"}):
+            args = {k: v for k, v in bogus.items() if k != "id"}
+            r = rpc(lambda: FakeReader(), "tools/call", {
+                "name": "observer_ledger_read",
+                "arguments": {"table": "decisions", **args},
+            })
+            self.assertTrue(r["result"]["isError"], f"must reject {args}")
+            self.assertIn("unknown argument", r["result"]["content"][0]["text"])
+
+    def test_observer_ledger_read_db_failure_is_loud(self):
+        w = FakeReader(fail=RuntimeError("permission denied for table decisions"))
+        r = rpc(lambda: w, "tools/call", {
+            "name": "observer_ledger_read", "arguments": {"table": "decisions"},
+        })
+        self.assertTrue(r["result"]["isError"])
+        self.assertIn("permission denied", r["result"]["content"][0]["text"])
+
+    def test_observer_ledger_read_never_invokes_write_tools(self):
+        w = FakeWriter()
+        r = rpc(lambda: w, "tools/call", {
+            "name": "observer_ledger_read", "arguments": {"table": "decisions"},
+        })
+        self.assertNotIn("isError", r["result"])
+        self.assertEqual(
+            {name for name, _ in w.calls}, {"observer_ledger_read"},
+            "the read tool must only call the reader, never a write method",
+        )
 
     def test_serve_round_trip_over_stdio_framing(self):
         w = FakeWriter()

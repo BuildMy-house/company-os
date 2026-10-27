@@ -429,5 +429,76 @@ class TestObserverPermissions(unittest.TestCase):
         conn.close()
 
 
+class _FakeCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeConn:
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, stmt, params=None):
+        self.executed.append((stmt, params))
+        return _FakeCursor([{"id": "DECI-1"}])
+
+
+class TestObserverReadValidation(unittest.TestCase):
+    """read() must stay SELECT-only and SQL-injection-proof without a live DB."""
+
+    def _writer(self, capture=True):
+        w = ObserverWriter.__new__(ObserverWriter)
+        w.conn = _FakeConn()
+        return w
+
+    def _sql(self, w):
+        stmt, params = w.conn.executed[0]
+        return stmt.as_string(None), params
+
+    def test_read_rejects_unknown_table(self):
+        w = self._writer()
+        with self.assertRaises(ValueError, msg="must reject unknown table"):
+            w.observer_ledger_read("nonexistent_table")
+
+    def test_read_is_select_with_identifier_and_default_limit(self):
+        w = self._writer()
+        w.observer_ledger_read("decisions")
+        rendered, params = self._sql(w)
+        self.assertTrue(rendered.startswith("SELECT * FROM observer."))
+        self.assertIn('"decisions"', rendered)
+        self.assertIn("ORDER BY created_at DESC LIMIT 50", rendered)
+        self.assertEqual(params, [])
+
+    def test_read_presets_since_and_id_as_parameters(self):
+        w = self._writer()
+        w.observer_ledger_read("decisions", since="2026-10-01T00:00:00+00:00", id="DECI-1")
+        rendered, params = self._sql(w)
+        self.assertIn("WHERE", rendered)
+        self.assertIn("created_at >=", rendered)
+        self.assertIn("id =", rendered)
+        self.assertEqual(
+            params, ["2026-10-01T00:00:00+00:00", "DECI-1"]
+        )
+
+    def test_read_clamps_limit(self):
+        w = self._writer()
+        w.observer_ledger_read("decisions", limit=0)
+        self.assertIn("LIMIT 1", self._sql(w)[0])
+        w = self._writer()
+        w.observer_ledger_read("decisions", limit=10000)
+        self.assertTrue(self._sql(w)[0].endswith("LIMIT 200"))
+        w = self._writer()
+        w.observer_ledger_read("failures", limit=7)
+        self.assertTrue(self._sql(w)[0].endswith("LIMIT 7"))
+
+    def test_read_returns_rows_from_cursor(self):
+        w = self._writer()
+        rows = w.observer_ledger_read("decisions", limit=1)
+        self.assertEqual(rows, [{"id": "DECI-1"}])
+
+
 if __name__ == "__main__":
     unittest.main()

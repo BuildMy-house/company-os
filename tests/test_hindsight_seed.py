@@ -14,7 +14,7 @@ MANIFEST = (REPO / "k8s" / "base" / "hindsight" / "hindsight.yaml").read_text()
 def _run(tmp_path):
     home = tmp_path / "data"
     home.mkdir(exist_ok=True)
-    env = dict(os.environ, HERMES_HOME=str(home), HINDSIGHT_SRC=str(CONFIG.parent))
+    env = dict(os.environ, HERMES_HOME=str(home), HINDSIGHT_SRC=str(CONFIG.parent), HINDSIGHT_ENSURE_BANK="0")
     return subprocess.run(["bash", str(SEED)], env=env, check=True, capture_output=True, text=True), home
 
 
@@ -32,7 +32,7 @@ def test_seed_creates_config_once_and_never_clobbers_edits(tmp_path):
 def test_seed_without_source_is_noop(tmp_path):
     home = tmp_path / "data"
     home.mkdir()
-    env = dict(os.environ, HERMES_HOME=str(home), HINDSIGHT_SRC=str(tmp_path / "nope"))
+    env = dict(os.environ, HERMES_HOME=str(home), HINDSIGHT_SRC=str(tmp_path / "nope"), HINDSIGHT_ENSURE_BANK="0")
     subprocess.run(["bash", str(SEED)], env=env, check=True, capture_output=True)
     assert not (home / "hindsight" / "config.json").exists()
 

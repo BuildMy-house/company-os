@@ -53,6 +53,37 @@ bank can be left in place; it is covered by the daily `hindsight-data-backup`
 CronJob like every other bank. Copied memories are re-embedded; the extraction mode
 is `verbatim`, so no extra LLM spend beyond embedding.
 
+## Bank creation
+
+Hindsight only creates a bank when something is written to it. A bank that has
+never been written does not exist, and `hindsight_recall` on it fails with
+HTTP 404 "Bank 'ceo' not found" — this is expected server behaviour, not an
+auth or networking problem. The CEO is the case in point: it runs tools-only
+(`auto_retain: false` in `hermes/hindsight/config.json`), so nothing auto-creates
+its bank on the first retain, and every recall 404s until the bank is created.
+
+`scripts/hindsight-ensure-bank.py` (stdlib only) closes that gap: it waits for
+the server to answer `GET /health` (bounded by `--wait`, default 600s), then
+sends `PUT /v1/default/banks/{bank_id}` with an empty body. In hindsight-api
+0.10.3 that creates a missing bank and changes nothing on an existing one (there
+is no single-bank GET; `GET .../profile` is 410), so it is idempotent. The bank id defaults to the
+`bank_id` in `$HERMES_HOME/hindsight/config.json`, else `ceo`; the url comes
+from `HINDSIGHT_URL`, the key from `HINDSIGHT_API_KEY` (never printed).
+`scripts/seed-hindsight.sh` launches it in the background at container boot,
+after the config seed/migration — non-blocking, `[hindsight]`-prefixed output,
+failure only warns and never breaks boot. Set `HINDSIGHT_ENSURE_BANK=0` to
+skip it (tests). Manual run:
+
+```
+HINDSIGHT_URL=http://hindsight:8888 HINDSIGHT_API_KEY=... \
+  python3 scripts/hindsight-ensure-bank.py
+```
+
+For an existing install, also do the one-time memory copy from the old `hermes`
+bank so `ceo` actually has content to recall — see the rename section above
+(`scripts/hindsight-copy-bank.py`, read-only on the source and idempotent).
+Creating the empty bank stops the 404s; the copy is what makes recall useful.
+
 ## Dream pass: injection / planted-lesson scan
 
 One shared key means anything able to retain into a bank can plant a "lesson" the

@@ -40,11 +40,16 @@ for one). Never start it on your own from a conversation.
    skill and block on it. Never guess, estimate, or recall a metric.
 4. No edits to `SOUL.md`, policy files, skills, or credentials. Never write
    secrets anywhere; scrub them from anything you quote.
+5. NEVER call `mcp__steward__query`: it is refused for tenant-scoped
+   credentials and can never succeed. Use Steward `query_memories`,
+   `list_tasks`, or `query_specs` instead, and never retry a refused call.
 
 ## Procedure
 
 1. GATHER current state (read-only): Steward tasks (Steward MCP), Hive results
-   (`hive_member`), Observer ledger/decisions, Board decisions from verified
+   (`hive_member`), Observer ledger/decisions (Observer MCP tool
+   `observer_ledger_read`, tables `decisions`, `failures`, `predictions`, etc.,
+   `since=context.since`), Board decisions from verified
    channels. Everything newer than `context.since` is a delta candidate;
    everything older is only useful for matching ids in `previous_report`.
 2. TRACK each item with a stable kebab-case id (e.g. `onboarding-drop-off`,
@@ -79,7 +84,10 @@ An item that never closes is noise. Apply these rules each run:
   a zero count recorded in the previous report); otherwise keep it open and
   cite the count.
 - `hindsight-crash-loop`: resolved once a `hindsight_recall` call succeeds this
-  run (Hindsight was fixed 2026-10-27). Cite the call.
+  run (Hindsight was fixed 2026-10-27). Cite the call. A 404
+  `Bank 'ceo' not found` means the bank was never created (fixed by the
+  ensure-bank startup step): keep the item open and cite the error if still
+  seen.
 - `diary-removal-stuck`: never declare resolved from `web_extract` alone (it is
   cached and flaps per request). Require at least 5 fetches of the diary URL
   that all land on `/blog/`, and state the fetch count. If only `web_extract`

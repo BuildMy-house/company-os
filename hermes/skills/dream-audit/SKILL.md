@@ -37,6 +37,9 @@ run). Never start it on your own from a conversation.
    in `apply` mode.
 6. If there were no new interactive sessions since `context.since`, reply with
    exactly `[SILENT]` and stop.
+7. NEVER call `mcp__steward__query`: it is refused for tenant-scoped
+   credentials and can never succeed. Use Steward `query_memories`,
+   `list_tasks`, or `query_specs` instead, and never retry a refused call.
 
 ## Procedure
 
@@ -45,7 +48,9 @@ run). Never start it on your own from a conversation.
    - `session_search` for interactive sessions (Discord/API from the Board or
      Hermes's own conversations). EXCLUDE sessions whose source is cron,
      subagent, or system, and exclude recalled/injected memory context.
-   - Observer ledger/decisions (via `postgres_analytics`, SELECT only).
+   - Observer ledger/decisions via the Observer MCP tool `observer_ledger_read`
+     (tables `decisions`, `failures`, `predictions`, etc.; pass
+     `since=context.since`). Not `postgres_analytics`.
    - Steward tasks closed or blocked in the window (Steward MCP).
    - Hive results (`hive_member`).
 2. SCRUB before reading further: drop/mask anything shaped like a token, key,
