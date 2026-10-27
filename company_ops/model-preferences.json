@@ -1,10 +1,9 @@
 {
-  "_comment": "Preferred free Nous models, best first. resolve_model.py tries these before the remaining free candidates (ordered by context length). Ids not currently free/probe-passing are skipped, so stale entries are harmless. Order follows measured CEO latency in Axiom bmh-company (2026-10-24/25): longcat-2.5-preview p50 7s/p95 36s, laguna-s-2.1 p50 51s/p95 323s.",
+  "_comment": "Preferred free Nous models, best first. resolve_model.py tries these before the remaining free candidates (ordered by context length). Ids not currently free/probe-passing are skipped, so stale entries are harmless. Order follows measured CEO latency in Axiom bmh-company: laguna-xs-2.1 p50 3.3s (2026-10-27), laguna-s-2.1 p50 51s. meituan/longcat-2.5-preview was removed after Nous retired it (404 'no longer free') on 2026-10-27.",
   "preferred": [
-    "meituan/longcat-2.5-preview:free",
+    "poolside/laguna-xs-2.1:free",
     "inclusionai/ling-3.1-flash",
     "stepfun/step-3.7-flash",
-    "poolside/laguna-xs-2.1:free",
     "stepfun/step-5-preview:free",
     "upstage/solar-mini4:free",
     "poolside/laguna-s-2.1:free"

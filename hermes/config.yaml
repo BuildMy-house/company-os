@@ -18,13 +18,13 @@ model:
   # meituan/longcat-2.0:free have each gone this way (the last one answers
   # 404 "This model is no longer free" on every call while still listed).
   # Verified 2026-10-12 with a real chat completion, not the listing:
-  # meituan/longcat-2.5-preview:free answers 200 with a 1,048,576-token
+  # poolside/laguna-xs-2.1:free answers 200 with a 1,048,576-token
   # context. It is a preview build, so expect it to be retired the same way;
   # the glm-5.3-flash fallback below keeps Hermes serving when that happens.
   # Baked default only: scripts/entrypoint.sh renders the live-probed free
   # model over this line at every boot (hermes/resolve_model.py), and a 6h /
   # on-failure watcher restarts the pod when the best free model changes.
-  default: meituan/longcat-2.5-preview:free
+  default: poolside/laguna-xs-2.1:free
   provider: custom:nous
 
 fallback_providers:
@@ -143,7 +143,7 @@ display:
 # at its default; `threshold_tokens` is Hermes's absolute-token cap and the
 # trigger is the LOWER of the two (hermes_cli/config.py: "takes lower of ratio
 # vs absolute"; agent/agent_init.py clamps it to the window). Primary model
-# meituan/longcat-2.0:free has a ~1.05M window and the glm-5.3-flash fallback
+# poolside/laguna-xs-2.1:free has a ~1.05M window and the glm-5.3-flash fallback
 # 1M, so the default 50% ratio would only compact at ~500k tokens; cap it at
 # 100k so long CEO sessions compact long before context rot sets in. The
 # summariser is auxiliary.compression (glm-5.3-flash, 1M window), so 100k fits.
