@@ -27,7 +27,13 @@ model:
   default: meituan/longcat-2.5-preview:free
   provider: custom:nous
 
+# Ordered fallback chain. 2026-10-28: custom:zai_coding_plan glm-5.3-flash
+# returned 429 "Weekly/Monthly Limit Exhausted" (resets 2026-10-29) and a CEO
+# cron run died with no fallback left. Free TokenRouter (z-ai/glm-5.3-flash)
+# goes first so a Z.AI quota wall can never take Hermes down again.
 fallback_providers:
+  - provider: custom:tokenrouter
+    model: z-ai/glm-5.3-flash
   - provider: custom:zai_coding_plan
     model: glm-5.3-flash
 
@@ -42,8 +48,10 @@ custom_providers:
       tags:
         - product=hermes-agent
         - user=hermes-agent
-  # TokenRouter stays available as an optional provider (see SOUL.md), but its
-  # token has no access to glm-5.3-flash (403), so auxiliary slots use Z.AI.
+  # TokenRouter stays available as an optional provider (see SOUL.md) and
+  # leads fallback_providers with the prefixed z-ai/glm-5.3-flash (the
+  # unprefixed glm-5.3-flash id 403s on this token); auxiliary slots stay on
+  # Z.AI for quota isolation from the fallback lane.
   - name: tokenrouter
     base_url: https://api.tokenrouter.com/v1
     key_env: TOKENROUTER_API_KEY
@@ -55,7 +63,7 @@ auxiliary:
   # least one real failure ("Auxiliary title generation failed: HTTP 400...
   # missing tags"). Pin every aux slot (except vision, which needs
   # vision-capable models) to the same Z.AI Coding Plan model the
-  # fallback lane uses (TokenRouter 403s on glm-5.3-flash), and set free_only so the OpenRouter fallback
+  # fallback chain's Z.AI entry uses, and set free_only so the OpenRouter fallback
   # can never pick a paid SKU ("PAID lane engaged... may incur real spend").
   free_only: true
   compression:

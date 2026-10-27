@@ -1,8 +1,8 @@
 """CEO Hermes entrypoint wrapper for the shared company_ops/model_resolver.py.
 
 Resolves a live-probed FREE Nous model and renders it into model.default of
-/opt/data/config.yaml (the fallback_providers glm-5.3-flash lane and the
-tokenrouter auxiliary slots are left untouched). Loaded by file path because
+/opt/data/config.yaml (the glm-5.3-flash fallback_providers chain and the
+auxiliary slots are left untouched). Loaded by file path because
 the company_ops package __init__ imports psycopg.
 """
 from __future__ import annotations

@@ -58,7 +58,7 @@ fi
 
 # Render a live-probed FREE Nous model into model.default (the listing lies:
 # retired :free ids stay listed). Never fatal: on failure the baked default and
-# the glm-5.3-flash fallback_providers lane keep Hermes serving. See
+# the glm-5.3-flash fallback_providers chain keep Hermes serving. See
 # hermes/resolve_model.py + company_ops/model_resolver.py.
 python3 /opt/company-ops/hermes/resolve_model.py \
   || echo "[model] resolver found no free model; keeping baked default + fallback" >&2
