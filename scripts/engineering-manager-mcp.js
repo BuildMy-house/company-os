@@ -130,7 +130,9 @@ if (hiveMember) {
     let message;
     try { message = JSON.parse(line); } catch { return; }
     if (message.method === "notifications/message" && message.params?.data?.event === "hive_subscription") {
-      emitTelemetry(message.params.data);
+      // "alive" is a liveness tick only (one per SSE chunk): never forward it as telemetry.
+      if (message.params.data.state === "alive" || message.params.data.state === "connected") markHiveOk();
+      if (message.params.data.state !== "alive") emitTelemetry(message.params.data);
       return;
     }
     const waiter = hivePending.get(message.id);
@@ -459,6 +461,10 @@ async function readJson(request) {
 
 async function handleA2A(request, response) {
   const url = new URL(request.url, "http://127.0.0.1");
+  if (request.method === "GET" && url.pathname === "/healthz") {
+    const health = hiveHealth();
+    return sendHttp(response, health.ok ? 200 : 503, health);
+  }
   if (request.method === "GET" && url.pathname === "/.well-known/agent-card.json") {
     return sendHttp(response, 200, {
       name: "buildmy.house engineering agent",
@@ -1147,30 +1153,66 @@ export async function promptWorkers(args, deps = {}) {
   return { ...base, outcomes };
 }
 
-let hiveRetryAttempt = 0;
-async function subscribeHive() {
-  if (!hiveMember) return;
-  const agentId = process.env.HIVE_AGENT_ID || "engineering-agent";
+// Reconnect backoff for the Hive work subscription: exponential from 1s, capped at 30s, with
+// equal jitter (half fixed, half random) so a restarted coordinator is not hit by every pool at
+// the same instant and no worker ever waits less than half the ceiling.
+export function subscriptionBackoffMs(attempt, random = Math.random) {
+  const ceiling = Math.min(30_000, 1_000 * (2 ** Math.max(0, attempt - 1)));
+  return Math.floor(ceiling / 2 + Math.max(0, Math.min(0.999999, random())) * (ceiling / 2));
+}
+
+// Liveness: the pod is healthy while the Hive subscription has made progress recently (a poll
+// returned, a stream connected, or a stream chunk arrived), while it is busy running work (the
+// poll loop is intentionally parked), or inside the startup grace. Anything else for longer
+// than HIVE_STALE_MS means the member is wedged, and /healthz fails so Kubernetes restarts it.
+const HIVE_STALE_MS = Number(process.env.HIVE_STALE_MS) || 600_000;
+let hiveLastOkAt = Date.now();
+export function markHiveOk(now = Date.now()) { hiveLastOkAt = now; }
+export function hiveHealth({ now = Date.now(), lastOkAt = hiveLastOkAt, busy = hiveBusy, enabled = Boolean(hiveMember), staleMs = HIVE_STALE_MS } = {}) {
+  const idleMs = now - lastOkAt;
+  return { ok: !enabled || busy || idleMs <= staleMs, enabled, busy, last_ok_ms_ago: idleMs, stale_after_ms: staleMs };
+}
+
+// Never gives up: every failure (including one thrown by work handling or telemetry) is logged,
+// backed off, and retried. The old version rescheduled itself with a bare setTimeout from inside
+// its own catch, so any throw in that path ended the subscription silently while the pod stayed
+// Running/Ready.
+export async function runSubscriptionLoop({ call, runWork, waitForSlot = async () => {}, emit = () => {}, log = console.error, sleep = delay, random = Math.random, markOk = markHiveOk, agentId = "engineering-agent", shouldStop = () => false } = {}) {
   const startedAt = Date.now();
-  try {
-    emitTelemetry({ event: "hive_subscription", state: "connecting", agent_id: agentId, attempt: hiveRetryAttempt + 1 });
-    while (true) {
-      await waitForHiveSlot();
-      const candidate = await hiveCall("hive_next_work", { timeout_seconds: 900 });
-      hiveRetryAttempt = 0;
-      emitTelemetry({ event: "hive_subscription", state: "work_received", task_id: candidate?.id, agent_id: agentId, duration_ms: Date.now() - startedAt });
-      await runHiveWork(candidate);
+  const safeEmit = (event) => { try { emit(event); } catch {} };
+  let attempt = 0;
+  while (!shouldStop()) {
+    try {
+      safeEmit({ event: "hive_subscription", state: "connecting", agent_id: agentId, attempt: attempt + 1 });
+      await waitForSlot();
+      const candidate = await call("hive_next_work", { timeout_seconds: 900 });
+      if (attempt > 0) safeEmit({ event: "hive_subscription", state: "reconnected", agent_id: agentId, attempts: attempt });
+      attempt = 0;
+      markOk();
+      if (candidate?.id) {
+        safeEmit({ event: "hive_subscription", state: "work_received", task_id: candidate.id, agent_id: agentId, duration_ms: Date.now() - startedAt });
+        await runWork(candidate);
+      }
+    } catch (error) {
+      attempt += 1;
+      const delayMs = subscriptionBackoffMs(attempt, random);
+      try { log(formatSubscriptionFailure(error, attempt, delayMs)); } catch {}
+      safeEmit({ event: "hive_subscription", state: "failed", agent_id: agentId, attempt, duration_ms: Date.now() - startedAt, ...errorTelemetry(error) });
+      safeEmit({ event: "hive_subscription", state: "reconnecting", agent_id: agentId, attempt, delay_ms: delayMs });
+      await sleep(delayMs);
     }
-  } catch (error) {
-    hiveRetryAttempt += 1;
-    const delayMs = retryDelayMs(hiveRetryAttempt);
-    console.error(formatSubscriptionFailure(error, hiveRetryAttempt, delayMs));
-    emitTelemetry({ event: "hive_subscription", state: "failed", agent_id: agentId, attempt: hiveRetryAttempt, duration_ms: Date.now() - startedAt, ...errorTelemetry(error) });
-    emitTelemetry({ event: "hive_subscription", state: "reconnecting", agent_id: agentId, attempt: hiveRetryAttempt, delay_ms: delayMs });
-    setTimeout(subscribeHive, delayMs);
   }
 }
-if (hiveMember) subscribeHive();
+
+if (hiveMember) {
+  void runSubscriptionLoop({
+    call: hiveCall,
+    runWork: (candidate) => runHiveWork(candidate),
+    waitForSlot: waitForHiveSlot,
+    emit: emitTelemetry,
+    agentId: process.env.HIVE_AGENT_ID || "engineering-agent",
+  });
+}
 
 if (isMain) {
   const requests = readline.createInterface({ input: process.stdin });

@@ -708,7 +708,7 @@ check("telemetry correlation: started emit spreads context and work_received car
   // upstreamCall/subscribeHive need a live upstream/Hive, so assert on the source shape.
   const source = readFileSync(new URL("./engineering-manager-mcp.js", import.meta.url), "utf8");
   assert.match(source, /state: "started", \.\.\.context \}/);
-  assert.match(source, /state: "work_received", task_id: candidate\?\.id/);
+  assert.match(source, /state: "work_received", task_id: candidate\.id/);
 });
 
 

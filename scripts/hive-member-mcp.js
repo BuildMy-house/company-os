@@ -73,16 +73,15 @@ function defaultHasChromium(env) {
   }
 }
 
-async function registerWithHive() {
-  let attempt = 0;
-  for (;;) {
-    attempt += 1;
-    try {
+// One idempotent registration call. Hive upserts the row and bumps last_seen_at, so this
+// doubles as the member's heartbeat and as re-registration if the row was ever lost.
+async function registerOnce() {
       // Repos this worker serves. Declared only when non-empty: an empty list would
       // read as "serves no repo" instead of the backward-compatible "serves all".
       const repos = resolveRepos();
       await request("/agents/register", {
         method: "POST",
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
           id: consumerId,
           endpoint: process.env.A2A_ENDPOINT || "http://hermes-gateway:8642",
@@ -99,6 +98,18 @@ async function registerWithHive() {
           },
         }),
       });
+}
+
+let registering = false;
+async function registerWithHive() {
+  if (registering) return;
+  registering = true;
+  try {
+  let attempt = 0;
+  for (;;) {
+    attempt += 1;
+    try {
+      await registerOnce();
       console.error(`[hive-member] registered with Hive after ${attempt} attempt${attempt === 1 ? "" : "s"}`);
       return;
     } catch (error) {
@@ -108,12 +119,33 @@ async function registerWithHive() {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
+  } finally {
+    registering = false;
+  }
+}
+
+// Keep last_seen_at fresh and self-heal a lost registration for as long as this process lives,
+// independent of the work stream: a coordinator restart must never leave a Running pod
+// invisible to Hive (2026-10-25 incident). Skipped while a retry loop already owns registration.
+const HEARTBEAT_MS = Number(process.env.HIVE_REGISTER_HEARTBEAT_MS) || 60_000;
+function startRegistrationHeartbeat() {
+  const timer = setInterval(() => {
+    if (registering) return;
+    registerOnce().catch((error) => {
+      console.error(`[hive-member] registration heartbeat failed: ${error.message}; will retry`);
+      void registerWithHive();
+    });
+  }, HEARTBEAT_MS);
+  timer.unref();
 }
 
 // HIVE_REGISTER=false keeps this identity out of /agents/register entirely. The MCP gateway
 // sets it for local (workstation) identities, which may read and hive_submit but must never
 // appear as an allocatable worker (documents/plans/mcp-gateway-decisions item 3).
-if (process.env.HIVE_REGISTER !== "false") void registerWithHive();
+if (process.env.HIVE_REGISTER !== "false") {
+  void registerWithHive();
+  startRegistrationHeartbeat();
+}
 
 async function request(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
@@ -408,10 +440,20 @@ async function call(name, args) {
   throw new Error(`unknown tool: ${name}`);
 }
 
+// Hive sends an SSE ": heartbeat" comment every 15s, so a stream silent for this long is dead
+// (half-open socket after a coordinator restart) and must be re-dialled, not waited on.
+const STREAM_IDLE_MS = Number(process.env.HIVE_STREAM_IDLE_MS) || 45_000;
+
 async function waitForWork(timeoutSeconds = 900) {
   const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
+  let stalled = false;
+  let idleTimer;
+  const armIdle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { stalled = true; controller.abort(); }, STREAM_IDLE_MS);
+  };
   try {
     const response = await fetch(`${base}/work/subscribe?agent_id=${encodeURIComponent(consumerId)}`, {
       signal: controller.signal,
@@ -421,11 +463,16 @@ async function waitForWork(timeoutSeconds = 900) {
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.includes("text/event-stream")) throw new Error(`unexpected work stream content-type: ${contentType}`);
     reportSubscription("connected", { duration_ms: Date.now() - startedAt, stream: "work" });
+    armIdle();
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     while (true) {
       const { value, done } = await reader.read();
+      armIdle();
+      // Any bytes (including Hive's 15s ": heartbeat" comments) prove the stream is live; the
+      // engineering manager's /healthz uses this to tell "idle but connected" from "wedged".
+      if (!done) reportSubscription("alive", { stream: "work" });
       if (done) {
         // Our own timeout aborts the stream — idle, not a failure.
         if (controller.signal.aborted) return null;
@@ -440,13 +487,18 @@ async function waitForWork(timeoutSeconds = 900) {
       }
     }
   } catch (error) {
-    if (controller.signal.aborted) return null;
+    if (stalled) error = Object.assign(new Error(`Hive work stream silent for ${STREAM_IDLE_MS}ms`), { code: "HIVE_STREAM_STALLED" });
+    else if (controller.signal.aborted) return null;
     const details = safeErrorDetails(error, "hive_next_work");
     console.error(`[hive-member] hive_next_work failed: ${JSON.stringify(details)}`);
     reportSubscription("failed", details);
+    // The coordinator may have lost or never seen our registration: re-register in the
+    // background (retries forever) so the next successful dial is an allocatable agent.
+    if (process.env.HIVE_REGISTER !== "false") void registerWithHive();
     throw error;
   } finally {
     clearTimeout(timer);
+    clearTimeout(idleTimer);
   }
 }
 
