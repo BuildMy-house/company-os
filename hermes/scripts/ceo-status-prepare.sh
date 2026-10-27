@@ -4,8 +4,10 @@
 # file/terminal).
 #  1. finds the job id by name in $HERMES_HOME/cron/jobs.json
 #  2. reads the newest saved report for that job
-#  3. records the previous run time in $HERMES_HOME/ceo-status.last-run
-#  4. prints the final {"wakeAgent": true, "context": {...}} line.
+#  3. extracts the newest `Items:` footer from any saved report (a [SILENT] or
+#     footer-less run must not erase the tracked-item state)
+#  4. records the previous run time in $HERMES_HOME/ceo-status.last-run
+#  5. prints the final {"wakeAgent": true, "context": {...}} line.
 # Never fails the cron because of missing files: degrades to first_run=true.
 set -euo pipefail
 H="${HERMES_HOME:-/opt/data}"
@@ -43,17 +45,34 @@ with open(newest, encoding="utf-8", errors="replace") as f:
 PY
 )"
 
+PREV_ITEMS="$(python3 - "$H" "${JOB_ID:-}" "$JOB_NAME" <<'PY'
+import glob, os, sys
+h, jid, name = sys.argv[1], sys.argv[2], sys.argv[3]
+cands = []
+for d in {jid, name}:
+    if d:
+        cands += glob.glob(os.path.join(h, "cron", "output", d, "*.md"))
+for path in sorted(cands, key=os.path.getmtime, reverse=True):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        footers = [l.strip() for l in f if l.strip().startswith("Items:")]
+    if footers:
+        print(footers[-1])
+        break
+PY
+)"
+
 date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE"
 
 FIRST_RUN=false
 [ -n "$PREV_REPORT" ] || FIRST_RUN=true
 
-python3 - "$SINCE" "$FIRST_RUN" "$PREV_REPORT" <<'PY'
+python3 - "$SINCE" "$FIRST_RUN" "$PREV_REPORT" "$PREV_ITEMS" <<'PY'
 import json, sys
-since, first_run, report = sys.argv[1], sys.argv[2], sys.argv[3]
+since, first_run, report, items = sys.argv[1:5]
 print(json.dumps({"wakeAgent": True,
                   "context": {"since": since,
                               "first_run": first_run == "true",
-                              "previous_report": report}},
+                              "previous_report": report,
+                              "previous_items": items}},
                  ensure_ascii=False))
 PY

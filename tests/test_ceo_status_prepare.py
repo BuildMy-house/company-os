@@ -95,3 +95,21 @@ def test_json_valid_with_quotes_and_newlines(tmp_path):
     assert ctx["context"]["previous_report"] == report.rstrip("\n")
     assert len(lines) == 1 and "\n" not in lines[0]  # single-line JSON on stdout
     assert lines[0] == json.dumps(ctx, ensure_ascii=False)
+
+
+def test_previous_items_survives_silent_newest_run(tmp_path):
+    _write_jobs(tmp_path, "list")
+    d = tmp_path / "cron" / "output" / "abc123"
+    d.mkdir(parents=True)
+    (d / "a.md").write_text("report\nItems: x=open, y=changed\n")
+    (d / "b.md").write_text("[SILENT]")
+    os.utime(d / "a.md", (1.0, 1.0))
+    os.utime(d / "b.md", (2.0, 2.0))
+    ctx, _ = _run(tmp_path)
+    assert ctx["context"]["previous_report"] == "[SILENT]"
+    assert ctx["context"]["previous_items"] == "Items: x=open, y=changed"
+
+
+def test_previous_items_empty_without_footer(tmp_path):
+    ctx, _ = _run(tmp_path)
+    assert ctx["context"]["previous_items"] == ""
