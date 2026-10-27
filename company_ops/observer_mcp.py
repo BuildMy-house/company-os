@@ -11,7 +11,10 @@ Design rules:
   database is unreachable, and a failing tool call returns `isError: true`
   with the real exception text (plus a stderr line) instead of pretending to
   succeed. A successful call returns the new row id.
-- Append-only: only ObserverWriter's INSERT paths are reachable.
+- Append-only writes: only ObserverWriter's INSERT paths are reachable as
+  write tools. `observer_ledger_read` is the one SELECT-only read path (the
+  role has SELECT on schema observer) so the CEO can read the ledger without
+  direct database access.
 - Hand-rolled JSON-RPC over stdio (newline-delimited), no extra dependency in
   the Hermes image. Run as `python -m company_ops.observer_mcp`.
 """
@@ -22,7 +25,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from company_ops.observer import ObserverWriter
+from company_ops.observer import ObserverWriter, VALID_TABLES
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -101,6 +104,16 @@ TOOLS: dict[str, tuple[str, dict]] = {
             initiated_by=_STR, related_ids=_STR,
         ),
     ),
+    "observer_ledger_read": (
+        "Read rows from an Observer ledger table (SELECT only). Optional "
+        "since (ISO-8601; filters created_at >= since), limit (1-200, "
+        "default 50) and id (exact match). Returns rows newest-first as JSON.",
+        _schema(
+            ["table"],
+            table={"type": "string", "enum": sorted(VALID_TABLES)},
+            since=_STR, limit={"type": "integer"}, id=_STR,
+        ),
+    ),
 }
 
 
@@ -119,7 +132,10 @@ def call_tool(writer: ObserverWriter, name: str, args: dict[str, Any]) -> str:
     unknown = sorted(set(args) - set(spec["properties"]))
     if unknown:
         raise ToolError(f"{name}: unknown argument(s): {', '.join(unknown)}")
-    return str(getattr(writer, name)(**args))
+    result = getattr(writer, name)(**args)
+    if name == "observer_ledger_read":
+        return json.dumps(result, default=str)
+    return str(result)
 
 
 def _result(req_id: Any, result: dict) -> dict:

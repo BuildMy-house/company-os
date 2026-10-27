@@ -52,6 +52,38 @@ class ObserverWriter:
         self.conn.execute(stmt, [fields[c] for c in cols])
         return str(fields["id"])
 
+    def observer_ledger_read(
+        self,
+        table: str,
+        since: str | None = None,
+        limit: int = 50,
+        id: str | None = None,
+    ) -> list[dict]:
+        """SELECT-only read path; mirrors append()'s table validation."""
+        if table not in VALID_TABLES:
+            raise ValueError(
+                f"Invalid table {table!r}; must be one of: "
+                f"{', '.join(sorted(VALID_TABLES))}"
+            )
+        limit = min(max(int(limit), 1), 200)
+        stmt = sql.SQL("SELECT * FROM observer.{table}").format(
+            table=sql.Identifier(table)
+        )
+        conds: list[sql.Composable] = []
+        params: list[object] = []
+        if since is not None:
+            conds.append(sql.SQL("created_at >= {}").format(sql.Placeholder()))
+            params.append(since)
+        if id is not None:
+            conds.append(sql.SQL("id = {}").format(sql.Placeholder()))
+            params.append(id)
+        if conds:
+            stmt += sql.SQL(" WHERE ") + sql.SQL(" AND ").join(conds)
+        stmt += sql.SQL(" ORDER BY created_at DESC LIMIT {}").format(
+            sql.Literal(limit)
+        )
+        return self.conn.execute(stmt, params).fetchall()
+
     def record_decision(
         self,
         problem: str,
