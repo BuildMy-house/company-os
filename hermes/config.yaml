@@ -27,7 +27,20 @@ model:
   default: poolside/laguna-xs-2.1:free
   provider: custom:nous
 
+# Ordered fallback chain. 2026-10-28: custom:zai_coding_plan glm-5.3-flash
+# returned 429 "Weekly/Monthly Limit Exhausted" (resets 2026-10-29 14:26) and a
+# CEO cron run died with no fallback left. Free TokenRouter goes first so a
+# Z.AI quota wall cannot take Hermes down again. Live probe 2026-10-28: this
+# TokenRouter token only lists two models, so glm-5.3-flash (prefixed or not)
+# 403s; use the models it actually lists. z-ai/glm-5.3-free answered 503 "no
+# available channel" at probe time and the nemotron :free model had hit its
+# OpenRouter free-tier daily cap (1000/day), so keep several diverse entries and
+# Z.AI last; re-probe with GET /v1/models before changing this list.
 fallback_providers:
+  - provider: custom:tokenrouter
+    model: z-ai/glm-5.3-free
+  - provider: custom:tokenrouter
+    model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
   - provider: custom:zai_coding_plan
     model: glm-5.3-flash
 
@@ -42,8 +55,8 @@ custom_providers:
       tags:
         - product=hermes-agent
         - user=hermes-agent
-  # TokenRouter stays available as an optional provider (see SOUL.md), but its
-  # token has no access to glm-5.3-flash (403), so auxiliary slots use Z.AI.
+  # TokenRouter leads fallback_providers (see above); its token has no access
+  # to glm-5.3-flash (403, probed 2026-10-28), so auxiliary slots stay on Z.AI.
   - name: tokenrouter
     base_url: https://api.tokenrouter.com/v1
     key_env: TOKENROUTER_API_KEY
@@ -55,7 +68,7 @@ auxiliary:
   # least one real failure ("Auxiliary title generation failed: HTTP 400...
   # missing tags"). Pin every aux slot (except vision, which needs
   # vision-capable models) to the same Z.AI Coding Plan model the
-  # fallback lane uses (TokenRouter 403s on glm-5.3-flash), and set free_only so the OpenRouter fallback
+  # fallback chain's Z.AI entry uses, and set free_only so the OpenRouter fallback
   # can never pick a paid SKU ("PAID lane engaged... may incur real spend").
   free_only: true
   compression:
