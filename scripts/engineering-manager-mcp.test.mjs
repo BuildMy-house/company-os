@@ -33,6 +33,8 @@ import {
   reposFromEnv,
   workRepoOf,
   repoAllowed,
+  toolsFromEnv,
+  requiredToolsOf,
 } from "./engineering-manager-mcp.js";
 
 // Checks execute at top level when this file is loaded, so `node --test`
@@ -950,6 +952,98 @@ check("repo: handleBidPrompt bids on work for a repo this worker serves", async 
   const out = await handleBidPrompt({ work_id: "work-repo", worker_id: "w1" }, workerDeps(hive, "w1", { repos: ["smashlock"] }));
   assert.equal(out.outcome, "bid");
   assert.equal(hive.bids.get("w1").interested, true);
+});
+
+// --- tool gating -----------------------------------------------------------
+
+check("tools: AGENT_TOOLS normalizes and requiredToolsOf merges explicit requires_tools with browser inference", () => {
+  assert.deepEqual(toolsFromEnv({ AGENT_TOOLS: " Browser , hindsight,,browser" }), ["browser", "hindsight"]);
+  assert.deepEqual(toolsFromEnv({}), []);
+  assert.deepEqual(requiredToolsOf({ payload: { parts: [{ text: "PRE-LAUNCH QA SWEEP of app.buildmy.house" }] } }), ["browser"], "live-site QA infers browser");
+  assert.deepEqual(requiredToolsOf({ payload: { parts: [{ text: "screenshot the login flow with Playwright" }] } }), ["browser"]);
+  assert.deepEqual(requiredToolsOf({ payload: { requires_tools: ["browser"], parts: [{ text: "do it" }] } }), ["browser"]);
+  assert.deepEqual(requiredToolsOf({ payload: { metadata: { requires_tools: ["browser"] }, parts: [{ text: "do it" }] } }), ["browser"]);
+  assert.deepEqual(requiredToolsOf(candidate), [], "a plain task requires nothing");
+});
+
+check("tools: runHiveWork declines a browser task for a worker without a browser", async () => {
+  const hive = fakeHive();
+  let assessed = false;
+  const errors = [];
+  const previousError = console.error;
+  console.error = (...args) => errors.push(args.join(" "));
+  try {
+    await runHiveWork({ id: "work-browser", payload: { parts: [{ text: "PRE-LAUNCH QA SWEEP of app.buildmy.house — browser QA, screenshots, live URL checks." }] } }, {
+      ...healthyDeps,
+      tools: [],
+      hiveCall: hive.hiveCall,
+      assessTaskFit: async () => { assessed = true; return validAssessment; },
+    });
+  } finally {
+    console.error = previousError;
+  }
+  assert.equal(assessed, false, "a browser task is never assessed by a no-browser worker");
+  assert.equal(hive.calls.length, 1);
+  assert.equal(hive.calls[0].name, "hive_bid");
+  assert.equal(hive.calls[0].args.interested, false, "the decline is recorded so Hive stops re-offering the item");
+  assert.match(hive.calls[0].args.risk, /tool_not_declared/);
+  assert.ok(errors.some((line) => /reason=tool_not_declared/.test(line) && /missing=browser/.test(line)), `expected a logged reason, got ${JSON.stringify(errors)}`);
+});
+
+check("tools: runHiveWork bids on a browser task for a worker declaring browser", async () => {
+  const hive = fakeHive("other-agent");
+  await runHiveWork({ id: "work-browser", payload: { parts: [{ text: "PRE-LAUNCH QA SWEEP of app.buildmy.house" }] } }, {
+    ...healthyDeps,
+    tools: ["browser"],
+    hiveCall: hive.hiveCall,
+    assessTaskFit: async () => validAssessment,
+  });
+  const bid = hive.calls.find((call) => call.name === "hive_bid");
+  assert.ok(bid, "a browser-capable worker bids on browser work");
+  assert.equal(bid.args.interested, true);
+});
+
+check("tools: runHiveWork leaves a non-browser task unaffected for a worker with no declared tools", async () => {
+  const hive = fakeHive("other-agent");
+  await runHiveWork(candidate, {
+    ...healthyDeps,
+    tools: [],
+    hiveCall: hive.hiveCall,
+    assessTaskFit: async () => validAssessment,
+  });
+  const bid = hive.calls.find((call) => call.name === "hive_bid");
+  assert.ok(bid, "work requiring no tools is open to every worker");
+  assert.equal(bid.args.interested, true);
+});
+
+check("tools: explicit requires_tools gates a worker that lacks the tool", async () => {
+  const hive = fakeHive();
+  await runHiveWork({ id: "work-kubectl", payload: { requires_tools: ["kubectl-deploy"], parts: [{ text: "deploy it" }] } }, {
+    ...healthyDeps,
+    tools: ["browser"],
+    hiveCall: hive.hiveCall,
+    assessTaskFit: async () => validAssessment,
+  });
+  assert.equal(hive.calls.length, 1);
+  assert.equal(hive.calls[0].name, "hive_bid");
+  assert.equal(hive.calls[0].args.interested, false);
+});
+
+check("tools: handleBidPrompt declines browser work for a worker without a browser", async () => {
+  const hive = fakeHiveFor([], [{ id: "work-browser", slug: "browser-work", payload: { parts: [{ text: "QA sweep of app.buildmy.house with screenshots" }] } }]);
+  const errors = [];
+  const previousError = console.error;
+  console.error = (...args) => errors.push(args.join(" "));
+  let out;
+  try {
+    out = await handleBidPrompt({ work_id: "work-browser", worker_id: "w1" }, workerDeps(hive, "w1", { tools: [] }));
+  } finally {
+    console.error = previousError;
+  }
+  assert.equal(out.outcome, "declined");
+  assert.equal(out.reason, "tool_not_declared");
+  assert.equal(hive.bids.size, 0, "a declined prompt writes no bid");
+  assert.ok(errors.some((line) => /reason=tool_not_declared/.test(line)), `expected a logged reason, got ${JSON.stringify(errors)}`);
 });
 
 const failures = [];

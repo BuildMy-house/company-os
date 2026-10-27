@@ -34,6 +34,7 @@ import queue
 import socket
 import threading
 import time
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -83,6 +84,54 @@ def _pod_name() -> str:
 
 _POD_NAME = _pod_name()
 
+# Sanitizer — mirrors TELEMETRY_FIELD_ALLOWLIST / sanitizeTelemetryEvent in
+# scripts/engineering-manager-mcp.js (see docs/AXIOM-FIELD-LIMIT.md). The
+# bmh-company dataset is at its 256-column cap: an event that introduces a
+# NEW top-level key is rejected whole with HTTP 400, so every emitted key
+# must be either a known existing column (this allowlist) or the single
+# `extra` JSON-string column. The first block mirrors the JS list; the
+# second is this plugin's own fields, each verified present in
+# `['bmh-company'] | getschema` (2026-10-28). Deliberately NOT allowlisted
+# (not live columns — they would 400): cache_read_tokens,
+# cache_write_tokens, args — they fold into `extra` until the dataset has
+# room for them.
+TELEMETRY_FIELD_ALLOWLIST = frozenset({
+    # scripts/engineering-manager-mcp.js TELEMETRY_FIELD_ALLOWLIST
+    "_time", "service", "environment", "role",
+    "event", "state", "task_id", "agent_id", "call_id", "tool", "tool_name",
+    "duration_ms", "error", "pid", "result", "provider", "model", "claimed_by",
+    # this plugin's fields, confirmed present in the live bmh-company schema
+    "pod_name", "session_id", "turn_id", "text", "user_text", "assistant_text",
+    "caller_channel", "tool_call_id", "input_tokens", "output_tokens",
+    "reasoning_tokens",
+})
+
+
+def _sanitize_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Fold `event` down to allowlisted keys + one `extra` JSON-string key.
+
+    Mirrors sanitizeTelemetryEvent in scripts/engineering-manager-mcp.js:
+    allowlisted scalars pass through (strings capped at 1000 chars),
+    allowlisted non-scalars are JSON-stringified and capped at 500 chars
+    (so they stay one column instead of auto-flattening into new `x.*`
+    columns the way `args` once did), and every other key folds into a
+    single `extra` JSON string capped at 500 chars.
+    """
+    out: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+    for key, value in event.items():
+        if isinstance(value, (dict, list)):
+            scalar: Any = json.dumps(value, default=str)[:500]
+        else:
+            scalar = value
+        if key in TELEMETRY_FIELD_ALLOWLIST:
+            out[key] = scalar[:1000] if isinstance(scalar, str) else scalar
+        else:
+            extra[key] = scalar
+    if extra:
+        out["extra"] = json.dumps(extra, default=str)[:500]
+    return out
+
 
 def _token() -> str:
     try:
@@ -102,7 +151,7 @@ def _push(event: dict[str, Any]) -> None:
         event.setdefault("environment", os.environ.get("DEPLOYMENT_ENVIRONMENT", "local"))
         event.setdefault("role", "hermes")
         event.setdefault("pod_name", _POD_NAME)
-        _queue.put_nowait(event)
+        _queue.put_nowait(_sanitize_event(event))
     except Exception as exc:
         _record_failure("enqueue")
         logger.warning("axiom_usage: enqueue failed: %s", exc)
@@ -135,6 +184,16 @@ def _flush_once() -> None:
                 logger.warning("axiom_usage: %d event(s) failed across %s since last successful flush", sum(summary.values()), summary)
         except Exception:
             pass
+    except urllib.error.HTTPError as exc:
+        # Surface the rejection reason (e.g. the column-limit 400's body
+        # naming the offending field) — without it, all we ever saw was
+        # "HTTP Error 400". Never log the Authorization token.
+        _record_failure("flush")
+        try:
+            err_body = exc.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            err_body = ""
+        logger.warning("axiom_usage: flush of %d events rejected: HTTP %s body=%s", len(batch), exc.code, err_body)
     except Exception as exc:
         _record_failure("flush")
         logger.warning("axiom_usage: flush of %d events failed: %s", len(batch), exc)
